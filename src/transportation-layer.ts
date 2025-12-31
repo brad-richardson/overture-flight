@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
 import { loadTransportationTile } from './tile-manager.js';
+import { getTerrainHeight } from './elevation.js';
+import { ELEVATION } from './constants.js';
 
 // Types
 interface ParsedFeature {
@@ -51,18 +53,23 @@ const ROAD_STYLES: Record<string, RoadStyle> = {
   default: { color: 0x555555, width: 0.5 }
 };
 
-// Materials cache
-const materials = new Map<number, THREE.LineBasicMaterial>();
+// Materials cache - using MeshBasicMaterial for ribbon geometry
+const materials = new Map<number, THREE.MeshBasicMaterial>();
+
+// Height offset above terrain to prevent z-fighting (in meters)
+const ROAD_TERRAIN_OFFSET = 1.0;
 
 /**
- * Get or create line material for a road style
+ * Get or create mesh material for a road style
  */
-function getMaterial(color: number): THREE.LineBasicMaterial {
+function getMaterial(color: number): THREE.MeshBasicMaterial {
   if (!materials.has(color)) {
-    materials.set(color, new THREE.LineBasicMaterial({
+    materials.set(color, new THREE.MeshBasicMaterial({
       color: color,
+      side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.8
+      opacity: 0.9,
+      depthWrite: true
     }));
   }
   return materials.get(color)!;
@@ -152,18 +159,18 @@ export async function createTransportationForTile(
     featuresByStyle.get(key)!.features.push(feature);
   }
 
-  // Create line geometries for each style
+  // Create ribbon geometries for each style
   for (const { style, features: styleFeatures } of featuresByStyle.values()) {
     const geometries: THREE.BufferGeometry[] = [];
 
     for (const feature of styleFeatures) {
       try {
         if (feature.type === 'LineString') {
-          const geom = createLineGeometry(feature.coordinates as number[][], style.width);
+          const geom = createRoadRibbonGeometry(feature.coordinates as number[][], style.width);
           if (geom) geometries.push(geom);
         } else if (feature.type === 'MultiLineString') {
           for (const line of feature.coordinates as number[][][]) {
-            const geom = createLineGeometry(line, style.width);
+            const geom = createRoadRibbonGeometry(line, style.width);
             if (geom) geometries.push(geom);
           }
         }
@@ -178,19 +185,16 @@ export async function createTransportationForTile(
       try {
         const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
         if (merged) {
-          // Use LineSegments instead of Line to render discrete segments
-          // This prevents merged geometries from drawing connecting lines between roads
-          const mesh = new THREE.LineSegments(merged, getMaterial(style.color));
-          // Roads sit just above the ground to avoid z-fighting with base layer
-          mesh.position.y = 0.1;
+          // Use Mesh with ribbon geometry for proper road widths
+          const mesh = new THREE.Mesh(merged, getMaterial(style.color));
+          mesh.name = `roads-${style.color.toString(16)}`;
           group.add(mesh);
           mergeSucceeded = true;
         }
       } catch {
         // Fallback: add individually (geometries are still in use, don't dispose)
         for (const geom of geometries) {
-          const mesh = new THREE.LineSegments(geom, getMaterial(style.color));
-          mesh.position.y = 0.1;
+          const mesh = new THREE.Mesh(geom, getMaterial(style.color));
           group.add(mesh);
         }
       }
@@ -210,34 +214,117 @@ export async function createTransportationForTile(
 }
 
 /**
- * Create line segment geometry from coordinates
- * Uses segment pairs (v0-v1, v1-v2, v2-v3) instead of polyline (v0-v1-v2-v3)
- * This allows merging geometries without creating connecting lines between roads
+ * Create ribbon geometry from road coordinates with terrain-following elevation
+ * Creates a flat ribbon (quad strip) along the road path with proper width
  */
-function createLineGeometry(
+function createRoadRibbonGeometry(
   coordinates: number[][],
-  _width: number
+  width: number
 ): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length < 2) return null;
 
-  // Convert coordinates to world positions
-  const worldPoints: THREE.Vector3[] = [];
+  // Scale width based on road classification (width is in relative units, scale to meters)
+  // Base scale factor - motorway width 3.0 becomes ~15m road
+  const scaledWidth = width * 5;
+
+  // Convert coordinates to world positions with terrain elevation
+  const points: Array<{ x: number; y: number; z: number; lng: number; lat: number }> = [];
   for (const coord of coordinates) {
-    const world = geoToWorld(coord[0], coord[1], 0);
-    worldPoints.push(new THREE.Vector3(world.x, 0, world.z));
+    const lng = coord[0];
+    const lat = coord[1];
+    const world = geoToWorld(lng, lat, 0);
+
+    // Get terrain height at this position
+    let terrainHeight = 0;
+    if (ELEVATION.TERRAIN_ENABLED) {
+      terrainHeight = getTerrainHeight(lng, lat) * ELEVATION.VERTICAL_EXAGGERATION;
+    }
+
+    // Position road above terrain
+    const y = terrainHeight + ROAD_TERRAIN_OFFSET;
+
+    points.push({ x: world.x, y, z: world.z, lng, lat });
   }
 
-  if (worldPoints.length < 2) return null;
+  if (points.length < 2) return null;
 
-  // Create segment pairs: for polyline v0-v1-v2-v3, we need pairs [v0,v1], [v1,v2], [v2,v3]
-  // This is for use with THREE.LineSegments which draws each pair as a separate line
-  const segmentPoints: THREE.Vector3[] = [];
-  for (let i = 0; i < worldPoints.length - 1; i++) {
-    segmentPoints.push(worldPoints[i]);
-    segmentPoints.push(worldPoints[i + 1]);
+  // Build ribbon geometry: for each segment, create a quad
+  const vertices: number[] = [];
+  const indices: number[] = [];
+
+  for (let i = 0; i < points.length; i++) {
+    const curr = points[i];
+
+    // Calculate direction vector for this point
+    let dx: number, dz: number;
+
+    if (i === 0) {
+      // First point: use direction to next point
+      dx = points[1].x - curr.x;
+      dz = points[1].z - curr.z;
+    } else if (i === points.length - 1) {
+      // Last point: use direction from previous point
+      dx = curr.x - points[i - 1].x;
+      dz = curr.z - points[i - 1].z;
+    } else {
+      // Middle point: average of incoming and outgoing directions for smooth corners
+      const dx1 = curr.x - points[i - 1].x;
+      const dz1 = curr.z - points[i - 1].z;
+      const dx2 = points[i + 1].x - curr.x;
+      const dz2 = points[i + 1].z - curr.z;
+      dx = dx1 + dx2;
+      dz = dz1 + dz2;
+    }
+
+    // Normalize direction
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 0.001) continue; // Skip degenerate segments
+
+    dx /= len;
+    dz /= len;
+
+    // Perpendicular vector (rotate 90 degrees)
+    const perpX = -dz;
+    const perpZ = dx;
+
+    // Create left and right vertices at half-width distance
+    const halfWidth = scaledWidth / 2;
+
+    // Left vertex
+    vertices.push(
+      curr.x + perpX * halfWidth,
+      curr.y,
+      curr.z + perpZ * halfWidth
+    );
+
+    // Right vertex
+    vertices.push(
+      curr.x - perpX * halfWidth,
+      curr.y,
+      curr.z - perpZ * halfWidth
+    );
   }
 
-  const geometry = new THREE.BufferGeometry().setFromPoints(segmentPoints);
+  // Create triangle indices for the quad strip
+  // Each segment between points creates 2 triangles (a quad)
+  const numPoints = vertices.length / 6; // 2 vertices per point, 3 components per vertex
+  for (let i = 0; i < numPoints - 1; i++) {
+    const baseIdx = i * 2;
+
+    // First triangle (top-left, bottom-left, top-right)
+    indices.push(baseIdx, baseIdx + 2, baseIdx + 1);
+
+    // Second triangle (bottom-left, bottom-right, top-right)
+    indices.push(baseIdx + 1, baseIdx + 2, baseIdx + 3);
+  }
+
+  if (vertices.length < 6 || indices.length < 3) return null;
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
   return geometry;
 }
 
@@ -257,24 +344,24 @@ export function removeTransportationGroup(group: THREE.Group): void {
 
   // Dispose of geometries and materials
   group.traverse((child) => {
-    if ((child as THREE.LineSegments).isLineSegments) {
-      const line = child as THREE.LineSegments;
+    if ((child as THREE.Mesh).isMesh) {
+      const mesh = child as THREE.Mesh;
 
       // Dispose geometry
-      if (line.geometry) {
-        line.geometry.dispose();
+      if (mesh.geometry) {
+        mesh.geometry.dispose();
         disposedGeometries++;
       }
 
       // Dispose materials
-      if (line.material) {
-        if (Array.isArray(line.material)) {
-          for (const mat of line.material) {
+      if (mesh.material) {
+        if (Array.isArray(mesh.material)) {
+          for (const mat of mesh.material) {
             mat.dispose();
             disposedMaterials++;
           }
         } else {
-          (line.material as THREE.Material).dispose();
+          (mesh.material as THREE.Material).dispose();
           disposedMaterials++;
         }
       }
