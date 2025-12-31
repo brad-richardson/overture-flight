@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
+import { getScene, geoToWorld, worldToGeo, BufferGeometryUtils } from './scene.js';
 import { loadBaseTile, tileToBounds, lngLatToTile } from './tile-manager.js';
-import { getElevationDataForTile, sampleElevation } from './elevation.js';
+import { getElevationDataForTile, sampleElevation, getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
 
 // Types
@@ -67,15 +67,21 @@ const COLORS: Record<string, number> = {
 
 // Layer depth configuration to prevent z-fighting
 // Layers are separated by Y position - sufficient gaps prevent depth conflicts
+// Note: land_cover and land_use now use terrain-following elevation, so their
+// base offset is relative to terrain surface (added on top of terrain height)
 const LAYER_DEPTHS: Record<string, number> = {
   terrain: -3.0,      // Terrain mesh at lowest position
-  land: -2.0,         // Base land above terrain
-  land_cover: -1.5,   // Land cover (forests, etc.) above base land
-  land_use: -1.0,     // Land use (parks, etc.) above land cover
-  bathymetry: -0.6,   // Bathymetry just below water surface
-  water: -0.5,        // Water above everything to be visible
-  default: -1.5
+  land: -2.0,         // Base land above terrain (not terrain-following)
+  land_cover: 0.3,    // Land cover offset ABOVE terrain surface (terrain-following)
+  land_use: 0.5,      // Land use offset ABOVE terrain surface (terrain-following)
+  bathymetry: -2.2,   // Bathymetry slightly below land to prevent coastal z-fighting
+  water: -0.5,        // Water polygons above bathymetry
+  water_lines: -0.3,  // Water lines (rivers) slightly above water polygons
+  default: 0.3
 };
+
+// Layers that should follow terrain elevation
+const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use'];
 
 // Bathymetry depth color stops (depth in meters -> color)
 // Lighter colors for shallow waters, darker for deep
@@ -134,6 +140,9 @@ const lineMaterials = new Map<number, THREE.LineBasicMaterial>();
 // Coastlines and shorelines are excluded to prevent artifacts around islands
 const LINEAR_WATER_TYPES = ['river', 'stream', 'canal', 'drain', 'ditch', 'waterway'];
 
+// Track logged land_cover subtypes to avoid console spam
+const landCoverSubtypesLogged = new Set<string>();
+
 // Terrain material with vertex colors
 let terrainMaterial: THREE.MeshStandardMaterial | null = null;
 
@@ -186,13 +195,34 @@ function getLineMaterial(color: number): THREE.LineBasicMaterial {
  * Uses Overture Maps schema properties for accurate styling
  */
 function getColorForFeature(layer: string, properties: Record<string, unknown>): number {
-  const subtype = (properties.subtype || properties.class || '') as string;
+  // Try multiple possible property names for subtype
+  const subtype = (
+    properties.subtype ||
+    properties.class ||
+    properties.type ||
+    properties.category ||
+    ''
+  ) as string;
   const type = subtype.toLowerCase();
 
   // Handle bathymetry layer with depth-based coloring
   if (layer === 'bathymetry') {
     const depth = typeof properties.depth === 'number' ? properties.depth : 0;
     return getBathymetryColor(depth);
+  }
+
+  // For land_cover, check the type against our colors
+  if (layer === 'land_cover') {
+    // Log once per subtype to debug
+    if (!landCoverSubtypesLogged.has(type)) {
+      landCoverSubtypesLogged.add(type);
+      console.log(`land_cover subtype: "${type}" (all props: ${JSON.stringify(properties)})`);
+    }
+    // Return color if we have it, otherwise fall back to grass
+    if (COLORS[type]) {
+      return COLORS[type];
+    }
+    return COLORS.grass;
   }
 
   // Check for specific subtype first (works for all layers)
@@ -203,12 +233,6 @@ function getColorForFeature(layer: string, properties: Record<string, unknown>):
   // Layer-specific handling
   if (layer === 'water') {
     return COLORS.water;
-  }
-
-  if (layer === 'land_cover') {
-    // Land cover should use subtype, but fallback to grass if unknown
-    // Overture subtypes: barren, crop, forest, grass, mangrove, moss, shrub, snow, urban, wetland
-    return COLORS.grass;
   }
 
   if (layer === 'land') {
@@ -442,18 +466,25 @@ export async function createBaseLayerForTile(
       }
     }
 
-    // Create merged geometry for each color+layer combination (polygons)
+    // Layers that should NOT be merged (render individually to prevent z-fighting artifacts)
+    // Overlapping polygons cause flickering when merged into single geometry
+    const NO_MERGE_LAYERS = ['water', 'bathymetry', 'land', 'land_cover', 'land_use'];
+
+    // Create geometry for each color+layer combination (polygons)
     for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
       const geometries: THREE.BufferGeometry[] = [];
+      const isTerrainFollowing = TERRAIN_FOLLOWING_LAYERS.includes(layer);
+      const shouldMerge = !NO_MERGE_LAYERS.includes(layer);
+      const yOffset = LAYER_DEPTHS[layer] ?? LAYER_DEPTHS.default;
 
       for (const feature of layerFeatures) {
         try {
           if (feature.type === 'Polygon') {
-            const geom = createFlatPolygonGeometry(feature.coordinates as number[][][]);
+            const geom = createPolygonGeometry(feature.coordinates as number[][][], layer, yOffset);
             if (geom) geometries.push(geom);
           } else if (feature.type === 'MultiPolygon') {
             for (const polygon of feature.coordinates as number[][][][]) {
-              const geom = createFlatPolygonGeometry(polygon);
+              const geom = createPolygonGeometry(polygon, layer, yOffset);
               if (geom) geometries.push(geom);
             }
           }
@@ -464,31 +495,46 @@ export async function createBaseLayerForTile(
       }
 
       if (geometries.length > 0) {
-        // Y position separates layers to prevent z-fighting (0.25m+ gaps between layers)
-        const yPosition = LAYER_DEPTHS[layer] ?? LAYER_DEPTHS.default;
+        // For terrain-following layers, Y is already set in geometry vertices
+        // For other layers, use mesh position.y to set layer height
+        const yPosition = isTerrainFollowing ? 0 : yOffset;
+        const material = getMaterial(color);
 
-        try {
-          const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
-          if (merged) {
-            const mesh = new THREE.Mesh(merged, getMaterial(color));
-            mesh.receiveShadow = true;
-            mesh.position.y = yPosition;
-            mesh.name = `features-${layer}`;
-            group.add(mesh);
+        if (shouldMerge) {
+          // Merge geometries for land layers (better performance)
+          try {
+            const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
+            if (merged) {
+              const mesh = new THREE.Mesh(merged, material);
+              mesh.receiveShadow = true;
+              mesh.position.y = yPosition;
+              mesh.name = `features-${layer}`;
+              group.add(mesh);
+            }
+          } catch {
+            // Fallback: add individually
+            for (const geom of geometries) {
+              const mesh = new THREE.Mesh(geom, material);
+              mesh.receiveShadow = true;
+              mesh.position.y = yPosition;
+              group.add(mesh);
+            }
           }
-        } catch {
-          // Fallback: add individually
+          // Clean up individual geometries (merged created new geometry)
           for (const geom of geometries) {
-            const mesh = new THREE.Mesh(geom, getMaterial(color));
+            geom.dispose();
+          }
+        } else {
+          // Don't merge water/bathymetry - render individually to prevent z-fighting
+          // Each polygon gets its own mesh to avoid overlapping merged geometry artifacts
+          for (const geom of geometries) {
+            const mesh = new THREE.Mesh(geom, material);
             mesh.receiveShadow = true;
             mesh.position.y = yPosition;
+            mesh.name = `${layer}-polygon`;
             group.add(mesh);
           }
-        }
-
-        // Clean up individual geometries
-        for (const geom of geometries) {
-          geom.dispose();
+          // Don't dispose - geometries are in use by meshes
         }
       }
     }
@@ -520,7 +566,7 @@ export async function createBaseLayerForTile(
             // Use LineSegments instead of Line to render discrete segments
             // This prevents merged geometries from drawing connecting lines between features
             const line = new THREE.LineSegments(merged, getLineMaterial(color));
-            line.position.y = LAYER_DEPTHS.water;
+            line.position.y = LAYER_DEPTHS.water_lines;
             line.name = 'water-lines';
             group.add(line);
           }
@@ -528,7 +574,7 @@ export async function createBaseLayerForTile(
           // Fallback: add individually
           for (const geom of geometries) {
             const line = new THREE.LineSegments(geom, getLineMaterial(color));
-            line.position.y = LAYER_DEPTHS.water;
+            line.position.y = LAYER_DEPTHS.water_lines;
             group.add(line);
           }
         }
@@ -575,20 +621,29 @@ function createWaterLineGeometry(coordinates: number[][]): THREE.BufferGeometry 
 }
 
 /**
- * Create flat polygon geometry at Y=0
+ * Create polygon geometry, optionally following terrain elevation
+ * @param coordinates - Polygon coordinates [outer ring, ...holes]
+ * @param layer - Layer name to determine if terrain-following should be applied
+ * @param yOffset - Y offset to apply (for terrain-following, this is added to terrain height)
  */
-function createFlatPolygonGeometry(coordinates: number[][][]): THREE.BufferGeometry | null {
+function createPolygonGeometry(
+  coordinates: number[][][],
+  layer: string,
+  yOffset: number
+): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length === 0) return null;
 
   const outerRing = coordinates[0];
   if (!outerRing || outerRing.length < 3) return null;
 
-  // Convert outer ring to Three.js points
-  // Note: We negate world.z because rotateX(-PI/2) will negate it again,
-  // resulting in the correct final Z position that matches roads
+  const isTerrainFollowing = TERRAIN_FOLLOWING_LAYERS.includes(layer) && ELEVATION.TERRAIN_ENABLED;
+
+  // Convert outer ring to Three.js points (2D for shape creation)
   const points: THREE.Vector2[] = [];
+
   for (const coord of outerRing) {
     const world = geoToWorld(coord[0], coord[1], 0);
+    // Note: We negate world.z because rotateX(-PI/2) will negate it again
     points.push(new THREE.Vector2(world.x, -world.z));
   }
 
@@ -649,6 +704,35 @@ function createFlatPolygonGeometry(coordinates: number[][][]): THREE.BufferGeome
 
     // Rotate so it lies flat on XZ plane (Y up)
     geometry.rotateX(-Math.PI / 2);
+
+    // Apply terrain-following elevation if applicable
+    // Uses O(n) complexity by converting world coords back to geo coords directly
+    if (isTerrainFollowing) {
+      const positions = geometry.attributes.position;
+
+      for (let i = 0; i < positions.count; i++) {
+        const x = positions.getX(i);
+        const z = positions.getZ(i);
+
+        // Convert world position back to geographic coordinates
+        // Note: worldToGeo expects (x, y, z) where y is altitude
+        const geo = worldToGeo(x, 0, z);
+
+        // Get terrain height at this geographic position
+        let terrainHeight = getTerrainHeight(geo.lng, geo.lat);
+        if (Number.isNaN(terrainHeight)) {
+          terrainHeight = 0;
+        }
+        terrainHeight *= ELEVATION.VERTICAL_EXAGGERATION;
+
+        // Position relative to terrain base + terrain height + layer offset
+        const y = LAYER_DEPTHS.terrain + terrainHeight + yOffset;
+        positions.setY(i, y);
+      }
+
+      positions.needsUpdate = true;
+      geometry.computeVertexNormals();
+    }
 
     return geometry;
   } catch {
