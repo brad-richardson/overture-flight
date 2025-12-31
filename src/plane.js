@@ -60,11 +60,11 @@ function handleKeyChange(code, pressed) {
   switch (code) {
     case 'KeyW':
     case 'ArrowUp':
-      input.pitchUp = pressed;
+      input.pitchDown = pressed;  // W = push forward = nose down = descend
       break;
     case 'KeyS':
     case 'ArrowDown':
-      input.pitchDown = pressed;
+      input.pitchUp = pressed;    // S = pull back = nose up = climb
       break;
     case 'KeyA':
     case 'ArrowLeft':

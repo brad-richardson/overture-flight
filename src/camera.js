@@ -1,5 +1,6 @@
+import * as THREE from 'three';
 import { CAMERA } from './constants.js';
-import { updateCamera, altitudeToZoom } from './map.js';
+import { getCamera, geoToWorld } from './scene.js';
 
 let orbitAngle = 0;  // Horizontal offset from plane heading
 let orbitPitch = CAMERA.DEFAULT_PITCH;
@@ -12,13 +13,13 @@ let lastMouseY = 0;
  * Initialize camera mouse controls for orbiting
  */
 export function initCameraControls() {
-  const mapContainer = document.getElementById('map');
+  const container = document.getElementById('map');
 
-  mapContainer.addEventListener('mousedown', (e) => {
+  container.addEventListener('mousedown', (e) => {
     isDragging = true;
     lastMouseX = e.clientX;
     lastMouseY = e.clientY;
-    mapContainer.style.cursor = 'grabbing';
+    container.style.cursor = 'grabbing';
   });
 
   document.addEventListener('mousemove', (e) => {
@@ -45,24 +46,38 @@ export function initCameraControls() {
   });
 
   // Set initial cursor
-  mapContainer.style.cursor = 'grab';
+  container.style.cursor = 'grab';
 }
 
 /**
- * Update camera to follow plane
+ * Update camera to follow plane (Three.js version)
  * @param {Object} planeState - Current plane state
  */
 export function followPlane(planeState) {
-  const bearing = planeState.heading + orbitAngle + 180; // +180 to look at plane from behind
-  const zoom = altitudeToZoom(planeState.altitude);
+  const camera = getCamera();
+  if (!camera) return;
 
-  updateCamera({
-    lng: planeState.lng,
-    lat: planeState.lat,
-    bearing: bearing,
-    pitch: orbitPitch,
-    zoom: zoom,
-  });
+  // Convert plane position to world coordinates
+  const planePos = geoToWorld(planeState.lng, planeState.lat, planeState.altitude);
+
+  // Calculate camera position based on chase distance, heading, and orbit
+  const distance = CAMERA.DEFAULT_DISTANCE;
+  const headingRad = THREE.MathUtils.degToRad(planeState.heading + orbitAngle);
+  const pitchRad = THREE.MathUtils.degToRad(orbitPitch);
+
+  // Camera position: behind and above the plane
+  // Use spherical coordinates around the plane
+  const horizontalDist = distance * Math.cos(pitchRad);
+  const verticalDist = distance * Math.sin(pitchRad);
+
+  camera.position.set(
+    planePos.x - Math.sin(headingRad) * horizontalDist,
+    planePos.y + verticalDist,
+    planePos.z + Math.cos(headingRad) * horizontalDist
+  );
+
+  // Look at the plane
+  camera.lookAt(planePos.x, planePos.y, planePos.z);
 }
 
 /**
@@ -71,4 +86,20 @@ export function followPlane(planeState) {
 export function resetCamera() {
   orbitAngle = 0;
   orbitPitch = CAMERA.DEFAULT_PITCH;
+}
+
+/**
+ * Get current orbit angle
+ * @returns {number}
+ */
+export function getOrbitAngle() {
+  return orbitAngle;
+}
+
+/**
+ * Get current orbit pitch
+ * @returns {number}
+ */
+export function getOrbitPitch() {
+  return orbitPitch;
 }

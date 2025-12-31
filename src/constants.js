@@ -1,8 +1,12 @@
-// PMTiles URLs for Overture Maps building data
+// PMTiles URLs for Overture Maps data
 // Check https://docs.overturemaps.org/guides/pmtiles/ for latest releases
-// Can be overridden via VITE_PMTILES_URL environment variable
+// Can be overridden via environment variables
 export const OVERTURE_BUILDINGS_PMTILES = import.meta.env.VITE_PMTILES_URL
-  || 'pmtiles://https://overturemaps-tiles-us-west-2-beta.s3.amazonaws.com/2024-11-13/buildings.pmtiles';
+  || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/buildings.pmtiles';
+
+// Overture base theme (land, water, landuse)
+export const OVERTURE_BASE_PMTILES = import.meta.env.VITE_BASE_PMTILES_URL
+  || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/base.pmtiles';
 
 // MapTiler style (requires API key for production)
 // For development, using a free OSM-based style
@@ -20,9 +24,9 @@ if (!PARTYKIT_HOST && !import.meta.env.DEV) {
 
 // Flight physics constants
 export const FLIGHT = {
-  MIN_SPEED: 20,        // m/s - stall speed
-  MAX_SPEED: 200,       // m/s
-  DEFAULT_SPEED: 80,    // m/s
+  MIN_SPEED: 15,        // m/s - stall speed
+  MAX_SPEED: 150,       // m/s
+  DEFAULT_SPEED: 40,    // m/s - reduced for easier debugging
   THROTTLE_RATE: 20,    // m/s per second
   PITCH_RATE: 45,       // degrees per second
   ROLL_RATE: 60,        // degrees per second
@@ -30,15 +34,15 @@ export const FLIGHT = {
   GRAVITY: 15,          // m/s descent when stalled
   MIN_ALTITUDE: 0,      // meters
   MAX_ALTITUDE: 5000,   // meters
-  SPAWN_ALTITUDE: 500,  // meters - respawn height
+  SPAWN_ALTITUDE: 200,  // meters - above most buildings
 };
 
 // Camera constants
 export const CAMERA = {
-  DEFAULT_PITCH: 60,    // degrees
-  MIN_PITCH: 20,
+  DEFAULT_PITCH: 20,    // degrees - slight downward angle
+  MIN_PITCH: 5,
   MAX_PITCH: 85,
-  DEFAULT_DISTANCE: 500, // meters behind plane
+  DEFAULT_DISTANCE: 50, // meters behind plane
   ORBIT_SENSITIVITY: 0.5,
 };
 
@@ -50,7 +54,7 @@ export const NETWORK = {
 
 // Starting locations with good building data
 export const LOCATIONS = {
-  NYC: { lat: 40.7128, lng: -74.0060, name: 'New York City' },
+  NYC: { lat: 40.7580, lng: -73.9855, name: 'New York City (Midtown)' },
   SF: { lat: 37.7749, lng: -122.4194, name: 'San Francisco' },
   LONDON: { lat: 51.5074, lng: -0.1278, name: 'London' },
   TOKYO: { lat: 35.6762, lng: 139.6503, name: 'Tokyo' },
@@ -77,6 +81,6 @@ export const PLANE_MODEL_URL = '/models/plane.glb';
 
 // Plane rendering settings
 export const PLANE_RENDER = {
-  SCALE: 50,           // meters - plane size
-  LOCAL_VISIBLE: true, // show local player's plane
+  SCALE: 0.25,          // Scale factor for plane model
+  LOCAL_VISIBLE: true,  // show local player's plane in chase view
 };

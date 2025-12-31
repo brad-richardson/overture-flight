@@ -25,3 +25,6 @@ npm-debug.log*
 
 # PartyKit
 .partykit/
+
+# Model source files (compiled .glb in public/models/)
+low-poly-airplane/

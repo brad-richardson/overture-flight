@@ -1,27 +1,20 @@
-import { queryBuildingsAt, getTerrainElevation } from './map.js';
-
 /**
  * Check if plane has collided with terrain or buildings
+ * For now, simple ground collision at altitude 0
+ * TODO: Implement proper building collision with Three.js raycasting
  * @param {Object} planeState - Current plane state
  * @returns {boolean} True if collision detected
  */
 export function checkCollision(planeState) {
-  const { lat, lng, altitude } = planeState;
+  const { altitude } = planeState;
 
-  // Check ground collision
-  const groundElevation = getTerrainElevation(lng, lat);
-  if (altitude <= groundElevation) {
+  // Simple ground collision check
+  if (altitude <= 0) {
     return true;
   }
 
-  // Check building collision
-  const buildings = queryBuildingsAt(lng, lat);
-  for (const building of buildings) {
-    const buildingHeight = building.properties?.height || 10;
-    if (altitude < buildingHeight) {
-      return true;
-    }
-  }
+  // TODO: Add building collision detection using Three.js raycasting
+  // against the loaded building meshes
 
   return false;
 }
@@ -39,30 +32,18 @@ export function checkCollision(planeState) {
  * @returns {CollisionResult}
  */
 export function checkCollisionDetailed(planeState) {
-  const { lat, lng, altitude } = planeState;
+  const { altitude } = planeState;
 
   // Check ground collision
-  const groundElevation = getTerrainElevation(lng, lat);
-  if (altitude <= groundElevation) {
+  if (altitude <= 0) {
     return {
       collided: true,
       type: 'ground',
-      height: groundElevation,
+      height: 0,
     };
   }
 
-  // Check building collision
-  const buildings = queryBuildingsAt(lng, lat);
-  for (const building of buildings) {
-    const buildingHeight = building.properties?.height || 10;
-    if (altitude < buildingHeight) {
-      return {
-        collided: true,
-        type: 'building',
-        height: buildingHeight,
-      };
-    }
-  }
+  // TODO: Add building collision detection
 
   return { collided: false };
 }

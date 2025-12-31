@@ -1,10 +1,13 @@
-import { initMap } from './map.js';
+import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin } from './scene.js';
 import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane } from './plane.js';
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection } from './network.js';
 import { checkCollision } from './collision.js';
-import { updateOtherPlanes, updateLocalPlane, removePlane } from './other-planes.js';
 import { updateHUD, updatePlayerList, showCrashMessage, initLocationPicker } from './ui.js';
+import { initTileManager, getTilesToLoad, getTilesToUnload, isTileLoaded, markTileLoading, markTileLoaded, removeTile, getTileMeshes } from './tile-manager.js';
+import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
+import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
+import { DEFAULT_LOCATION } from './constants.js';
 
 // Game state
 let connection = null;
@@ -15,6 +18,58 @@ let isRunning = false;
 
 // All known players (including self)
 const players = new Map();
+
+// Tile meshes tracking
+const tileMeshes = new Map(); // key -> { buildings: Group, base: Group }
+const loadingTiles = new Set(); // Track tiles currently being loaded
+
+/**
+ * Load tiles around the current position
+ * @param {number} lng
+ * @param {number} lat
+ */
+async function updateTiles(lng, lat) {
+  const tilesToLoad = getTilesToLoad(lng, lat);
+
+  // Load new tiles
+  for (const tile of tilesToLoad) {
+    // Skip if already loaded or currently loading
+    if (tileMeshes.has(tile.key) || loadingTiles.has(tile.key)) {
+      continue;
+    }
+
+    loadingTiles.add(tile.key);
+    console.log('Loading tile:', tile.key);
+
+    // Load base layer and buildings in parallel
+    Promise.all([
+      createBaseLayerForTile(tile.x, tile.y, tile.z),
+      createBuildingsForTile(tile.x, tile.y, tile.z)
+    ]).then(([baseGroup, buildingsGroup]) => {
+      tileMeshes.set(tile.key, {
+        base: baseGroup,
+        buildings: buildingsGroup
+      });
+      loadingTiles.delete(tile.key);
+      console.log('Tile loaded:', tile.key);
+    }).catch(e => {
+      console.warn(`Failed to load tile ${tile.key}:`, e);
+      loadingTiles.delete(tile.key);
+    });
+  }
+
+  // Unload distant tiles
+  const tilesToUnload = getTilesToUnload(lng, lat);
+  for (const key of tilesToUnload) {
+    const meshes = tileMeshes.get(key);
+    if (meshes) {
+      if (meshes.base) removeBaseLayerGroup(meshes.base);
+      if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
+      tileMeshes.delete(key);
+    }
+    removeTile(key);
+  }
+}
 
 /**
  * Main game loop
@@ -45,6 +100,13 @@ function gameLoop(time) {
   // Update camera to follow plane
   followPlane(planeState);
 
+  // Update local plane mesh
+  if (localId) {
+    updatePlaneMesh(planeState, localId, localColor);
+    players.set(localId, planeState);
+    updatePlayerList(players, localId);
+  }
+
   // Update HUD
   updateHUD(planeState);
 
@@ -53,12 +115,11 @@ function gameLoop(time) {
     connection.sendPosition(planeState);
   }
 
-  // Update local player in players map and render 3D plane
-  if (localId) {
-    players.set(localId, planeState);
-    updatePlayerList(players, localId);
-    updateLocalPlane(planeState, localId, localColor);
-  }
+  // Update tiles based on plane position
+  updateTiles(planeState.lng, planeState.lat);
+
+  // Render the scene
+  render();
 
   // Continue loop
   requestAnimationFrame(gameLoop);
@@ -78,8 +139,10 @@ function handleWelcome(msg) {
   if (msg.planes) {
     for (const [id, plane] of Object.entries(msg.planes)) {
       players.set(id, plane);
+      if (id !== localId) {
+        updatePlaneMesh(plane, id, plane.color);
+      }
     }
-    updateOtherPlanes(Object.fromEntries(players), localId);
   }
 }
 
@@ -88,15 +151,13 @@ function handleWelcome(msg) {
  * @param {Object} planes - All plane states
  */
 function handleSync(planes) {
-  // Update players map
+  // Update players map and plane meshes
   for (const [id, plane] of Object.entries(planes)) {
     if (id !== localId) {
       players.set(id, plane);
+      updatePlaneMesh(plane, id, plane.color);
     }
   }
-
-  // Update other plane markers
-  updateOtherPlanes(planes, localId);
 }
 
 /**
@@ -106,6 +167,7 @@ function handleSync(planes) {
 function handlePlayerJoined(player) {
   console.log('Player joined:', player.id);
   players.set(player.id, player);
+  updatePlaneMesh(player, player.id, player.color);
 }
 
 /**
@@ -115,7 +177,7 @@ function handlePlayerJoined(player) {
 function handlePlayerLeft(id) {
   console.log('Player left:', id);
   players.delete(id);
-  removePlane(id);
+  removePlaneMesh(id);
   updatePlayerList(players, localId);
 }
 
@@ -125,7 +187,20 @@ function handlePlayerLeft(id) {
  * @param {number} lng - Destination longitude
  */
 function handleTeleport(lat, lng) {
+  // Update origin for new location
+  setOrigin(lng, lat);
+
+  // Clear existing tiles
+  for (const [key, meshes] of tileMeshes) {
+    if (meshes.base) removeBaseLayerGroup(meshes.base);
+    if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
+    removeTile(key);
+  }
+  tileMeshes.clear();
+
+  // Teleport plane
   teleportPlane(lat, lng);
+
   if (connection) {
     connection.sendTeleport(lat, lng);
   }
@@ -138,9 +213,16 @@ async function init() {
   console.log('Initializing Flight Simulator...');
 
   try {
-    // Initialize map
-    await initMap();
-    console.log('Map initialized');
+    // Set initial origin
+    setOrigin(DEFAULT_LOCATION.lng, DEFAULT_LOCATION.lat);
+
+    // Initialize Three.js scene
+    await initScene();
+    console.log('Scene initialized');
+
+    // Initialize tile manager (PMTiles sources)
+    await initTileManager();
+    console.log('Tile manager initialized');
 
     // Initialize controls
     initControls();
@@ -163,7 +245,7 @@ async function init() {
     // Start game loop
     isRunning = true;
     requestAnimationFrame(gameLoop);
-    console.log('Game loop started');
+    console.log('Game started');
 
   } catch (error) {
     console.error('Failed to initialize:', error);
