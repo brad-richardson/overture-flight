@@ -79,6 +79,10 @@ const materials = new Map<number, THREE.MeshStandardMaterial>();
 // Line materials cache for water lines (rivers)
 const lineMaterials = new Map<number, THREE.LineBasicMaterial>();
 
+// Linear water feature types to render as lines (rivers, streams, etc.)
+// Coastlines and shorelines are excluded to prevent artifacts around islands
+const LINEAR_WATER_TYPES = ['river', 'stream', 'canal', 'drain', 'ditch', 'waterway'];
+
 // Terrain material with vertex colors
 let terrainMaterial: THREE.MeshStandardMaterial | null = null;
 
@@ -367,12 +371,16 @@ export async function createBaseLayerForTile(
         }
         featuresByColorAndLayer.get(key)!.features.push(feature);
       } else if (feature.type === 'LineString' || feature.type === 'MultiLineString') {
-        // Process line features for water (rivers, streams)
+        // Process line features for water - only rivers, streams, and canals
+        // Skip coastlines and shorelines which create artifacts around islands
         if (layer === 'water') {
-          if (!lineFeaturesByColor.has(color)) {
-            lineFeaturesByColor.set(color, []);
+          const subtype = String(feature.properties?.subtype || feature.properties?.class || '').toLowerCase();
+          if (LINEAR_WATER_TYPES.includes(subtype)) {
+            if (!lineFeaturesByColor.has(color)) {
+              lineFeaturesByColor.set(color, []);
+            }
+            lineFeaturesByColor.get(color)!.push(feature);
           }
-          lineFeaturesByColor.get(color)!.push(feature);
         }
       }
     }
