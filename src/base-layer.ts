@@ -31,29 +31,35 @@ const COLORS: Record<string, number> = {
   canal: 0x2a7ab0,
   water: 0x1e5f8a,
 
-  // Land cover types - green/brown tones
-  forest: 0x2d5a3f,
-  park: 0x3a6b4a,
-  grass: 0x4a7a5a,
-  meadow: 0x4a7a5a,
-  wetland: 0x3a6a6a,
-  farmland: 0x5a7a4a,
-  shrub: 0x4a6a4a,
-  barren: 0x8a7a6a,
-  snow: 0xddeeff,
+  // Land cover types from Overture schema - distinct colors for each
+  // https://docs.overturemaps.org/schema/reference/base/land_cover/
+  forest: 0x1a4d2e,     // Deep forest green
+  grass: 0x5a8f4a,      // Bright meadow green
+  shrub: 0x4a7045,      // Olive scrubland
+  crop: 0x8fa858,       // Golden agricultural fields
+  barren: 0xa08060,     // Sandy/rocky brown
+  wetland: 0x3a6868,    // Teal swampy color
+  mangrove: 0x2a5040,   // Dark muddy green
+  moss: 0x6a8a50,       // Yellow-green moss
+  snow: 0xe8f0f8,       // Bright snow white
+  urban: 0x6a6a6a,      // Urban gray
 
-  // Urban/developed areas - gray tones
-  residential: 0x5a5a5a,
-  commercial: 0x6a6a6a,
-  industrial: 0x5a5555,
-  urban: 0x5a5a5a,
+  // Additional land cover variations
+  park: 0x4a8050,       // Park green (slightly brighter)
+  meadow: 0x5a8f4a,     // Same as grass
+  farmland: 0x8fa858,   // Same as crop
+
+  // Urban/developed areas - gray tones (land_use layer)
+  residential: 0x707070,
+  commercial: 0x787878,
+  industrial: 0x606060,
 
   // Default land - muted green
-  land: 0x4a6a4a,
-  default: 0x4a6a4a,
+  land: 0x4a7a4a,
+  default: 0x4a7a4a,
 
-  // Terrain mesh base color
-  terrain: 0x5a7a5a
+  // Terrain mesh base color - matches default land
+  terrain: 0x4a7a4a
 };
 
 // Layer depth configuration to prevent z-fighting
@@ -122,34 +128,44 @@ function getLineMaterial(color: number): THREE.LineBasicMaterial {
 
 /**
  * Get color for a feature based on its layer and subtype
+ * Uses Overture Maps schema properties for accurate styling
  */
 function getColorForFeature(layer: string, properties: Record<string, unknown>): number {
   const subtype = (properties.subtype || properties.class || '') as string;
   const type = subtype.toLowerCase();
 
-  // Check for specific subtype first
+  // Check for specific subtype first (works for all layers)
   if (COLORS[type]) {
     return COLORS[type];
   }
 
-  // Check by layer name
+  // Layer-specific handling
   if (layer === 'water') {
     return COLORS.water;
   }
 
-  if (layer === 'land' || layer === 'land_cover') {
+  if (layer === 'land_cover') {
+    // Land cover should use subtype, but fallback to grass if unknown
+    // Overture subtypes: barren, crop, forest, grass, mangrove, moss, shrub, snow, urban, wetland
+    return COLORS.grass;
+  }
+
+  if (layer === 'land') {
+    // Base land polygons
     return COLORS.land;
   }
 
   if (layer === 'land_use') {
-    // Try to map land use types
+    // Try to map land use types to appropriate colors
     if (type.includes('forest') || type.includes('wood')) return COLORS.forest;
     if (type.includes('park') || type.includes('recreation')) return COLORS.park;
-    if (type.includes('grass') || type.includes('green')) return COLORS.grass;
+    if (type.includes('grass') || type.includes('green') || type.includes('meadow')) return COLORS.grass;
+    if (type.includes('farm') || type.includes('orchard') || type.includes('vineyard')) return COLORS.crop;
     if (type.includes('water') || type.includes('basin')) return COLORS.water;
     if (type.includes('residential')) return COLORS.residential;
-    if (type.includes('commercial')) return COLORS.commercial;
+    if (type.includes('commercial') || type.includes('retail')) return COLORS.commercial;
     if (type.includes('industrial')) return COLORS.industrial;
+    if (type.includes('cemetery') || type.includes('grave')) return COLORS.grass;
     return COLORS.land;
   }
 
