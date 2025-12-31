@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { getScene, geoToWorld, worldToGeo, BufferGeometryUtils } from './scene.js';
-import { loadBaseTile, tileToBounds, lngLatToTile } from './tile-manager.js';
-import { getElevationDataForTile, sampleElevation, getTerrainHeight } from './elevation.js';
+import { loadBaseTile } from './tile-manager.js';
+import { getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
 
 // Types
@@ -57,12 +57,12 @@ const COLORS: Record<string, number> = {
   commercial: 0x787878,
   industrial: 0x606060,
 
-  // Default land - muted green
-  land: 0x4a7a4a,
-  default: 0x4a7a4a,
+  // Default land - neutral tan/beige (allows land_cover/land_use to show through)
+  land: 0xc8b8a0,
+  default: 0xc8b8a0,
 
-  // Terrain mesh base color - matches default land
-  terrain: 0x4a7a4a
+  // Terrain mesh base color - neutral tan/beige
+  terrain: 0xc8b8a0
 };
 
 // Layer depth configuration to prevent z-fighting
@@ -70,8 +70,8 @@ const COLORS: Record<string, number> = {
 // Note: land_cover and land_use now use terrain-following elevation, so their
 // base offset is relative to terrain surface (added on top of terrain height)
 const LAYER_DEPTHS: Record<string, number> = {
-  terrain: -3.0,      // Terrain mesh at lowest position
-  land: -2.0,         // Base land above terrain (not terrain-following)
+  terrain: -3.0,      // Reference depth for terrain-following calculations
+  land: -3.0,         // Base land at bottom (below land_cover/land_use)
   land_cover: 0.3,    // Land cover offset ABOVE terrain surface (terrain-following)
   land_use: 0.5,      // Land use offset ABOVE terrain surface (terrain-following)
   bathymetry: -2.2,   // Bathymetry slightly below land to prevent coastal z-fighting
@@ -82,6 +82,9 @@ const LAYER_DEPTHS: Record<string, number> = {
 
 // Layers that should follow terrain elevation
 const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use'];
+
+// Layers to skip rendering entirely
+const SKIP_LAYERS: string[] = [];
 
 // Bathymetry depth color stops (depth in meters -> color)
 // Lighter colors for shallow waters, darker for deep
@@ -142,25 +145,6 @@ const LINEAR_WATER_TYPES = ['river', 'stream', 'canal', 'drain', 'ditch', 'water
 
 // Track logged land_cover subtypes to avoid console spam
 const landCoverSubtypesLogged = new Set<string>();
-
-// Terrain material with vertex colors
-let terrainMaterial: THREE.MeshStandardMaterial | null = null;
-
-/**
- * Get or create terrain material
- */
-function getTerrainMaterial(): THREE.MeshStandardMaterial {
-  if (!terrainMaterial) {
-    terrainMaterial = new THREE.MeshStandardMaterial({
-      color: COLORS.terrain,
-      roughness: 0.9,
-      metalness: 0.0,
-      side: THREE.DoubleSide,
-      flatShading: false, // Smooth shading for terrain
-    });
-  }
-  return terrainMaterial;
-}
 
 /**
  * Get or create material for a color
@@ -258,141 +242,8 @@ function getColorForFeature(layer: string, properties: Record<string, unknown>):
 }
 
 /**
- * Create a terrain mesh with elevation data for a tile
- */
-async function createTerrainMesh(
-  tileX: number,
-  tileY: number,
-  tileZ: number
-): Promise<THREE.Mesh | null> {
-  // Get tile bounds in world coordinates
-  const bounds = tileToBounds(tileX, tileY, tileZ);
-  const centerLng = (bounds.west + bounds.east) / 2;
-  const centerLat = (bounds.north + bounds.south) / 2;
-
-  // Calculate the corresponding elevation tile (may be at different zoom)
-  const elevZ = ELEVATION.ZOOM;
-  const [elevX, elevY] = lngLatToTile(centerLng, centerLat, elevZ);
-
-  // Get elevation data
-  const elevData = await getElevationDataForTile(elevX, elevY);
-  if (!elevData) {
-    console.warn(`No elevation data for terrain tile ${tileZ}/${tileX}/${tileY}`);
-    return createFlatTerrainMesh(tileX, tileY, tileZ);
-  }
-
-  const { heights } = elevData;
-  const elevBounds = tileToBounds(elevX, elevY, elevZ);
-
-  // Get world bounds for this building tile
-  const worldMin = geoToWorld(bounds.west, bounds.south, 0);
-  const worldMax = geoToWorld(bounds.east, bounds.north, 0);
-
-  const width = worldMax.x - worldMin.x;
-  const depth = worldMin.z - worldMax.z; // Z is inverted
-
-  const segments = ELEVATION.TERRAIN_SEGMENTS;
-
-  // Create plane geometry
-  const geometry = new THREE.PlaneGeometry(width, depth, segments, segments);
-
-  // Get position attribute
-  const positions = geometry.attributes.position;
-
-  // Sample elevation at each vertex
-  for (let iy = 0; iy <= segments; iy++) {
-    for (let ix = 0; ix <= segments; ix++) {
-      const vertexIndex = iy * (segments + 1) + ix;
-
-      // Get the vertex's world position
-      const vx = positions.getX(vertexIndex);
-      const vy = positions.getY(vertexIndex);
-
-      // World position of this vertex (relative to geometry center)
-      const worldX = worldMin.x + width / 2 + vx;
-      const worldZ = worldMax.z + depth / 2 - vy; // PlaneGeometry Y maps to world Z
-
-      // Convert back to geo coordinates to sample elevation
-      // This is approximate but good enough for terrain
-      const relX = (worldX - worldMin.x) / width;
-      const relZ = (worldZ - worldMax.z) / depth;
-
-      // Map to this tile's geographic bounds
-      const lng = bounds.west + relX * (bounds.east - bounds.west);
-      const lat = bounds.north - relZ * (bounds.north - bounds.south);
-
-      // Map to elevation tile coordinates and sample using shared helper
-      const elevRelX = (lng - elevBounds.west) / (elevBounds.east - elevBounds.west);
-      const elevRelY = (elevBounds.north - lat) / (elevBounds.north - elevBounds.south);
-      const gridX = elevRelX * (ELEVATION.TILE_SIZE - 1);
-      const gridY = elevRelY * (ELEVATION.TILE_SIZE - 1);
-
-      // Use shared bilinear interpolation helper
-      let elevation = sampleElevation(heights, gridX, gridY, ELEVATION.TILE_SIZE);
-
-      // Handle NaN (no data) - use 0 as fallback
-      if (Number.isNaN(elevation)) {
-        elevation = 0;
-      }
-
-      // Apply vertical exaggeration
-      elevation *= ELEVATION.VERTICAL_EXAGGERATION;
-
-      // Set the Z coordinate (which becomes Y after rotation)
-      positions.setZ(vertexIndex, elevation);
-    }
-  }
-
-  // Update geometry
-  positions.needsUpdate = true;
-  geometry.computeVertexNormals();
-
-  // Rotate to XZ plane (Y-up)
-  geometry.rotateX(-Math.PI / 2);
-
-  // Create mesh
-  const mesh = new THREE.Mesh(geometry, getTerrainMaterial());
-  mesh.receiveShadow = true;
-  mesh.castShadow = false;
-
-  // Position at tile center
-  mesh.position.set(
-    worldMin.x + width / 2,
-    LAYER_DEPTHS.terrain,
-    worldMax.z + depth / 2
-  );
-
-  return mesh;
-}
-
-/**
- * Create a flat terrain mesh (fallback when no elevation data)
- */
-function createFlatTerrainMesh(tileX: number, tileY: number, tileZ: number): THREE.Mesh {
-  const bounds = tileToBounds(tileX, tileY, tileZ);
-  const worldMin = geoToWorld(bounds.west, bounds.south, 0);
-  const worldMax = geoToWorld(bounds.east, bounds.north, 0);
-
-  const width = worldMax.x - worldMin.x;
-  const depth = worldMin.z - worldMax.z;
-
-  const geometry = new THREE.PlaneGeometry(width, depth, 1, 1);
-  geometry.rotateX(-Math.PI / 2);
-
-  const mesh = new THREE.Mesh(geometry, getTerrainMaterial());
-  mesh.receiveShadow = true;
-  mesh.position.set(
-    worldMin.x + width / 2,
-    LAYER_DEPTHS.terrain,
-    worldMax.z + depth / 2
-  );
-
-  return mesh;
-}
-
-/**
- * Create base layer meshes (land, water) from tile features
- * Now also includes terrain elevation mesh
+ * Create base layer meshes (land, water, land_cover, land_use) from tile features
+ * Land layer provides base coverage, with land_cover/land_use on top following terrain
  */
 export async function createBaseLayerForTile(
   tileX: number,
@@ -408,29 +259,7 @@ export async function createBaseLayerForTile(
   const group = new THREE.Group();
   group.name = `base-${tileZ}/${tileX}/${tileY}`;
 
-  // Create terrain mesh with elevation (or flat if disabled)
-  if (ELEVATION.TERRAIN_ENABLED) {
-    try {
-      const terrainMesh = await createTerrainMesh(tileX, tileY, tileZ);
-      if (terrainMesh) {
-        terrainMesh.name = 'terrain';
-        group.add(terrainMesh);
-      }
-    } catch (error) {
-      console.error(`Failed to create terrain mesh for ${tileZ}/${tileX}/${tileY}:`, error);
-      // Add flat fallback
-      const flatMesh = createFlatTerrainMesh(tileX, tileY, tileZ);
-      flatMesh.name = 'terrain-flat';
-      group.add(flatMesh);
-    }
-  } else {
-    // Terrain disabled, create flat ground
-    const flatMesh = createFlatTerrainMesh(tileX, tileY, tileZ);
-    flatMesh.name = 'terrain-flat';
-    group.add(flatMesh);
-  }
-
-  // Load and render base features (water, land cover, etc.)
+  // Load and render base features (land, water, land_cover, land_use)
   const features = await loadBaseTile(tileX, tileY, tileZ);
   console.log(`Base tile ${tileZ}/${tileX}/${tileY}: ${features.length} features`);
 
@@ -442,8 +271,14 @@ export async function createBaseLayerForTile(
     const lineFeaturesByColor = new Map<number, ParsedFeature[]>();
 
     for (const feature of features) {
-      const color = getColorForFeature(feature.layer, feature.properties);
       const layer = feature.layer || 'default';
+
+      // Skip layers that are redundant with terrain mesh
+      if (SKIP_LAYERS.includes(layer)) {
+        continue;
+      }
+
+      const color = getColorForFeature(layer, feature.properties);
 
       if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
         const key = `${color}-${layer}`;
