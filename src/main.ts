@@ -13,6 +13,8 @@ import { createTreesForTile, removeTreesGroup } from './tree-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
 import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT } from './constants.js';
 import { initMobileControls, getJoystickState, getThrottleState, isMobileDevice } from './mobile-controls.js';
+import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
+import { initFeatureModal, showFeatureModal } from './feature-modal.js';
 import * as THREE from 'three';
 
 // Tile meshes type
@@ -257,6 +259,9 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
   }
   tileMeshes.clear();
 
+  // Clear stored features for click picking
+  clearAllFeatures();
+
   // Preload elevation tiles for the new location
   if (ELEVATION.TERRAIN_ENABLED) {
     console.log(`Preloading elevation tiles for teleport to (${lat.toFixed(4)}, ${lng.toFixed(4)})...`);
@@ -385,6 +390,13 @@ async function init(): Promise<void> {
     // Initialize minimap
     initMinimap(handleTeleport);
     console.log('Minimap initialized');
+
+    // Initialize feature picker and modal (click on features to see properties)
+    initFeatureModal();
+    initFeaturePicker((features, worldPos) => {
+      showFeatureModal(features, worldPos);
+    });
+    console.log('Feature picker initialized');
 
     // Generate local ID and color immediately so plane renders without network
     localId = generateLocalId();

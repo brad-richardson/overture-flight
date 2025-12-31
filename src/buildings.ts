@@ -11,6 +11,8 @@ import {
   isUndergroundBuilding,
   BuildingFeature,
 } from './building-materials.js';
+import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
+import type { StoredFeature } from './feature-picker.js';
 
 // Default building height when not specified
 const DEFAULT_BUILDING_HEIGHT = 10;
@@ -134,6 +136,24 @@ export async function createBuildingsForTile(
   if (features.length === 0) {
     return null;
   }
+
+  // Store features for click picking
+  const tileKey = `buildings-${tileZ}/${tileX}/${tileY}`;
+  const storedFeatures: StoredFeature[] = features
+    .filter(f => {
+      // Only process polygon/multipolygon types
+      if (f.type !== 'Polygon' && f.type !== 'MultiPolygon') return false;
+      // Skip underground buildings (cast to BuildingFeature for type check)
+      return !isUndergroundBuilding(f as unknown as BuildingFeature);
+    })
+    .map(f => ({
+      type: f.type as 'Polygon' | 'MultiPolygon',
+      coordinates: f.coordinates as number[][][] | number[][][][],
+      properties: (f.properties || {}) as Record<string, unknown>,
+      layer: 'building',
+      tileKey
+    }));
+  storeFeatures(tileKey, storedFeatures);
 
   // Calculate LOD level based on distance from player
   const tileDistance = getTileDistanceFromOrigin(tileX, tileY, tileZ);
@@ -483,6 +503,12 @@ function calculatePolygonArea(points: THREE.Vector2[]): number {
  */
 export function removeBuildingsGroup(group: THREE.Group): void {
   if (!group) return;
+
+  // Remove stored features for this tile
+  if (group.name) {
+    const tileKey = group.name; // e.g., "buildings-14/8372/5739"
+    removeStoredFeatures(tileKey);
+  }
 
   const scene = getScene();
   if (scene) {

@@ -3,6 +3,8 @@ import { getScene, geoToWorld, worldToGeo, BufferGeometryUtils } from './scene.j
 import { loadBaseTile } from './tile-manager.js';
 import { getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
+import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
+import type { StoredFeature } from './feature-picker.js';
 
 // Types
 interface ParsedFeature {
@@ -302,6 +304,20 @@ export async function createBaseLayerForTile(
   // Load and render base features (land, water, land_cover, land_use)
   const features = await loadBaseTile(tileX, tileY, tileZ);
   console.log(`Base tile ${tileZ}/${tileX}/${tileY}: ${features.length} features`);
+
+  // Store features for click picking
+  const tileKey = `base-${tileZ}/${tileX}/${tileY}`;
+  const storedFeatures: StoredFeature[] = features
+    .filter(f => f.type === 'Polygon' || f.type === 'MultiPolygon' ||
+                 f.type === 'LineString' || f.type === 'MultiLineString')
+    .map(f => ({
+      type: f.type as StoredFeature['type'],
+      coordinates: f.coordinates as StoredFeature['coordinates'],
+      properties: f.properties || {},
+      layer: f.layer || 'unknown',
+      tileKey
+    }));
+  storeFeatures(tileKey, storedFeatures);
 
   if (features.length > 0) {
     // Group polygon features by color AND layer for proper z-fighting prevention
@@ -673,6 +689,12 @@ function calculatePolygonArea(points: THREE.Vector2[]): number {
  */
 export function removeBaseLayerGroup(group: THREE.Group): void {
   if (!group) return;
+
+  // Remove stored features for this tile
+  if (group.name) {
+    const tileKey = group.name; // e.g., "base-14/8372/5739"
+    removeStoredFeatures(tileKey);
+  }
 
   const scene = getScene();
   if (scene) {
