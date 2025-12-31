@@ -23,14 +23,14 @@ interface StyleGroup {
 }
 
 // Road styling based on Overture road class
-// Colors are muted to not distract from the flight sim
+// Colors are muted neutral grays to not distract from the flight sim
 const ROAD_STYLES: Record<string, RoadStyle> = {
-  // Major roads - lighter colors, wider lines
-  motorway: { color: 0xd4a574, width: 3.0 },
-  trunk: { color: 0xc4956a, width: 2.5 },
-  primary: { color: 0xb4855a, width: 2.0 },
-  secondary: { color: 0xa4754a, width: 1.5 },
-  tertiary: { color: 0x94653a, width: 1.2 },
+  // Major roads - neutral light gray/beige tones, wider lines
+  motorway: { color: 0xa8a090, width: 3.0 },   // Neutral warm gray
+  trunk: { color: 0x9a9488, width: 2.5 },      // Slightly darker warm gray
+  primary: { color: 0x8c8880, width: 2.0 },    // Medium warm gray
+  secondary: { color: 0x7e7a74, width: 1.5 },  // Darker warm gray
+  tertiary: { color: 0x706c68, width: 1.2 },   // Even darker warm gray
 
   // Local roads - subtle gray
   residential: { color: 0x666666, width: 0.8 },

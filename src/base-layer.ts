@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
 import { loadBaseTile, tileToBounds, lngLatToTile } from './tile-manager.js';
-import { getElevationDataForTile, sampleElevation } from './elevation.js';
+import { getElevationDataForTile, sampleElevation, getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
 
 // Types
@@ -67,15 +67,21 @@ const COLORS: Record<string, number> = {
 
 // Layer depth configuration to prevent z-fighting
 // Layers are separated by Y position - sufficient gaps prevent depth conflicts
+// Note: land_cover and land_use now use terrain-following elevation, so their
+// base offset is relative to terrain surface (added on top of terrain height)
 const LAYER_DEPTHS: Record<string, number> = {
   terrain: -3.0,      // Terrain mesh at lowest position
-  land: -2.0,         // Base land above terrain
-  land_cover: -1.5,   // Land cover (forests, etc.) above base land
-  land_use: -1.0,     // Land use (parks, etc.) above land cover
-  bathymetry: -0.6,   // Bathymetry just below water surface
-  water: -0.5,        // Water above everything to be visible
-  default: -1.5
+  land: -2.0,         // Base land above terrain (not terrain-following)
+  land_cover: 0.3,    // Land cover offset ABOVE terrain surface (terrain-following)
+  land_use: 0.5,      // Land use offset ABOVE terrain surface (terrain-following)
+  bathymetry: -2.0,   // Bathymetry at land level (deepest parts of ocean)
+  water: -0.5,        // Water polygons above bathymetry
+  water_lines: -0.3,  // Water lines (rivers) slightly above water polygons
+  default: 0.3
 };
+
+// Layers that should follow terrain elevation
+const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use'];
 
 // Bathymetry depth color stops (depth in meters -> color)
 // Lighter colors for shallow waters, darker for deep
@@ -445,15 +451,17 @@ export async function createBaseLayerForTile(
     // Create merged geometry for each color+layer combination (polygons)
     for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
       const geometries: THREE.BufferGeometry[] = [];
+      const isTerrainFollowing = TERRAIN_FOLLOWING_LAYERS.includes(layer);
+      const yOffset = LAYER_DEPTHS[layer] ?? LAYER_DEPTHS.default;
 
       for (const feature of layerFeatures) {
         try {
           if (feature.type === 'Polygon') {
-            const geom = createFlatPolygonGeometry(feature.coordinates as number[][][]);
+            const geom = createPolygonGeometry(feature.coordinates as number[][][], layer, yOffset);
             if (geom) geometries.push(geom);
           } else if (feature.type === 'MultiPolygon') {
             for (const polygon of feature.coordinates as number[][][][]) {
-              const geom = createFlatPolygonGeometry(polygon);
+              const geom = createPolygonGeometry(polygon, layer, yOffset);
               if (geom) geometries.push(geom);
             }
           }
@@ -464,8 +472,9 @@ export async function createBaseLayerForTile(
       }
 
       if (geometries.length > 0) {
-        // Y position separates layers to prevent z-fighting (0.25m+ gaps between layers)
-        const yPosition = LAYER_DEPTHS[layer] ?? LAYER_DEPTHS.default;
+        // For terrain-following layers, Y is already set in geometry vertices
+        // For other layers, use mesh position.y to set layer height
+        const yPosition = isTerrainFollowing ? 0 : yOffset;
 
         try {
           const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
@@ -520,7 +529,7 @@ export async function createBaseLayerForTile(
             // Use LineSegments instead of Line to render discrete segments
             // This prevents merged geometries from drawing connecting lines between features
             const line = new THREE.LineSegments(merged, getLineMaterial(color));
-            line.position.y = LAYER_DEPTHS.water;
+            line.position.y = LAYER_DEPTHS.water_lines;
             line.name = 'water-lines';
             group.add(line);
           }
@@ -528,7 +537,7 @@ export async function createBaseLayerForTile(
           // Fallback: add individually
           for (const geom of geometries) {
             const line = new THREE.LineSegments(geom, getLineMaterial(color));
-            line.position.y = LAYER_DEPTHS.water;
+            line.position.y = LAYER_DEPTHS.water_lines;
             group.add(line);
           }
         }
@@ -575,21 +584,33 @@ function createWaterLineGeometry(coordinates: number[][]): THREE.BufferGeometry 
 }
 
 /**
- * Create flat polygon geometry at Y=0
+ * Create polygon geometry, optionally following terrain elevation
+ * @param coordinates - Polygon coordinates [outer ring, ...holes]
+ * @param layer - Layer name to determine if terrain-following should be applied
+ * @param yOffset - Y offset to apply (for terrain-following, this is added to terrain height)
  */
-function createFlatPolygonGeometry(coordinates: number[][][]): THREE.BufferGeometry | null {
+function createPolygonGeometry(
+  coordinates: number[][][],
+  layer: string,
+  yOffset: number
+): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length === 0) return null;
 
   const outerRing = coordinates[0];
   if (!outerRing || outerRing.length < 3) return null;
 
-  // Convert outer ring to Three.js points
-  // Note: We negate world.z because rotateX(-PI/2) will negate it again,
-  // resulting in the correct final Z position that matches roads
+  const isTerrainFollowing = TERRAIN_FOLLOWING_LAYERS.includes(layer) && ELEVATION.TERRAIN_ENABLED;
+
+  // Convert outer ring to Three.js points (2D for shape creation)
   const points: THREE.Vector2[] = [];
+  // Store original coordinates for terrain height sampling
+  const geoCoords: Array<{ lng: number; lat: number }> = [];
+
   for (const coord of outerRing) {
     const world = geoToWorld(coord[0], coord[1], 0);
+    // Note: We negate world.z because rotateX(-PI/2) will negate it again
     points.push(new THREE.Vector2(world.x, -world.z));
+    geoCoords.push({ lng: coord[0], lat: coord[1] });
   }
 
   // Remove duplicate last point if present
@@ -598,6 +619,7 @@ function createFlatPolygonGeometry(coordinates: number[][][]): THREE.BufferGeome
     const last = points[points.length - 1];
     if (Math.abs(first.x - last.x) < 0.01 && Math.abs(first.y - last.y) < 0.01) {
       points.pop();
+      geoCoords.pop();
     }
   }
 
@@ -610,6 +632,7 @@ function createFlatPolygonGeometry(coordinates: number[][][]): THREE.BufferGeome
   // Ensure counter-clockwise winding for Three.js
   if (area > 0) {
     points.reverse();
+    geoCoords.reverse();
   }
 
   try {
@@ -649,6 +672,45 @@ function createFlatPolygonGeometry(coordinates: number[][][]): THREE.BufferGeome
 
     // Rotate so it lies flat on XZ plane (Y up)
     geometry.rotateX(-Math.PI / 2);
+
+    // Apply terrain-following elevation if applicable
+    if (isTerrainFollowing) {
+      const positions = geometry.attributes.position;
+
+      // For each vertex, sample terrain height and adjust Y position
+      for (let i = 0; i < positions.count; i++) {
+        const x = positions.getX(i);
+        const z = positions.getZ(i);
+
+        // Find the closest original coordinate to get terrain height
+        // This is an approximation since ShapeGeometry may add vertices
+        let minDist = Infinity;
+        let closestCoord = geoCoords[0];
+
+        for (let j = 0; j < geoCoords.length; j++) {
+          const world = geoToWorld(geoCoords[j].lng, geoCoords[j].lat, 0);
+          const dist = Math.abs(world.x - x) + Math.abs(world.z - z);
+          if (dist < minDist) {
+            minDist = dist;
+            closestCoord = geoCoords[j];
+          }
+        }
+
+        // Get terrain height at this position
+        let terrainHeight = getTerrainHeight(closestCoord.lng, closestCoord.lat);
+        if (Number.isNaN(terrainHeight)) {
+          terrainHeight = 0;
+        }
+        terrainHeight *= ELEVATION.VERTICAL_EXAGGERATION;
+
+        // Position relative to terrain base + terrain height + layer offset
+        const y = LAYER_DEPTHS.terrain + terrainHeight + yOffset;
+        positions.setY(i, y);
+      }
+
+      positions.needsUpdate = true;
+      geometry.computeVertexNormals();
+    }
 
     return geometry;
   } catch {
