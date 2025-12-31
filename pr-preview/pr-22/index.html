@@ -94,7 +94,7 @@
       background: rgba(0, 0, 0, 0.6);
     }
 
-    #minimap-modal.active {
+    #minimap-modal.minimap-modal-open {
       display: flex;
       align-items: center;
       justify-content: center;
@@ -241,6 +241,12 @@
     .minimap-plane-marker {
       width: 24px;
       height: 24px;
+      position: relative;
+    }
+
+    .minimap-plane-rotator {
+      width: 100%;
+      height: 100%;
       background: #3b82f6;
       border: 2px solid white;
       border-radius: 50%;
@@ -248,7 +254,7 @@
       position: relative;
     }
 
-    .minimap-plane-marker::after {
+    .minimap-plane-rotator::after {
       content: '';
       position: absolute;
       top: -8px;
@@ -551,7 +557,7 @@
       -webkit-user-select: none;
     }
   </style>
-  <script type="module" crossorigin src="/overture-flight/pr-preview/pr-22/assets/index-DgU2F54z.js"></script>
+  <script type="module" crossorigin src="/overture-flight/pr-preview/pr-22/assets/index-YhnvD2y2.js"></script>
 </head>
 <body>
   <div id="map"></div>
@@ -592,7 +598,7 @@
             <input type="text" id="minimap-search" placeholder="Search location..." />
             <button id="minimap-search-btn">Go</button>
           </div>
-          <select id="minimap-locations">
+          <select id="minimap-locations" aria-label="Quick location selection">
             <option value="">Quick Jump...</option>
           </select>
           <button id="minimap-lock-btn">
