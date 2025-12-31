@@ -54,36 +54,248 @@
       font-weight: bold;
     }
 
-    #location-picker {
+    /* Globe button */
+    #globe-btn {
       position: absolute;
       top: 20px;
       right: 20px;
+      width: 48px;
+      height: 48px;
       background: rgba(0, 0, 0, 0.7);
-      padding: 15px;
-      border-radius: 8px;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, transform 0.2s;
     }
 
-    #location-picker input {
+    #globe-btn:hover {
+      background: rgba(59, 130, 246, 0.8);
+      transform: scale(1.05);
+    }
+
+    #globe-btn svg {
+      width: 28px;
+      height: 28px;
+      fill: white;
+    }
+
+    /* Minimap Modal */
+    #minimap-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2000;
+      background: rgba(0, 0, 0, 0.6);
+    }
+
+    #minimap-modal.minimap-modal-open {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #minimap-container {
+      width: 80%;
+      max-width: 800px;
+      height: 70%;
+      max-height: 600px;
+      background: rgba(20, 20, 30, 0.95);
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #minimap-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: rgba(0, 0, 0, 0.4);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    #minimap-header h2 {
+      color: white;
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+    }
+
+    #minimap-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    #minimap-search-container {
+      display: flex;
+      gap: 8px;
+    }
+
+    #minimap-search {
       padding: 8px 12px;
-      border: none;
-      border-radius: 4px;
-      width: 200px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
       font-size: 14px;
+      width: 200px;
     }
 
-    #location-picker button {
+    #minimap-search::placeholder {
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    #minimap-search-btn {
       padding: 8px 16px;
-      margin-left: 8px;
       border: none;
-      border-radius: 4px;
+      border-radius: 6px;
       background: #3b82f6;
       color: white;
       cursor: pointer;
       font-size: 14px;
+      transition: background 0.2s;
     }
 
-    #location-picker button:hover {
+    #minimap-search-btn:hover {
       background: #2563eb;
+    }
+
+    #minimap-lock-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      background: rgba(34, 197, 94, 0.3);
+      color: white;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.2s, border-color 0.2s;
+    }
+
+    #minimap-lock-btn.unlocked {
+      background: rgba(239, 68, 68, 0.3);
+      border-color: rgba(239, 68, 68, 0.5);
+    }
+
+    #minimap-lock-btn svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+
+    #minimap-close-btn {
+      width: 32px;
+      height: 32px;
+      border: none;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+      cursor: pointer;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+    }
+
+    #minimap-close-btn:hover {
+      background: rgba(239, 68, 68, 0.6);
+    }
+
+    #minimap-map {
+      flex: 1;
+      position: relative;
+    }
+
+    #minimap-footer {
+      padding: 10px 16px;
+      background: rgba(0, 0, 0, 0.4);
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #minimap-coords {
+      font-family: monospace;
+    }
+
+    #minimap-hint {
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* Plane marker on minimap */
+    .minimap-plane-marker {
+      width: 24px;
+      height: 24px;
+      position: relative;
+    }
+
+    .minimap-plane-rotator {
+      width: 100%;
+      height: 100%;
+      background: #3b82f6;
+      border: 2px solid white;
+      border-radius: 50%;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+      position: relative;
+    }
+
+    .minimap-plane-rotator::after {
+      content: '';
+      position: absolute;
+      top: -8px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-bottom: 10px solid #3b82f6;
+    }
+
+    /* Teleport target marker */
+    .minimap-target-marker {
+      width: 20px;
+      height: 20px;
+      border: 3px solid #ef4444;
+      border-radius: 50%;
+      background: transparent;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.3); opacity: 0.7; }
+    }
+
+    /* Quick locations dropdown */
+    #minimap-locations {
+      padding: 8px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    #minimap-locations option {
+      background: #1a1a2e;
+      color: white;
     }
 
     #players {
@@ -274,29 +486,54 @@
         font-size: 14px;
       }
 
-      #location-picker {
+      #globe-btn {
         top: 10px;
         right: 10px;
-        padding: 8px;
+        width: 40px;
+        height: 40px;
       }
 
-      #location-picker input {
-        width: 120px;
-        padding: 6px 8px;
-        font-size: 12px;
+      #globe-btn svg {
+        width: 22px;
+        height: 22px;
       }
 
-      #location-picker button {
+      #minimap-container {
+        width: 95%;
+        height: 80%;
+        max-height: none;
+      }
+
+      #minimap-header {
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 10px 12px;
+      }
+
+      #minimap-controls {
+        flex-wrap: wrap;
+        gap: 8px;
+        width: 100%;
+      }
+
+      #minimap-search-container {
+        flex: 1;
+        min-width: 150px;
+      }
+
+      #minimap-search {
+        width: 100%;
+        flex: 1;
+      }
+
+      #minimap-lock-btn {
         padding: 6px 10px;
         font-size: 12px;
       }
 
-      #location-picker select {
-        display: block;
-        width: 100%;
-        margin-left: 0 !important;
-        margin-top: 8px;
-        padding: 6px;
+      #minimap-locations {
+        flex: 1;
+        min-width: 100px;
       }
 
       #players {
@@ -343,9 +580,41 @@
     </div>
   </div>
 
-  <div id="location-picker">
-    <input type="text" id="location-search" placeholder="Search location..." />
-    <button id="teleport-btn">Go</button>
+  <!-- Globe button to open minimap -->
+  <button id="globe-btn" title="Open Map">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+    </svg>
+  </button>
+
+  <!-- Minimap Modal -->
+  <div id="minimap-modal">
+    <div id="minimap-container">
+      <div id="minimap-header">
+        <h2>Navigation Map</h2>
+        <div id="minimap-controls">
+          <div id="minimap-search-container">
+            <input type="text" id="minimap-search" placeholder="Search location..." />
+            <button id="minimap-search-btn">Go</button>
+          </div>
+          <select id="minimap-locations" aria-label="Quick location selection">
+            <option value="">Quick Jump...</option>
+          </select>
+          <button id="minimap-lock-btn">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+            </svg>
+            <span>Following</span>
+          </button>
+          <button id="minimap-close-btn">&times;</button>
+        </div>
+      </div>
+      <div id="minimap-map"></div>
+      <div id="minimap-footer">
+        <span id="minimap-coords">--</span>
+        <span id="minimap-hint">Click anywhere to teleport</span>
+      </div>
+    </div>
   </div>
 
   <div id="players">
