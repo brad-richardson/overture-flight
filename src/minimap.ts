@@ -677,23 +677,63 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           }
         },
 
-        // City/locality labels (trying without filter to debug)
+        // City/locality labels
         {
           id: 'city-labels',
           type: 'symbol',
           source: 'overture-divisions',
           'source-layer': 'division',
-          // Temporarily remove filter to see if ANY features render
-          // filter: ['==', ['get', 'subtype'], 'locality'],
+          filter: ['==', ['get', 'subtype'], 'locality'],
           layout: {
-            'text-field': ['to-string', ['get', 'subtype']],  // Show subtype to see what values exist
+            'text-field': ['coalesce',
+              ['get', 'primary', ['get', 'names']],  // Access nested names.primary
+              ''
+            ],
             'text-font': ['Noto Sans Bold'],
-            'text-size': 12,
-            'text-anchor': 'center'
+            'text-size': [
+              'interpolate', ['linear'], ['zoom'],
+              4, 10,
+              8, 12,
+              12, 14
+            ],
+            'text-anchor': 'center',
+            'text-max-width': 8,
+            'symbol-sort-key': ['*', -1, ['coalesce', ['get', 'population'], 0]]
           },
           paint: {
-            'text-color': '#ff0000',  // Red to make it obvious
-            'text-halo-color': '#ffffff',
+            'text-color': CARTO_COLORS.cityLabel,
+            'text-halo-color': CARTO_COLORS.textHalo,
+            'text-halo-width': 1.5
+          }
+        },
+
+        // State/region labels (larger, less frequent)
+        {
+          id: 'state-labels',
+          type: 'symbol',
+          source: 'overture-divisions',
+          'source-layer': 'division',
+          filter: ['==', ['get', 'subtype'], 'region'],
+          maxzoom: 8,
+          layout: {
+            'text-field': ['coalesce',
+              ['get', 'primary', ['get', 'names']],  // Access nested names.primary
+              ''
+            ],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': [
+              'interpolate', ['linear'], ['zoom'],
+              3, 10,
+              6, 14
+            ],
+            'text-transform': 'uppercase',
+            'text-letter-spacing': 0.1,
+            'text-anchor': 'center',
+            'text-max-width': 10
+          },
+          paint: {
+            'text-color': CARTO_COLORS.stateLabel,
+            'text-halo-color': CARTO_COLORS.textHalo,
             'text-halo-width': 2
           }
         }
@@ -706,39 +746,6 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
 
   // Add navigation controls
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
-
-  // Debug: log available source layers when map loads
-  map.on('load', () => {
-    console.log('Minimap loaded. Checking divisions source...');
-    const style = map?.getStyle();
-    if (style?.sources) {
-      Object.entries(style.sources).forEach(([name, source]) => {
-        console.log(`Source: ${name}`, source);
-      });
-    }
-    // Query source to see what layers/features are available
-    const divisionFeatures = map?.querySourceFeatures('overture-divisions');
-    console.log('Division source features count:', divisionFeatures?.length);
-    if (divisionFeatures && divisionFeatures.length > 0) {
-      const sample = divisionFeatures.slice(0, 5);
-      console.log('Sample division features:', sample.map(f => ({
-        sourceLayer: f.sourceLayer,
-        properties: f.properties,
-        geometry: f.geometry?.type
-      })));
-    }
-  });
-
-  // Debug: log ALL features on click to see what's rendered
-  map.on('click', (e) => {
-    const allFeatures = map?.queryRenderedFeatures(e.point);
-    console.log('All features at click point:', allFeatures?.map(f => ({
-      layer: f.layer?.id,
-      sourceLayer: f.sourceLayer,
-      source: f.source,
-      properties: Object.keys(f.properties || {})
-    })));
-  });
 
   // Create plane marker
   planeMarker = new maplibregl.Marker({
