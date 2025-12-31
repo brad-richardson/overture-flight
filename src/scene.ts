@@ -146,14 +146,6 @@ export async function initScene(): Promise<{
   // Load plane model
   await loadPlaneModel();
 
-  // Reference marker at origin
-  const originMarker = new THREE.Mesh(
-    new THREE.SphereGeometry(10, 16, 16),
-    new THREE.MeshBasicMaterial({ color: 0xff0000 })
-  );
-  originMarker.position.set(0, 10, 0);
-  scene.add(originMarker);
-
   return { scene, camera, renderer };
 }
 

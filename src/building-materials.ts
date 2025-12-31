@@ -211,8 +211,8 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
       0xA0522D, // sienna
       0xCD853F, // peru
       0xD2691E, // chocolate
-      0x8B0000, // dark red (barn)
-      0xB22222, // firebrick (barn)
+      0x7B3F00, // chocolate brown (barn)
+      0x8B5A2B, // tan brown (barn)
       0xDEB887, // burlywood
       0xD2B48C, // tan
       0x6B8E23, // olive drab
@@ -227,16 +227,16 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
     walls: [
       0x4A4A4A, // dark gray
       0x2F4F4F, // dark slate gray
-      0x483D8B, // dark slate blue
-      0x4B0082, // indigo
-      0x800020, // burgundy
-      0x8B0000, // dark red
-      0x191970, // midnight blue
+      0x3D3D5C, // muted dark blue-gray
+      0x4A4A5A, // neutral dark gray-blue
+      0x5A5A5A, // medium dark gray
+      0x3C3C3C, // charcoal
+      0x2F3F4F, // dark slate
       0x1C1C1C, // near black
       0xC0C0C0, // silver
       0x708090, // slate gray
     ],
-    accents: [0xFFD700, 0xFFA500, 0xFF4500], // gold, orange, red-orange (marquee colors)
+    accents: [0xFFD700, 0xFFA500, 0xD4A574], // gold, orange, tan (marquee colors)
     roofs: [0x2F2F2F, 0x1C1C1C, 0x3C3C3C], // dark roofs
   },
 
