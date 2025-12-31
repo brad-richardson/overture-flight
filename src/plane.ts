@@ -37,7 +37,7 @@ let planeState: PlaneState = {
   lat: DEFAULT_LOCATION.lat,
   lng: DEFAULT_LOCATION.lng,
   altitude: FLIGHT.SPAWN_ALTITUDE,
-  heading: 150, // SE direction
+  heading: 30, // NE direction
   pitch: 0,
   roll: 0,
   speed: FLIGHT.DEFAULT_SPEED,
@@ -222,7 +222,7 @@ export function teleportPlane(lat: number, lng: number): void {
   planeState.lat = lat;
   planeState.lng = lng;
   planeState.altitude = FLIGHT.SPAWN_ALTITUDE;
-  planeState.heading = 150; // SE direction
+  planeState.heading = 30; // NE direction
   planeState.pitch = 0;
   planeState.roll = 0;
   planeState.speed = FLIGHT.DEFAULT_SPEED;
@@ -236,4 +236,11 @@ export function resetPlane(): void {
   planeState.pitch = 0;
   planeState.roll = 0;
   planeState.speed = FLIGHT.DEFAULT_SPEED;
+}
+
+/**
+ * Set plane altitude (used for terrain-aware spawning)
+ */
+export function setPlaneAltitude(altitude: number): void {
+  planeState.altitude = Math.max(FLIGHT.MIN_ALTITUDE, Math.min(FLIGHT.MAX_ALTITUDE, altitude));
 }

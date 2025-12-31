@@ -52,7 +52,7 @@ export const FLIGHT: FlightConfig = {
   GRAVITY: 15,          // m/s descent when stalled
   MIN_ALTITUDE: 0,      // meters
   MAX_ALTITUDE: 5000,   // meters
-  SPAWN_ALTITUDE: 200,  // meters - above most buildings
+  SPAWN_ALTITUDE: 230,  // meters - above most buildings
 };
 
 // Camera constants
@@ -120,12 +120,16 @@ export const PLANE_MODEL_URL: string = `${import.meta.env.BASE_URL}models/plane.
 // Plane rendering settings
 export interface PlaneRenderConfig {
   SCALE: number;
+  MOBILE_SCALE: number;
   LOCAL_VISIBLE: boolean;
+  MIN_TERRAIN_CLEARANCE: number;
 }
 
 export const PLANE_RENDER: PlaneRenderConfig = {
   SCALE: 0.25,          // Scale factor for plane model
+  MOBILE_SCALE: 0.18,   // Smaller scale for mobile devices
   LOCAL_VISIBLE: true,  // show local player's plane in chase view
+  MIN_TERRAIN_CLEARANCE: 50,  // Minimum altitude above terrain when teleporting (meters)
 };
 
 // Elevation/terrain settings

@@ -1,5 +1,5 @@
 import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin } from './scene.js';
-import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane, setMobileInput, PlaneState } from './plane.js';
+import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane, setMobileInput, setPlaneAltitude, PlaneState } from './plane.js';
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection, Connection, WelcomeMessage } from './network.js';
 import { checkCollision } from './collision.js';
@@ -8,8 +8,8 @@ import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile } from '.
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
-import { preloadElevationTiles, unloadDistantElevationTiles } from './elevation.js';
-import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS } from './constants.js';
+import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
+import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT } from './constants.js';
 import { initMobileControls, getJoystickState, getThrottleState, isMobileDevice } from './mobile-controls.js';
 import * as THREE from 'three';
 
@@ -237,13 +237,25 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
   // Preload elevation tiles for the new location
   if (ELEVATION.TERRAIN_ENABLED) {
     console.log(`Preloading elevation tiles for teleport to (${lat.toFixed(4)}, ${lng.toFixed(4)})...`);
-    preloadElevationTiles(lng, lat, 2).catch((error) => {
+    try {
+      await preloadElevationTiles(lng, lat, 2);
+    } catch (error) {
       console.warn('Failed to preload elevation tiles:', error);
-    });
+    }
   }
 
   // Teleport plane
   teleportPlane(lat, lng);
+
+  // Ensure minimum clearance above terrain
+  if (ELEVATION.TERRAIN_ENABLED) {
+    const terrainHeight = await getTerrainHeightAsync(lng, lat);
+    const minAltitude = terrainHeight + PLANE_RENDER.MIN_TERRAIN_CLEARANCE;
+    if (FLIGHT.SPAWN_ALTITUDE < minAltitude) {
+      console.log(`Adjusting spawn altitude from ${FLIGHT.SPAWN_ALTITUDE}m to ${minAltitude.toFixed(1)}m (terrain: ${terrainHeight.toFixed(1)}m)`);
+      setPlaneAltitude(minAltitude);
+    }
+  }
 
   if (connection) {
     connection.sendTeleport(lat, lng);
