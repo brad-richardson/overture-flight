@@ -37,24 +37,51 @@ const COLORS = {
   default: 0x4a6a4a
 };
 
+// Set of water colors for z-fighting prevention
+const WATER_COLORS = new Set([
+  COLORS.ocean, COLORS.sea, COLORS.lake, COLORS.reservoir,
+  COLORS.pond, COLORS.river, COLORS.stream, COLORS.canal, COLORS.water
+]);
+
+// Layer depth configuration to prevent z-fighting
+// Water renders below land, land_use renders above land_cover
+const LAYER_DEPTHS = {
+  water: -2.0,      // Water at lowest level
+  land: -1.0,       // Base land
+  land_cover: -0.5, // Land cover (forests, etc.) slightly above land
+  land_use: -0.25,  // Land use (parks, etc.) above land_cover
+  default: -0.5
+};
+
 // Materials cache
 const materials = new Map();
 
 /**
- * Get or create material for a color
+ * Get or create material for a color and layer type
+ * Uses polygonOffset to prevent z-fighting between overlapping layers
  * @param {number} color
+ * @param {string} layer - Layer type for depth ordering
  * @returns {THREE.MeshStandardMaterial}
  */
-function getMaterial(color) {
-  if (!materials.has(color)) {
-    materials.set(color, new THREE.MeshStandardMaterial({
+function getMaterial(color, layer = 'default') {
+  const key = `${color}-${layer}`;
+  if (!materials.has(key)) {
+    // Use polygonOffset to help prevent z-fighting
+    // Higher offsetFactor = renders further away (behind lower values)
+    const isWater = layer === 'water' || WATER_COLORS.has(color);
+    const offsetFactor = isWater ? 4 : (layer === 'land' ? 3 : (layer === 'land_cover' ? 2 : 1));
+
+    materials.set(key, new THREE.MeshStandardMaterial({
       color: color,
       roughness: 0.9,
       metalness: 0.0,
-      side: THREE.DoubleSide
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: offsetFactor,
+      polygonOffsetUnits: 1
     }));
   }
-  return materials.get(color);
+  return materials.get(key);
 }
 
 /**
@@ -119,8 +146,9 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
   const group = new THREE.Group();
   group.name = `base-${tileZ}/${tileX}/${tileY}`;
 
-  // Group features by color for batching
-  const featuresByColor = new Map();
+  // Group features by color AND layer for proper z-fighting prevention
+  // Key format: "color-layer" to separate water from land even if same color
+  const featuresByColorAndLayer = new Map();
 
   for (const feature of features) {
     if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') {
@@ -128,18 +156,20 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
     }
 
     const color = getColorForFeature(feature.layer, feature.properties);
+    const layer = feature.layer || 'default';
+    const key = `${color}-${layer}`;
 
-    if (!featuresByColor.has(color)) {
-      featuresByColor.set(color, []);
+    if (!featuresByColorAndLayer.has(key)) {
+      featuresByColorAndLayer.set(key, { color, layer, features: [] });
     }
-    featuresByColor.get(color).push(feature);
+    featuresByColorAndLayer.get(key).features.push(feature);
   }
 
-  // Create merged geometry for each color
-  for (const [color, colorFeatures] of featuresByColor) {
+  // Create merged geometry for each color+layer combination
+  for (const [key, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
     const geometries = [];
 
-    for (const feature of colorFeatures) {
+    for (const feature of layerFeatures) {
       try {
         if (feature.type === 'Polygon') {
           const geom = createFlatPolygonGeometry(feature.coordinates);
@@ -157,20 +187,27 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
     }
 
     if (geometries.length > 0) {
+      // Get layer-specific depth to prevent z-fighting
+      const yPosition = LAYER_DEPTHS[layer] ?? LAYER_DEPTHS.default;
+      // Determine render order: water first (lowest), then land, then land_cover, then land_use
+      const renderOrder = layer === 'water' ? 0 : (layer === 'land' ? 1 : (layer === 'land_cover' ? 2 : 3));
+
       try {
         const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
         if (merged) {
-          const mesh = new THREE.Mesh(merged, getMaterial(color));
+          const mesh = new THREE.Mesh(merged, getMaterial(color, layer));
           mesh.receiveShadow = true;
-          mesh.position.y = -0.5; // Slightly below 0 to avoid z-fighting
+          mesh.position.y = yPosition;
+          mesh.renderOrder = renderOrder;
           group.add(mesh);
         }
       } catch (e) {
         // Fallback: add individually
         for (const geom of geometries) {
-          const mesh = new THREE.Mesh(geom, getMaterial(color));
+          const mesh = new THREE.Mesh(geom, getMaterial(color, layer));
           mesh.receiveShadow = true;
-          mesh.position.y = -0.5;
+          mesh.position.y = yPosition;
+          mesh.renderOrder = renderOrder;
           group.add(mesh);
         }
       }
