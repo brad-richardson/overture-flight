@@ -758,20 +758,28 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
         console.log(`Source: ${name}`, source);
       });
     }
-  });
-
-  // Debug: log features on click to see what properties are available
-  map.on('click', (e) => {
-    const features = map?.queryRenderedFeatures(e.point, {
-      layers: ['city-labels', 'state-labels', 'state-boundaries']
-    });
-    if (features && features.length > 0) {
-      console.log('Clicked division features:', features.map(f => ({
-        layer: f.layer?.id,
+    // Query source to see what layers/features are available
+    const divisionFeatures = map?.querySourceFeatures('overture-divisions');
+    console.log('Division source features count:', divisionFeatures?.length);
+    if (divisionFeatures && divisionFeatures.length > 0) {
+      const sample = divisionFeatures.slice(0, 5);
+      console.log('Sample division features:', sample.map(f => ({
         sourceLayer: f.sourceLayer,
-        properties: f.properties
+        properties: f.properties,
+        geometry: f.geometry?.type
       })));
     }
+  });
+
+  // Debug: log ALL features on click to see what's rendered
+  map.on('click', (e) => {
+    const allFeatures = map?.queryRenderedFeatures(e.point);
+    console.log('All features at click point:', allFeatures?.map(f => ({
+      layer: f.layer?.id,
+      sourceLayer: f.sourceLayer,
+      source: f.source,
+      properties: Object.keys(f.properties || {})
+    })));
   });
 
   // Create plane marker
