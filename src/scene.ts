@@ -8,6 +8,154 @@ import { initSkySystem, updateSky } from './sky.js';
 // Export for use in buildings.ts
 export { BufferGeometryUtils };
 
+// Cache for plane textures by color
+const planeTextureCache = new Map<string, THREE.CanvasTexture>();
+
+/**
+ * Create a procedural aircraft skin texture with panel lines and weathering
+ */
+function createAircraftSkinTexture(playerColor: string): THREE.CanvasTexture {
+  // Check cache first
+  if (planeTextureCache.has(playerColor)) {
+    return planeTextureCache.get(playerColor)!;
+  }
+
+  const canvas = document.createElement('canvas');
+  const size = 512;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+
+  // Base metallic silver/white color
+  const gradient = ctx.createLinearGradient(0, 0, size, size);
+  gradient.addColorStop(0, '#e8e8e8');
+  gradient.addColorStop(0.3, '#f5f5f5');
+  gradient.addColorStop(0.5, '#ffffff');
+  gradient.addColorStop(0.7, '#f0f0f0');
+  gradient.addColorStop(1, '#e0e0e0');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+
+  // Add subtle noise/grain for metallic texture
+  ctx.globalAlpha = 0.03;
+  for (let i = 0; i < 5000; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const brightness = Math.random() > 0.5 ? '#000000' : '#ffffff';
+    ctx.fillStyle = brightness;
+    ctx.fillRect(x, y, 1, 1);
+  }
+  ctx.globalAlpha = 1;
+
+  // Panel lines - horizontal
+  ctx.strokeStyle = '#b0b0b0';
+  ctx.lineWidth = 1;
+  const panelSpacing = 64;
+  for (let y = panelSpacing; y < size; y += panelSpacing) {
+    ctx.beginPath();
+    ctx.moveTo(0, y + (Math.random() - 0.5) * 4);
+    ctx.lineTo(size, y + (Math.random() - 0.5) * 4);
+    ctx.stroke();
+  }
+
+  // Panel lines - vertical
+  for (let x = panelSpacing; x < size; x += panelSpacing) {
+    ctx.beginPath();
+    ctx.moveTo(x + (Math.random() - 0.5) * 4, 0);
+    ctx.lineTo(x + (Math.random() - 0.5) * 4, size);
+    ctx.stroke();
+  }
+
+  // Rivet dots along panel lines
+  ctx.fillStyle = '#a0a0a0';
+  const rivetSpacing = 16;
+  for (let y = panelSpacing; y < size; y += panelSpacing) {
+    for (let x = rivetSpacing; x < size; x += rivetSpacing) {
+      ctx.beginPath();
+      ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Player color stripe accents (wing markings)
+  ctx.fillStyle = playerColor;
+  ctx.globalAlpha = 0.9;
+
+  // Main wing stripe (horizontal band in middle)
+  ctx.fillRect(0, size * 0.45, size, size * 0.06);
+
+  // Secondary accent stripes
+  ctx.globalAlpha = 0.7;
+  ctx.fillRect(0, size * 0.38, size, size * 0.02);
+  ctx.fillRect(0, size * 0.56, size, size * 0.02);
+
+  // Subtle edge highlights on stripes
+  ctx.globalAlpha = 0.4;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, size * 0.45, size, 2);
+  ctx.fillRect(0, size * 0.51 - 2, size, 2);
+
+  ctx.globalAlpha = 1;
+
+  // Add some weathering/dirt spots
+  ctx.globalAlpha = 0.02;
+  ctx.fillStyle = '#4a4a4a';
+  for (let i = 0; i < 30; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const radius = 5 + Math.random() * 20;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(2, 2);
+
+  planeTextureCache.set(playerColor, texture);
+  return texture;
+}
+
+/**
+ * Create enhanced aircraft materials with realistic texturing
+ */
+function createAircraftMaterials(playerColor: string): {
+  fuselage: THREE.MeshStandardMaterial;
+  wings: THREE.MeshStandardMaterial;
+  accent: THREE.MeshStandardMaterial;
+} {
+  const skinTexture = createAircraftSkinTexture(playerColor);
+
+  // Main fuselage material - metallic with panel lines
+  const fuselage = new THREE.MeshStandardMaterial({
+    map: skinTexture,
+    roughness: 0.4,
+    metalness: 0.6,
+    envMapIntensity: 0.8,
+  });
+
+  // Wing material - similar but with more visible color stripes
+  const wingTexture = createAircraftSkinTexture(playerColor);
+  wingTexture.repeat.set(1, 3); // Stretch stripes across wing span
+  const wings = new THREE.MeshStandardMaterial({
+    map: wingTexture,
+    roughness: 0.45,
+    metalness: 0.5,
+  });
+
+  // Accent material for trim pieces - solid player color
+  const accent = new THREE.MeshStandardMaterial({
+    color: playerColor,
+    roughness: 0.3,
+    metalness: 0.7,
+  });
+
+  return { fuselage, wings, accent };
+}
+
 // Scene components
 let scene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
@@ -203,41 +351,80 @@ async function loadPlaneModel(): Promise<THREE.Group> {
 function createFallbackPlane(): THREE.Group {
   const group = new THREE.Group();
 
-  // White/silver aircraft materials
+  // Default white/silver materials (will be replaced when cloned for player)
   const fuselageMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
-    roughness: 0.6,
-    metalness: 0.3
+    roughness: 0.4,
+    metalness: 0.6
   });
   const wingMaterial = new THREE.MeshStandardMaterial({
-    color: 0xeeeeee,
-    roughness: 0.7,
-    metalness: 0.2
+    color: 0xf0f0f0,
+    roughness: 0.45,
+    metalness: 0.5
   });
 
-  // Fuselage
-  const fuselageGeometry = new THREE.CylinderGeometry(2, 2, 20, 8);
+  // Fuselage - higher resolution cylinder for smoother appearance
+  const fuselageGeometry = new THREE.CylinderGeometry(2, 1.5, 20, 16);
   fuselageGeometry.rotateZ(Math.PI / 2);
   const fuselage = new THREE.Mesh(fuselageGeometry, fuselageMaterial);
+  fuselage.name = 'fuselage';
   group.add(fuselage);
 
-  // Wings
-  const wingGeometry = new THREE.BoxGeometry(30, 0.5, 5);
+  // Nose cone
+  const noseGeometry = new THREE.ConeGeometry(1.5, 4, 16);
+  noseGeometry.rotateZ(-Math.PI / 2);
+  const nose = new THREE.Mesh(noseGeometry, fuselageMaterial);
+  nose.position.set(12, 0, 0);
+  nose.name = 'nose';
+  group.add(nose);
+
+  // Wings - main wing with slight sweep
+  const wingGeometry = new THREE.BoxGeometry(4, 0.3, 28);
   const wings = new THREE.Mesh(wingGeometry, wingMaterial);
-  wings.position.z = 2;
+  wings.position.set(0, 0, 0);
+  wings.name = 'wings';
   group.add(wings);
 
-  // Tail
-  const tailGeometry = new THREE.BoxGeometry(8, 0.5, 3);
+  // Wing tips (angled)
+  const wingTipGeo = new THREE.BoxGeometry(2, 0.2, 4);
+  const leftWingTip = new THREE.Mesh(wingTipGeo, wingMaterial);
+  leftWingTip.position.set(0, 0.5, 15);
+  leftWingTip.rotation.x = Math.PI / 6;
+  leftWingTip.name = 'leftWingTip';
+  group.add(leftWingTip);
+
+  const rightWingTip = new THREE.Mesh(wingTipGeo, wingMaterial);
+  rightWingTip.position.set(0, 0.5, -15);
+  rightWingTip.rotation.x = -Math.PI / 6;
+  rightWingTip.name = 'rightWingTip';
+  group.add(rightWingTip);
+
+  // Tail horizontal stabilizer
+  const tailGeometry = new THREE.BoxGeometry(3, 0.2, 10);
   const tail = new THREE.Mesh(tailGeometry, wingMaterial);
-  tail.position.set(-8, 0, 0);
+  tail.position.set(-9, 0, 0);
+  tail.name = 'tail';
   group.add(tail);
 
   // Vertical stabilizer
-  const stabilizerGeometry = new THREE.BoxGeometry(5, 4, 0.5);
+  const stabilizerGeometry = new THREE.BoxGeometry(4, 5, 0.3);
   const stabilizer = new THREE.Mesh(stabilizerGeometry, wingMaterial);
-  stabilizer.position.set(-8, 2, 0);
+  stabilizer.position.set(-8, 2.5, 0);
+  stabilizer.name = 'stabilizer';
   group.add(stabilizer);
+
+  // Engine nacelles (under wings)
+  const engineGeo = new THREE.CylinderGeometry(0.8, 1, 3, 12);
+  engineGeo.rotateZ(Math.PI / 2);
+  const leftEngine = new THREE.Mesh(engineGeo, fuselageMaterial);
+  leftEngine.position.set(1, -1, 6);
+  leftEngine.name = 'leftEngine';
+  group.add(leftEngine);
+
+  const rightEngine = new THREE.Mesh(engineGeo, fuselageMaterial);
+  rightEngine.position.set(1, -1, -6);
+  rightEngine.name = 'rightEngine';
+  group.add(rightEngine);
 
   return group;
 }
@@ -259,12 +446,29 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
   const scale = isMobileDevice() ? PLANE_RENDER.MOBILE_SCALE : PLANE_RENDER.SCALE;
   mesh.scale.set(scale, scale, scale);
 
-  // Apply color to the plane
+  // Create enhanced aircraft materials with realistic texturing
+  const materials = createAircraftMaterials(color || '#3b82f6');
+
+  // Apply enhanced materials to the plane
+  const wingParts = ['wing', 'tail', 'stabilizer', 'tip', 'flap', 'aileron'];
+  const accentParts = ['engine', 'nacelle', 'prop', 'spinner'];
+
   mesh.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const meshChild = child as THREE.Mesh;
-      meshChild.material = (meshChild.material as THREE.MeshStandardMaterial).clone();
-      (meshChild.material as THREE.MeshStandardMaterial).color.set(color || '#3b82f6');
+      const name = meshChild.name.toLowerCase();
+
+      // Determine which material to use based on mesh name
+      if (accentParts.some(part => name.includes(part))) {
+        // Engine parts get accent color
+        meshChild.material = materials.accent;
+      } else if (wingParts.some(part => name.includes(part))) {
+        // Wing and tail surfaces
+        meshChild.material = materials.wings;
+      } else {
+        // Fuselage and other body parts
+        meshChild.material = materials.fuselage;
+      }
     }
   });
 
