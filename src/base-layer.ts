@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
+import { getScene, geoToWorld, worldToGeo, BufferGeometryUtils } from './scene.js';
 import { loadBaseTile, tileToBounds, lngLatToTile } from './tile-manager.js';
 import { getElevationDataForTile, sampleElevation, getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
@@ -74,7 +74,7 @@ const LAYER_DEPTHS: Record<string, number> = {
   land: -2.0,         // Base land above terrain (not terrain-following)
   land_cover: 0.3,    // Land cover offset ABOVE terrain surface (terrain-following)
   land_use: 0.5,      // Land use offset ABOVE terrain surface (terrain-following)
-  bathymetry: -2.0,   // Bathymetry at land level (deepest parts of ocean)
+  bathymetry: -2.2,   // Bathymetry slightly below land to prevent coastal z-fighting
   water: -0.5,        // Water polygons above bathymetry
   water_lines: -0.3,  // Water lines (rivers) slightly above water polygons
   default: 0.3
@@ -603,14 +603,11 @@ function createPolygonGeometry(
 
   // Convert outer ring to Three.js points (2D for shape creation)
   const points: THREE.Vector2[] = [];
-  // Store original coordinates for terrain height sampling
-  const geoCoords: Array<{ lng: number; lat: number }> = [];
 
   for (const coord of outerRing) {
     const world = geoToWorld(coord[0], coord[1], 0);
     // Note: We negate world.z because rotateX(-PI/2) will negate it again
     points.push(new THREE.Vector2(world.x, -world.z));
-    geoCoords.push({ lng: coord[0], lat: coord[1] });
   }
 
   // Remove duplicate last point if present
@@ -619,7 +616,6 @@ function createPolygonGeometry(
     const last = points[points.length - 1];
     if (Math.abs(first.x - last.x) < 0.01 && Math.abs(first.y - last.y) < 0.01) {
       points.pop();
-      geoCoords.pop();
     }
   }
 
@@ -632,7 +628,6 @@ function createPolygonGeometry(
   // Ensure counter-clockwise winding for Three.js
   if (area > 0) {
     points.reverse();
-    geoCoords.reverse();
   }
 
   try {
@@ -674,30 +669,20 @@ function createPolygonGeometry(
     geometry.rotateX(-Math.PI / 2);
 
     // Apply terrain-following elevation if applicable
+    // Uses O(n) complexity by converting world coords back to geo coords directly
     if (isTerrainFollowing) {
       const positions = geometry.attributes.position;
 
-      // For each vertex, sample terrain height and adjust Y position
       for (let i = 0; i < positions.count; i++) {
         const x = positions.getX(i);
         const z = positions.getZ(i);
 
-        // Find the closest original coordinate to get terrain height
-        // This is an approximation since ShapeGeometry may add vertices
-        let minDist = Infinity;
-        let closestCoord = geoCoords[0];
+        // Convert world position back to geographic coordinates
+        // Note: worldToGeo expects (x, y, z) where y is altitude
+        const geo = worldToGeo(x, 0, z);
 
-        for (let j = 0; j < geoCoords.length; j++) {
-          const world = geoToWorld(geoCoords[j].lng, geoCoords[j].lat, 0);
-          const dist = Math.abs(world.x - x) + Math.abs(world.z - z);
-          if (dist < minDist) {
-            minDist = dist;
-            closestCoord = geoCoords[j];
-          }
-        }
-
-        // Get terrain height at this position
-        let terrainHeight = getTerrainHeight(closestCoord.lng, closestCoord.lat);
+        // Get terrain height at this geographic position
+        let terrainHeight = getTerrainHeight(geo.lng, geo.lat);
         if (Number.isNaN(terrainHeight)) {
           terrainHeight = 0;
         }
