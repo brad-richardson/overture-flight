@@ -212,10 +212,8 @@ function getColorForFeature(layer: string, properties: Record<string, unknown>):
   }
 
   if (layer === 'land_cover') {
-    // Debug: log unknown land_cover subtypes to help diagnose missing styles
-    if (type && type !== 'grass') {
-      console.log(`land_cover subtype not in COLORS: "${type}" (properties:`, properties, ')');
-    }
+    // Debug: log all land_cover properties to find the correct field name
+    console.log(`land_cover: type="${type}" properties=`, properties);
     // Overture subtypes: barren, crop, forest, grass, mangrove, moss, shrub, snow, urban, wetland
     return COLORS.grass;
   }
@@ -452,8 +450,8 @@ export async function createBaseLayerForTile(
     }
 
     // Layers that should NOT be merged (render individually to prevent z-fighting artifacts)
-    // Water and bathymetry polygons often overlap and cause flickering when merged
-    const NO_MERGE_LAYERS = ['water', 'bathymetry'];
+    // Overlapping polygons cause flickering when merged into single geometry
+    const NO_MERGE_LAYERS = ['water', 'bathymetry', 'land'];
 
     // Create geometry for each color+layer combination (polygons)
     for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
