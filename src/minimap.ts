@@ -3,14 +3,13 @@ import { Protocol } from 'pmtiles';
 import { LOCATIONS, OVERTURE_BASE_PMTILES, OVERTURE_BUILDINGS_PMTILES, OVERTURE_TRANSPORTATION_PMTILES, OVERTURE_DIVISIONS_PMTILES } from './constants.js';
 import type { PlaneState } from './plane.js';
 
-// Register PMTiles protocol for MapLibre
-let protocolRegistered = false;
+// PMTiles protocol instance - stored at module level for proper lifecycle management
+let pmtilesProtocol: Protocol | null = null;
 
 function ensurePMTilesProtocol(): void {
-  if (!protocolRegistered) {
-    const protocol = new Protocol();
-    maplibregl.addProtocol('pmtiles', protocol.tile);
-    protocolRegistered = true;
+  if (!pmtilesProtocol) {
+    pmtilesProtocol = new Protocol();
+    maplibregl.addProtocol('pmtiles', pmtilesProtocol.tile);
     console.log('PMTiles protocol registered for minimap');
   }
 }
@@ -20,10 +19,8 @@ function ensurePMTilesProtocol(): void {
  * Uses a light, natural color scheme inspired by traditional cartography.
  */
 const CARTO_COLORS = {
-  // Background and water
-  background: '#e8e4d8',    // Warm off-white
+  // Water
   water: '#a3c7df',         // Soft blue
-  waterDark: '#7db0d0',     // Slightly deeper blue for contrast
 
   // Land and vegetation
   land: '#f5f3ed',          // Light cream
@@ -59,7 +56,6 @@ const CARTO_COLORS = {
   countryBoundary: '#707080', // Darker for country borders
 
   // Text and labels
-  text: '#444444',
   textHalo: '#ffffff',
   cityLabel: '#404050',
   stateLabel: '#606070',
@@ -427,6 +423,7 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
     container: mapContainer,
     style: {
       version: 8,
+      glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
       sources: {
         'overture-base': {
           type: 'vector',
@@ -688,8 +685,8 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           'source-layer': 'division',
           filter: ['==', ['get', 'subtype'], 'locality'],
           layout: {
-            'text-field': ['coalesce', ['get', 'name'], ''],
-            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+            'text-field': ['coalesce', ['get', 'primary_name'], ['get', 'name'], ''],
+            'text-font': ['Noto Sans Regular'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
               4, 10,
@@ -716,8 +713,8 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           filter: ['==', ['get', 'subtype'], 'region'],
           maxzoom: 8,
           layout: {
-            'text-field': ['coalesce', ['get', 'name'], ''],
-            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+            'text-field': ['coalesce', ['get', 'primary_name'], ['get', 'name'], ''],
+            'text-font': ['Noto Sans Regular'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
               3, 10,
@@ -743,9 +740,6 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
 
   // Add navigation controls
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
-
-  // Add attribution
-  map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
 
   // Create plane marker
   planeMarker = new maplibregl.Marker({
