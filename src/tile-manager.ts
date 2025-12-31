@@ -95,6 +95,7 @@ const SPEED_THRESHOLD = 30; // m/s - only predictive load above this speed
 // Speed divisor to calculate tiles ahead: tilesAhead = speed / SPEED_TO_TILES_DIVISOR
 // At 50 m/s = 1 tile ahead, 100 m/s = 2 tiles, 150 m/s = 3 tiles (capped at PREDICTIVE_TILES)
 const SPEED_TO_TILES_DIVISOR = 50;
+const MIN_FALLBACK_ZOOM = 6; // Minimum zoom level for base tile fallback
 
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
@@ -292,6 +293,7 @@ export async function loadBuildingTile(
 
 /**
  * Load base layer features for a tile (land, water, etc.)
+ * Tries multiple fallback zoom levels if the requested zoom has no data
  */
 export async function loadBaseTile(
   x: number,
@@ -304,20 +306,27 @@ export async function loadBaseTile(
   }
 
   const data = await getTileData(basePMTiles, zoom, x, y);
-  if (!data) {
-    // Try at a lower zoom level - base data might be at coarser resolution
-    const lowerZoom = Math.max(10, zoom - 2);
-    const scale = Math.pow(2, zoom - lowerZoom);
-    const lowerX = Math.floor(x / scale);
-    const lowerY = Math.floor(y / scale);
-    console.log(`Base tile ${zoom}/${x}/${y} empty, trying ${lowerZoom}/${lowerX}/${lowerY}`);
-    const lowerData = await getTileData(basePMTiles, lowerZoom, lowerX, lowerY);
-    if (!lowerData) return [];
-    return parseMVT(lowerData, lowerX, lowerY, lowerZoom);
+  if (data) {
+    // Base PMTiles has layers: water, land, land_use, land_cover, infrastructure
+    return parseMVT(data, x, y, zoom);
   }
 
-  // Base PMTiles has layers: water, land, land_use, land_cover, infrastructure
-  return parseMVT(data, x, y, zoom);
+  // Try fallback zoom levels from zoom-1 down to MIN_FALLBACK_ZOOM
+  // Water and land data may only be available at certain zoom levels in the PMTiles
+  for (let fallbackZoom = zoom - 1; fallbackZoom >= MIN_FALLBACK_ZOOM; fallbackZoom--) {
+    const scale = Math.pow(2, zoom - fallbackZoom);
+    const fallbackX = Math.floor(x / scale);
+    const fallbackY = Math.floor(y / scale);
+
+    const fallbackData = await getTileData(basePMTiles, fallbackZoom, fallbackX, fallbackY);
+    if (fallbackData) {
+      console.log(`Base tile ${zoom}/${x}/${y} empty, using fallback ${fallbackZoom}/${fallbackX}/${fallbackY}`);
+      return parseMVT(fallbackData, fallbackX, fallbackY, fallbackZoom);
+    }
+  }
+
+  console.log(`Base tile ${zoom}/${x}/${y}: no data found at any zoom level`);
+  return [];
 }
 
 /**
