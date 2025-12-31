@@ -4,7 +4,7 @@
 export const OVERTURE_BUILDINGS_PMTILES: string = import.meta.env.VITE_PMTILES_URL
   || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/buildings.pmtiles';
 
-// Overture base theme (land, water, landuse)
+// Overture base theme (land, water, landuse, bathymetry)
 export const OVERTURE_BASE_PMTILES: string = import.meta.env.VITE_BASE_PMTILES_URL
   || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/base.pmtiles';
 
