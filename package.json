@@ -1,0 +1,23 @@
+{
+  "name": "flight-sim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "party:dev": "partykit dev",
+    "party:deploy": "partykit deploy"
+  },
+  "dependencies": {
+    "maplibre-gl": "^4.7.1",
+    "partysocket": "^1.0.2",
+    "pmtiles": "^4.2.0"
+  },
+  "devDependencies": {
+    "partykit": "^0.0.111",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "name": "flight-sim",
+  "main": "party/index.ts"
+}
