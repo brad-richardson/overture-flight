@@ -8,7 +8,8 @@ import { initTileManager, getTilesToLoad, getTilesToUnload, isTileLoaded, markTi
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
-import { DEFAULT_LOCATION } from './constants.js';
+import { preloadElevationTiles, unloadDistantElevationTiles, getElevationStats } from './elevation.js';
+import { DEFAULT_LOCATION, ELEVATION } from './constants.js';
 
 // Game state
 let connection = null;
@@ -72,6 +73,11 @@ async function updateTiles(lng, lat) {
       tileMeshes.delete(key);
     }
     removeTile(key);
+  }
+
+  // Clean up distant elevation tiles if terrain is enabled
+  if (ELEVATION.TERRAIN_ENABLED) {
+    unloadDistantElevationTiles(lng, lat, 5);
   }
 }
 
@@ -190,7 +196,7 @@ function handlePlayerLeft(id) {
  * @param {number} lat - Destination latitude
  * @param {number} lng - Destination longitude
  */
-function handleTeleport(lat, lng) {
+async function handleTeleport(lat, lng) {
   // Update origin for new location
   setOrigin(lng, lat);
 
@@ -202,6 +208,12 @@ function handleTeleport(lat, lng) {
     removeTile(key);
   }
   tileMeshes.clear();
+
+  // Preload elevation tiles for the new location
+  if (ELEVATION.TERRAIN_ENABLED) {
+    console.log(`Preloading elevation tiles for teleport to (${lat.toFixed(4)}, ${lng.toFixed(4)})...`);
+    preloadElevationTiles(lng, lat, 2); // Don't await, let it load in background
+  }
 
   // Teleport plane
   teleportPlane(lat, lng);
@@ -228,6 +240,13 @@ async function init() {
     // Initialize tile manager (PMTiles sources)
     await initTileManager();
     console.log('Tile manager initialized');
+
+    // Preload elevation tiles for the starting area
+    if (ELEVATION.TERRAIN_ENABLED) {
+      console.log('Preloading elevation tiles...');
+      await preloadElevationTiles(DEFAULT_LOCATION.lng, DEFAULT_LOCATION.lat, 2);
+      console.log('Elevation tiles preloaded');
+    }
 
     // Initialize controls
     initControls();

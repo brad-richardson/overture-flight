@@ -1,5 +1,6 @@
 import { teleportPlane } from './plane.js';
 import { LOCATIONS } from './constants.js';
+import { getGroundHeight } from './collision.js';
 
 let crashMessageTimeout = null;
 
@@ -15,6 +16,10 @@ export function updateHUD(planeState) {
   // Altitude
   const altitude = Math.round(planeState.altitude);
   document.getElementById('altitude-value').textContent = `${altitude} m`;
+
+  // Ground level (terrain height)
+  const groundHeight = Math.round(getGroundHeight(planeState.lng, planeState.lat));
+  document.getElementById('ground-value').textContent = `${groundHeight} m`;
 
   // Heading
   const heading = Math.round(planeState.heading);
