@@ -90,8 +90,11 @@ const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loa
 // Tile loading settings
 const TILE_ZOOM = 14; // Zoom level for tile loading
 const TILE_RADIUS = 2; // Load tiles within this radius of center
-const PREDICTIVE_TILES = 3; // How many tiles ahead to load based on heading
+const PREDICTIVE_TILES = 3; // Max tiles ahead to load based on heading
 const SPEED_THRESHOLD = 30; // m/s - only predictive load above this speed
+// Speed divisor to calculate tiles ahead: tilesAhead = speed / SPEED_TO_TILES_DIVISOR
+// At 50 m/s = 1 tile ahead, 100 m/s = 2 tiles, 150 m/s = 3 tiles (capped at PREDICTIVE_TILES)
+const SPEED_TO_TILES_DIVISOR = 50;
 
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
@@ -387,7 +390,7 @@ export function getTilesToLoad(
     const dy = -Math.cos(headingRad); // Negative because tile Y increases southward
 
     // Load tiles ahead based on speed (faster = more tiles ahead)
-    const tilesAhead = Math.min(PREDICTIVE_TILES, Math.ceil(speed / 50));
+    const tilesAhead = Math.min(PREDICTIVE_TILES, Math.ceil(speed / SPEED_TO_TILES_DIVISOR));
 
     for (let i = 1; i <= tilesAhead; i++) {
       // Extend in the direction of travel

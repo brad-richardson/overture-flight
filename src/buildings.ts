@@ -19,15 +19,18 @@ const MIN_BUILDING_AREA_FAR = 100; // m² - skip small buildings at far distance
 // LOD levels
 export enum LODLevel {
   HIGH = 0,   // Full detail
-  MEDIUM = 1, // Reduced precision
-  LOW = 2     // Minimal precision
+  MEDIUM = 1, // Reduced detail (simplified geometry)
+  LOW = 2     // Minimal detail (heavily simplified geometry)
 }
 
 /**
  * Calculate distance from origin (player) to tile center
+ * @param tileX - Tile X coordinate
+ * @param tileY - Tile Y coordinate
+ * @param tileZoom - Tile zoom level (not Z coordinate)
  */
-function getTileDistanceFromOrigin(tileX: number, tileY: number, tileZ: number): number {
-  const bounds = tileToWorldBounds(tileX, tileY, tileZ);
+function getTileDistanceFromOrigin(tileX: number, tileY: number, tileZoom: number): number {
+  const bounds = tileToWorldBounds(tileX, tileY, tileZoom);
   const centerX = (bounds.minX + bounds.maxX) / 2;
   const centerZ = (bounds.minZ + bounds.maxZ) / 2;
   // Origin is at 0,0 in world coordinates
@@ -49,7 +52,7 @@ function getLODLevel(distance: number): LODLevel {
 
 /**
  * Simplify polygon coordinates by reducing vertex count
- * Uses Douglas-Peucker-like simplification
+ * Uses consecutive-point distance filtering to remove vertices closer than tolerance
  */
 function simplifyPolygon(points: THREE.Vector2[], tolerance: number): THREE.Vector2[] {
   if (points.length <= 4) return points; // Can't simplify further
@@ -57,20 +60,26 @@ function simplifyPolygon(points: THREE.Vector2[], tolerance: number): THREE.Vect
   const simplified: THREE.Vector2[] = [points[0]];
   let prevPoint = points[0];
 
-  for (let i = 1; i < points.length; i++) {
+  for (let i = 1; i < points.length - 1; i++) {
     const point = points[i];
     const distance = prevPoint.distanceTo(point);
 
     // Keep point if it's far enough from the previous point
-    if (distance >= tolerance || i === points.length - 1) {
+    if (distance >= tolerance) {
       simplified.push(point);
       prevPoint = point;
     }
   }
 
+  // Always include the last point to maintain polygon closure
+  if (points.length > 1) {
+    simplified.push(points[points.length - 1]);
+  }
+
   // Ensure minimum 3 points for valid polygon
   if (simplified.length < 3) {
-    return points.slice(0, 4); // Return first 4 points
+    // Return minimum valid polygon from original points
+    return points.length >= 3 ? points.slice(0, 3) : points.slice();
   }
 
   return simplified;
@@ -268,17 +277,20 @@ function createBuildingGeometry(
 
   // Apply polygon simplification based on LOD level
   if (lodLevel === LODLevel.MEDIUM) {
-    // Medium LOD: reduce vertices by ~50%
+    // Medium LOD: apply moderate vertex reduction (2m tolerance)
     points = simplifyPolygon(points, 2);
   } else if (lodLevel === LODLevel.LOW) {
-    // Low LOD: aggressive simplification
+    // Low LOD: aggressive simplification (5m tolerance)
     points = simplifyPolygon(points, 5);
   }
 
   if (points.length < 3) return null;
 
-  // Ensure counter-clockwise winding for Three.js
+  // Check if simplified polygon is still valid (has sufficient area)
   const finalArea = calculatePolygonArea(points);
+  if (Math.abs(finalArea) < 1) return null; // Skip degenerate polygons
+
+  // Ensure counter-clockwise winding for Three.js
   if (finalArea > 0) {
     points.reverse();
   }
