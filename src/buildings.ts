@@ -249,10 +249,12 @@ function createBuildingGeometry(
   if (!outerRing || outerRing.length < 3) return null;
 
   // Convert outer ring to Three.js points
+  // Note: We negate world.z because rotateX(-PI/2) will negate it again,
+  // resulting in the correct final Z position that matches roads
   let points: THREE.Vector2[] = [];
   for (const coord of outerRing) {
     const world = geoToWorld(coord[0], coord[1], 0);
-    points.push(new THREE.Vector2(world.x, world.z));
+    points.push(new THREE.Vector2(world.x, -world.z));
   }
 
   // Remove duplicate last point if present
@@ -307,7 +309,7 @@ function createBuildingGeometry(
         let holePoints: THREE.Vector2[] = [];
         for (const coord of holeRing) {
           const world = geoToWorld(coord[0], coord[1], 0);
-          holePoints.push(new THREE.Vector2(world.x, world.z));
+          holePoints.push(new THREE.Vector2(world.x, -world.z));
         }
 
         // Remove duplicate last point
