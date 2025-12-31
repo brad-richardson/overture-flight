@@ -14,7 +14,7 @@ import { initMobileControls, getJoystickState, getThrottleState, isMobileDevice 
 
 // Game state
 let connection = null;
-let localId = '';
+let localId = 'local-' + Math.random().toString(36).substr(2, 9); // Generate local ID immediately
 let localColor = '#3b82f6';
 let lastTime = 0;
 let isRunning = false;

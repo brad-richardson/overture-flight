@@ -46,7 +46,9 @@ export const CAMERA = {
   DEFAULT_PITCH: 20,    // degrees - slight downward angle
   MIN_PITCH: 5,
   MAX_PITCH: 85,
-  DEFAULT_DISTANCE: 50, // meters behind plane
+  DEFAULT_DISTANCE: 100, // meters behind plane (increased for better view)
+  MIN_DISTANCE: 20,      // minimum zoom distance
+  MAX_DISTANCE: 500,     // maximum zoom distance
   ORBIT_SENSITIVITY: 0.5,
 };
 

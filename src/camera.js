@@ -4,6 +4,7 @@ import { getCamera, geoToWorld } from './scene.js';
 
 let orbitAngle = 0;  // Horizontal offset from plane heading
 let orbitPitch = CAMERA.DEFAULT_PITCH;
+let zoomDistance = CAMERA.DEFAULT_DISTANCE;  // Dynamic zoom distance
 
 let isDragging = false;
 let lastMouseX = 0;
@@ -102,6 +103,14 @@ export function initCameraControls() {
     isDragging = false;
   }, { passive: true });
 
+  // Mouse wheel for zoom
+  container.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const zoomSpeed = 0.1;
+    const delta = e.deltaY > 0 ? 1 + zoomSpeed : 1 - zoomSpeed;
+    zoomDistance = Math.max(CAMERA.MIN_DISTANCE, Math.min(CAMERA.MAX_DISTANCE, zoomDistance * delta));
+  }, { passive: false });
+
   // Set initial cursor (only relevant for mouse)
   container.style.cursor = 'grab';
 }
@@ -118,7 +127,7 @@ export function followPlane(planeState) {
   const planePos = geoToWorld(planeState.lng, planeState.lat, planeState.altitude);
 
   // Calculate camera position based on chase distance, heading, and orbit
-  const distance = CAMERA.DEFAULT_DISTANCE;
+  const distance = zoomDistance;
   const headingRad = THREE.MathUtils.degToRad(planeState.heading + orbitAngle);
   const pitchRad = THREE.MathUtils.degToRad(orbitPitch);
 
@@ -143,6 +152,7 @@ export function followPlane(planeState) {
 export function resetCamera() {
   orbitAngle = 0;
   orbitPitch = CAMERA.DEFAULT_PITCH;
+  zoomDistance = CAMERA.DEFAULT_DISTANCE;
 }
 
 /**

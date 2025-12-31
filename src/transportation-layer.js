@@ -124,8 +124,10 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
       continue;
     }
 
-    // Only show road segments (skip rail, water, etc.)
-    if (feature.properties?.subtype !== 'road') {
+    // Only show road segments (skip rail, water/ferry, etc.)
+    // Overture transportation segments have subtype: 'road', 'rail', or 'water'
+    const subtype = feature.properties?.subtype;
+    if (subtype !== 'road') {
       continue;
     }
 
