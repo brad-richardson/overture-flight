@@ -656,84 +656,42 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           type: 'line',
           source: 'overture-divisions',
           'source-layer': 'division_boundary',
-          filter: ['any',
-            ['==', ['get', 'subtype'], 'region'],
-            ['==', ['get', 'subtype'], 'country']
-          ],
           paint: {
-            'line-color': [
-              'match',
-              ['get', 'subtype'],
-              'country', CARTO_COLORS.countryBoundary,
-              CARTO_COLORS.stateBoundary
-            ],
-            'line-width': [
-              'match',
-              ['get', 'subtype'],
-              'country', 1.5,
-              1
-            ],
+            'line-color': CARTO_COLORS.stateBoundary,
+            'line-width': 1,
             'line-dasharray': [4, 2]
           }
         },
 
-        // City/locality labels
+        // DEBUG: Try circle markers to see if division points exist
+        {
+          id: 'division-points-debug',
+          type: 'circle',
+          source: 'overture-divisions',
+          'source-layer': 'division',
+          paint: {
+            'circle-radius': 5,
+            'circle-color': '#ff0000',
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#ffffff'
+          }
+        },
+
+        // City/locality labels - simplified
         {
           id: 'city-labels',
           type: 'symbol',
           source: 'overture-divisions',
           'source-layer': 'division',
-          filter: ['==', ['get', 'subtype'], 'locality'],
           layout: {
-            'text-field': ['coalesce',
-              ['get', 'primary', ['get', 'names']],  // Access nested names.primary
-              ''
-            ],
-            'text-font': ['Noto Sans Bold'],
-            'text-size': [
-              'interpolate', ['linear'], ['zoom'],
-              4, 10,
-              8, 12,
-              12, 14
-            ],
-            'text-anchor': 'center',
-            'text-max-width': 8,
-            'symbol-sort-key': ['*', -1, ['coalesce', ['get', 'population'], 0]]
+            'text-field': '{subtype}',  // Simple mustache syntax
+            'text-size': 14,
+            'text-anchor': 'top',
+            'text-offset': [0, 0.5]
           },
           paint: {
-            'text-color': CARTO_COLORS.cityLabel,
-            'text-halo-color': CARTO_COLORS.textHalo,
-            'text-halo-width': 1.5
-          }
-        },
-
-        // State/region labels (larger, less frequent)
-        {
-          id: 'state-labels',
-          type: 'symbol',
-          source: 'overture-divisions',
-          'source-layer': 'division',
-          filter: ['==', ['get', 'subtype'], 'region'],
-          maxzoom: 8,
-          layout: {
-            'text-field': ['coalesce',
-              ['get', 'primary', ['get', 'names']],  // Access nested names.primary
-              ''
-            ],
-            'text-font': ['Noto Sans Bold'],
-            'text-size': [
-              'interpolate', ['linear'], ['zoom'],
-              3, 10,
-              6, 14
-            ],
-            'text-transform': 'uppercase',
-            'text-letter-spacing': 0.1,
-            'text-anchor': 'center',
-            'text-max-width': 10
-          },
-          paint: {
-            'text-color': CARTO_COLORS.stateLabel,
-            'text-halo-color': CARTO_COLORS.textHalo,
+            'text-color': '#000000',
+            'text-halo-color': '#ffffff',
             'text-halo-width': 2
           }
         }
