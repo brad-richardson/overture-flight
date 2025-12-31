@@ -104,11 +104,11 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
       0xA9A9A9, // dark gray
       0xC0C0C0, // silver
       0xD3D3D3, // light gray
-      0x4682B4, // steel blue
-      0x5F9EA0, // cadet blue
-      0x87CEEB, // light blue (glass effect)
-      0xB0C4DE, // light steel blue
-      0xE0FFFF, // light cyan
+      0x5A7A8A, // muted steel blue
+      0x5A7D7E, // muted cadet blue
+      0x7A9AAA, // muted blue-gray (glass effect)
+      0x8A9CAC, // muted steel blue
+      0xA0B0B8, // muted blue-gray
     ],
     accents: [0x2F4F4F, 0x191970, 0x000080], // dark blues
     roofs: [0x2F2F2F, 0x3C3C3C, 0x4A4A4A], // dark grays (flat roof)
@@ -137,10 +137,10 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
     walls: [
       0xD3D3D3, // light gray
       0xC0C0C0, // silver
-      0xF5F5DC, // beige
-      0xFAF0E6, // linen
-      0xFFFAF0, // floral white
-      0xE6E6FA, // lavender
+      0xE8E0D0, // warm beige
+      0xE5DCD0, // muted linen
+      0xE8E4DC, // off-white
+      0xD0D0D8, // muted gray with slight warmth
       0xE0E0E0, // light gray
       0xBDB76B, // dark khaki
       0xD2B48C, // tan
@@ -153,13 +153,13 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
   // Religious - varied based on tradition
   religious: {
     walls: [
-      0xFFFAF0, // off-white
-      0xFAF0E6, // linen
+      0xF0EBE0, // muted off-white
+      0xE8E0D5, // muted linen
       0xD2B48C, // tan
       0xDEB887, // burlywood
       0xBC8F8F, // rosy brown
-      0xF5F5DC, // beige
-      0xE6E6FA, // lavender
+      0xE8E4D8, // muted beige
+      0xD8D4CC, // warm gray
       0xD4C4A8, // warm beige
       0x8B4513, // saddle brown
       0xCD853F, // peru
@@ -189,18 +189,18 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
   // Medical - clean, clinical (Overture subtype: "medical")
   medical: {
     walls: [
-      0xFFFFFF, // white
-      0xF5F5F5, // white smoke
-      0xF0F0F0, // near white
+      0xF8F8F8, // near white
+      0xF0F0F0, // white smoke
       0xE8E8E8, // light gray
-      0xFAFAFA, // snow
-      0xFFFAFA, // snow white
-      0xE0FFFF, // light cyan
-      0xB0E0E6, // powder blue
-      0xADD8E6, // light blue
-      0x87CEEB, // sky blue
+      0xE0E0E0, // light gray
+      0xF5F5F5, // near white
+      0xECECEC, // light gray
+      0xD8E0E0, // muted blue-gray
+      0xC8D0D4, // muted gray-blue
+      0xB8C4C8, // muted steel
+      0xA0B0B8, // muted blue-gray
     ],
-    accents: [0x4169E1, 0x1E90FF, 0x00BFFF], // blues
+    accents: [0x4A6A8A, 0x3A5A7A, 0x3080A0], // muted blues
     roofs: [0xE0E0E0, 0xD0D0D0, 0xC0C0C0], // light grays
   },
 
@@ -268,8 +268,8 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
       0xD2B48C, // tan
       0xDEB887, // burlywood
       0x6B8E23, // olive drab
-      0xB0C4DE, // light steel blue (metal shed)
-      0xC0C0C0, // silver (metal shed)
+      0x8A9A9A, // muted steel (metal shed)
+      0xA8A8A8, // muted silver (metal shed)
       0x708090, // slate gray
     ],
     accents: [0x654321, 0x3C3C3C], // dark browns, grays
@@ -282,15 +282,15 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
       0x708090, // slate gray
       0x808080, // gray
       0xA9A9A9, // dark gray
-      0xB0C4DE, // light steel blue
-      0xC0C0C0, // silver
-      0xD3D3D3, // light gray
+      0x8A9AA8, // muted steel blue
+      0xB0B0B0, // muted silver
+      0xC8C8C8, // light gray
       0x4A5568, // cool gray
       0x6B7280, // gray 500
-      0xE5E7EB, // gray 200
-      0xF3F4F6, // gray 100
+      0xD8D8D8, // gray 200
+      0xE0E0E0, // gray 100
     ],
-    accents: [0x3B82F6, 0x2563EB], // blues
+    accents: [0x4A6A8A, 0x3A5A7A], // muted blues
     roofs: [0x4A4A4A, 0x5C5C5C, 0x6B7280], // grays
   },
 
@@ -299,14 +299,14 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
     walls: [
       0x708090, // slate gray
       0x778899, // light slate gray
-      0xC0C0C0, // silver
-      0xD3D3D3, // light gray
-      0x4682B4, // steel blue
-      0x5F9EA0, // cadet blue
-      0x87CEEB, // sky blue (glass)
-      0xB0C4DE, // light steel blue
-      0xE0E0E0, // light gray
-      0xFAF0E6, // linen
+      0xB0B0B0, // muted silver
+      0xC8C8C8, // light gray
+      0x5A7A8A, // muted steel blue
+      0x5A7D7E, // muted cadet blue
+      0x7A9AAA, // muted blue-gray (glass)
+      0x8A9CAC, // muted steel blue
+      0xD8D8D8, // light gray
+      0xE0D8D0, // muted linen
     ],
     accents: [0x2F4F4F, 0x191970, 0xFF4500], // dark blues, safety orange
     roofs: [0x2F2F2F, 0x3C3C3C, 0x708090], // dark grays, slate
