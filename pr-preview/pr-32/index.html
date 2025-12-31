@@ -237,6 +237,21 @@
       color: rgba(255, 255, 255, 0.5);
     }
 
+    #minimap-attribution {
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 10px;
+    }
+
+    #minimap-attribution a {
+      color: rgba(255, 255, 255, 0.5);
+      text-decoration: none;
+    }
+
+    #minimap-attribution a:hover {
+      color: rgba(255, 255, 255, 0.8);
+      text-decoration: underline;
+    }
+
     /* Plane marker on minimap */
     .minimap-plane-marker {
       width: 24px;
@@ -557,7 +572,7 @@
       -webkit-user-select: none;
     }
   </style>
-  <script type="module" crossorigin src="/overture-flight/pr-preview/pr-32/assets/index-Cr2moieS.js"></script>
+  <script type="module" crossorigin src="/overture-flight/pr-preview/pr-32/assets/index-DYrw89Ph.js"></script>
 </head>
 <body>
   <div id="map"></div>
@@ -614,6 +629,7 @@
       <div id="minimap-footer">
         <span id="minimap-coords">--</span>
         <span id="minimap-hint">Click anywhere to teleport</span>
+        <span id="minimap-attribution">Data: <a href="https://overturemaps.org" target="_blank">Overture Maps</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors</span>
       </div>
     </div>
   </div>
