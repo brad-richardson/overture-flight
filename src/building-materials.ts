@@ -9,7 +9,7 @@ import * as THREE from 'three';
  * Uses normalized Overture Maps properties (preferred over source tags):
  * - subtype: agricultural, civic, commercial, education, entertainment, industrial,
  *            medical, military, outbuilding, religious, residential, service, transportation
- * - class: 79 specific building types (house, apartment, church, school, etc.)
+ * - class: 87 specific building types (house, apartments, church, school, etc.)
  * - height: Building height in meters
  * - num_floors: Total floor count
  * - num_floors_underground: Below-ground floor count
@@ -336,7 +336,7 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
 // ============================================================================
 
 /**
- * Map all 79 Overture building classes to palette categories
+ * Map all 87 Overture building classes to palette categories
  *
  * Overture Classes (alphabetical):
  * agricultural, allotment_house, apartments, barn, beach_hut, boathouse, bridge_structure,
@@ -583,6 +583,8 @@ function getBuildingCategory(feature: BuildingFeature): string {
 
   // Priority 1: Overture subtype (normalized category, maps directly to palettes)
   // This is the preferred property as it has been normalized by Overture
+  // Note: toLowerCase() is used because source data may have inconsistent casing
+  // even though Overture schema defines lowercase values
   const subtype = props.subtype;
   if (subtype) {
     const subtypeLower = subtype.toLowerCase();
@@ -592,6 +594,7 @@ function getBuildingCategory(feature: BuildingFeature): string {
   }
 
   // Priority 2: Overture class (specific building type)
+  // Note: toLowerCase() handles potential casing inconsistencies in source data
   const buildingClass = props.class;
   if (buildingClass) {
     const classLower = buildingClass.toLowerCase();
@@ -658,6 +661,14 @@ export function getUndergroundFloors(feature: BuildingFeature): number {
 
 /**
  * Get the building level (hierarchical level in complex structures)
+ *
+ * Level values follow standard building conventions:
+ * - Positive values (1, 2, 3...): Above-ground floors
+ * - Zero (0): Ground level
+ * - Negative values (-1, -2...): Basement/underground levels
+ *
+ * This function intentionally accepts any numeric level value to support
+ * the full range of building configurations.
  *
  * @param feature - Building feature with Overture properties
  * @returns Level value or undefined if not set
