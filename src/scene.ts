@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { PLANE_MODEL_URL, PLANE_RENDER, DEFAULT_LOCATION } from './constants.js';
 import { isMobileDevice } from './mobile-controls.js';
+import { initSkySystem, updateSky } from './sky.js';
 
 // Export for use in buildings.ts
 export { BufferGeometryUtils };
@@ -95,7 +96,7 @@ export async function initScene(): Promise<{
 }> {
   // Create scene
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x87CEEB); // Sky blue
+  // Note: Sky dome replaces solid color background (set to null by initSkySystem)
 
   // Create camera
   const aspect = window.innerWidth / window.innerHeight;
@@ -133,6 +134,15 @@ export async function initScene(): Promise<{
   sunLight.shadow.camera.top = 5000;
   sunLight.shadow.camera.bottom = -5000;
   scene.add(sunLight);
+
+  // Initialize procedural sky system with atmospheric effects
+  initSkySystem(scene, {
+    sunPosition: sunLight.position.clone(),
+    turbidity: 2,
+    cloudDensity: 0.35,
+    cloudAltitude: 3000,
+    fogDensity: 0.00006
+  });
 
   // Handle window resize
   window.addEventListener('resize', () => {
@@ -327,6 +337,15 @@ export function getCamera(): THREE.PerspectiveCamera | null {
  */
 export function getRenderer(): THREE.WebGLRenderer | null {
   return renderer;
+}
+
+/**
+ * Update the sky system (call each frame)
+ */
+export function updateSkySystem(deltaTime: number): void {
+  if (camera) {
+    updateSky(deltaTime, camera.position);
+  }
 }
 
 /**
