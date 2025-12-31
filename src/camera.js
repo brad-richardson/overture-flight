@@ -10,11 +10,35 @@ let lastMouseX = 0;
 let lastMouseY = 0;
 
 /**
- * Initialize camera mouse controls for orbiting
+ * Handle drag movement (shared between mouse and touch)
+ * @param {number} clientX
+ * @param {number} clientY
+ */
+function handleDragMove(clientX, clientY) {
+  if (!isDragging) return;
+
+  const deltaX = clientX - lastMouseX;
+  const deltaY = clientY - lastMouseY;
+
+  // Horizontal drag changes orbit angle
+  orbitAngle += deltaX * CAMERA.ORBIT_SENSITIVITY;
+  orbitAngle = ((orbitAngle % 360) + 360) % 360;
+
+  // Vertical drag changes camera pitch
+  orbitPitch -= deltaY * CAMERA.ORBIT_SENSITIVITY;
+  orbitPitch = Math.max(CAMERA.MIN_PITCH, Math.min(CAMERA.MAX_PITCH, orbitPitch));
+
+  lastMouseX = clientX;
+  lastMouseY = clientY;
+}
+
+/**
+ * Initialize camera mouse and touch controls for orbiting
  */
 export function initCameraControls() {
   const container = document.getElementById('map');
 
+  // Mouse controls
   container.addEventListener('mousedown', (e) => {
     isDragging = true;
     lastMouseX = e.clientX;
@@ -23,21 +47,7 @@ export function initCameraControls() {
   });
 
   document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-
-    const deltaX = e.clientX - lastMouseX;
-    const deltaY = e.clientY - lastMouseY;
-
-    // Horizontal drag changes orbit angle
-    orbitAngle += deltaX * CAMERA.ORBIT_SENSITIVITY;
-    orbitAngle = ((orbitAngle % 360) + 360) % 360;
-
-    // Vertical drag changes camera pitch
-    orbitPitch -= deltaY * CAMERA.ORBIT_SENSITIVITY;
-    orbitPitch = Math.max(CAMERA.MIN_PITCH, Math.min(CAMERA.MAX_PITCH, orbitPitch));
-
-    lastMouseX = e.clientX;
-    lastMouseY = e.clientY;
+    handleDragMove(e.clientX, e.clientY);
   });
 
   document.addEventListener('mouseup', () => {
@@ -45,7 +55,54 @@ export function initCameraControls() {
     document.getElementById('map').style.cursor = 'grab';
   });
 
-  // Set initial cursor
+  // Touch controls for camera orbit (single finger on the map area, not on controls)
+  container.addEventListener('touchstart', (e) => {
+    // Only handle single-finger touches for camera
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+
+      // Check if touch is on the joystick area - if so, let joystick handle it
+      const joystick = document.getElementById('joystick-container');
+      if (joystick) {
+        const rect = joystick.getBoundingClientRect();
+        if (touch.clientX >= rect.left && touch.clientX <= rect.right &&
+            touch.clientY >= rect.top && touch.clientY <= rect.bottom) {
+          return; // Let joystick handle this touch
+        }
+      }
+
+      // Check if touch is on the throttle area - if so, let throttle handle it
+      const throttle = document.getElementById('throttle-container');
+      if (throttle) {
+        const rect = throttle.getBoundingClientRect();
+        if (touch.clientX >= rect.left && touch.clientX <= rect.right &&
+            touch.clientY >= rect.top && touch.clientY <= rect.bottom) {
+          return; // Let throttle handle this touch
+        }
+      }
+
+      isDragging = true;
+      lastMouseX = touch.clientX;
+      lastMouseY = touch.clientY;
+    }
+  }, { passive: true });
+
+  container.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 1 && isDragging) {
+      const touch = e.touches[0];
+      handleDragMove(touch.clientX, touch.clientY);
+    }
+  }, { passive: true });
+
+  container.addEventListener('touchend', () => {
+    isDragging = false;
+  }, { passive: true });
+
+  container.addEventListener('touchcancel', () => {
+    isDragging = false;
+  }, { passive: true });
+
+  // Set initial cursor (only relevant for mouse)
   container.style.cursor = 'grab';
 }
 

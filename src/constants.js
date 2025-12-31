@@ -80,8 +80,8 @@ export const PLAYER_COLORS = [
   '#ec4899', // pink
 ];
 
-// 3D model paths
-export const PLANE_MODEL_URL = '/models/plane.glb';
+// 3D model paths - use BASE_URL for GitHub Pages compatibility
+export const PLANE_MODEL_URL = `${import.meta.env.BASE_URL}models/plane.glb`;
 
 // Plane rendering settings
 export const PLANE_RENDER = {

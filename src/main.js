@@ -1,15 +1,16 @@
 import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin } from './scene.js';
-import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane } from './plane.js';
+import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane, setMobileInput } from './plane.js';
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection } from './network.js';
 import { checkCollision } from './collision.js';
 import { updateHUD, updatePlayerList, showCrashMessage, initLocationPicker } from './ui.js';
-import { initTileManager, getTilesToLoad, getTilesToUnload, isTileLoaded, markTileLoading, markTileLoaded, removeTile, getTileMeshes } from './tile-manager.js';
+import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile } from './tile-manager.js';
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles } from './elevation.js';
 import { DEFAULT_LOCATION, ELEVATION } from './constants.js';
+import { initMobileControls, getJoystickState, getThrottleState, isMobileDevice } from './mobile-controls.js';
 
 // Game state
 let connection = null;
@@ -94,6 +95,11 @@ function gameLoop(time) {
 
   // Cap delta time to avoid physics issues
   const cappedDelta = Math.min(deltaTime, 0.1);
+
+  // Update mobile input each frame (if on mobile)
+  if (isMobileDevice()) {
+    setMobileInput(getJoystickState(), getThrottleState());
+  }
 
   // Update plane physics
   updatePlane(cappedDelta);
@@ -226,6 +232,63 @@ async function handleTeleport(lat, lng) {
 }
 
 /**
+ * Show error notification to user
+ * @param {string} title - Error title
+ * @param {string[]} [details] - Optional array of detail messages
+ * @param {string} [footer] - Optional footer text
+ */
+function showError(title, details = [], footer = '') {
+  // Create or update error display
+  let errorDiv = document.getElementById('error-message');
+  if (!errorDiv) {
+    errorDiv = document.createElement('div');
+    errorDiv.id = 'error-message';
+    errorDiv.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(220, 38, 38, 0.95);
+      color: white;
+      padding: 20px 30px;
+      border-radius: 8px;
+      font-size: 16px;
+      z-index: 10000;
+      max-width: 80%;
+      text-align: center;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    `;
+    document.body.appendChild(errorDiv);
+  }
+
+  // Build content safely without innerHTML
+  errorDiv.textContent = '';
+
+  const titleEl = document.createElement('strong');
+  titleEl.textContent = title;
+  errorDiv.appendChild(titleEl);
+
+  for (const detail of details) {
+    errorDiv.appendChild(document.createElement('br'));
+    errorDiv.appendChild(document.createTextNode(detail));
+  }
+
+  if (footer) {
+    errorDiv.appendChild(document.createElement('br'));
+    const footerEl = document.createElement('small');
+    footerEl.textContent = footer;
+    errorDiv.appendChild(footerEl);
+  }
+
+  errorDiv.style.display = 'block';
+
+  // Auto-hide after 8 seconds
+  setTimeout(() => {
+    errorDiv.style.display = 'none';
+  }, 8000);
+}
+
+/**
  * Initialize the game
  */
 async function init() {
@@ -240,8 +303,17 @@ async function init() {
     console.log('Scene initialized');
 
     // Initialize tile manager (PMTiles sources)
-    await initTileManager();
-    console.log('Tile manager initialized');
+    const tileStatus = await initTileManager();
+    console.log('Tile manager initialized:', tileStatus);
+
+    // Show warning if data failed to load
+    if (tileStatus.errors && tileStatus.errors.length > 0) {
+      showError(
+        'Warning: Some data failed to load',
+        tileStatus.errors,
+        'The flight simulator will still work, but buildings/terrain may not appear.'
+      );
+    }
 
     // Preload elevation tiles for the starting area
     if (ELEVATION.TERRAIN_ENABLED) {
@@ -250,10 +322,14 @@ async function init() {
       console.log('Elevation tiles preloaded');
     }
 
-    // Initialize controls
+    // Initialize controls (keyboard)
     initControls();
     initCameraControls();
     console.log('Controls initialized');
+
+    // Initialize mobile controls (touch joystick)
+    initMobileControls();
+    console.log('Mobile controls initialized');
 
     // Initialize UI
     initLocationPicker(handleTeleport);
@@ -275,6 +351,7 @@ async function init() {
 
   } catch (error) {
     console.error('Failed to initialize:', error);
+    showError('Failed to start:', [error.message]);
   }
 }
 
