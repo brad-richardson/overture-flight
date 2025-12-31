@@ -291,6 +291,9 @@ export async function initScene(): Promise<{
   sunLight.shadow.camera.right = 5000;
   sunLight.shadow.camera.top = 5000;
   sunLight.shadow.camera.bottom = -5000;
+  // Add shadow bias to reduce shadow acne artifacts
+  sunLight.shadow.bias = -0.0005;
+  sunLight.shadow.normalBias = 0.02;
   scene.add(sunLight);
 
   // Initialize procedural sky system with atmospheric effects
@@ -334,7 +337,9 @@ async function loadPlaneModel(): Promise<THREE.Group> {
           if ((child as THREE.Mesh).isMesh) {
             const mesh = child as THREE.Mesh;
             mesh.castShadow = true;
-            mesh.receiveShadow = true;
+            // Disable receiving shadows to prevent shadow acne artifacts
+            // when flying through building shadows
+            mesh.receiveShadow = false;
             // Override any existing texture with a neutral white base
             // This allows player colors to show properly
             // Use varying polygon offset based on mesh index to prevent z-fighting
