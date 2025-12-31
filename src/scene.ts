@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { PLANE_MODEL_URL, PLANE_RENDER, DEFAULT_LOCATION } from './constants.js';
+import { isMobileDevice } from './mobile-controls.js';
 
 // Export for use in buildings.ts
 export { BufferGeometryUtils };
@@ -253,7 +254,8 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
   }
 
   const mesh = planeModel.clone();
-  mesh.scale.set(PLANE_RENDER.SCALE, PLANE_RENDER.SCALE, PLANE_RENDER.SCALE);
+  const scale = isMobileDevice() ? PLANE_RENDER.MOBILE_SCALE : PLANE_RENDER.SCALE;
+  mesh.scale.set(scale, scale, scale);
 
   // Apply color to the plane
   mesh.traverse((child) => {
