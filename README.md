@@ -1,6 +1,6 @@
 # Overture Flight Simulator
 
-[![GitHub](https://img.shields.io/badge/GitHub-brad--richardson%2Foverture--flight-blue?logo=github)](https://github.com/brad-richardson/overture-flight)
+[![Play Now](https://img.shields.io/badge/Play%20Now-Live%20Demo-brightgreen?logo=github)](https://brad-richardson.github.io/overture-flight/)
 
 A multiplayer 3D flight simulator built with Three.js using real-world building and terrain data from Overture Maps.
 
