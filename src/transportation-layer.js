@@ -124,6 +124,11 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
       continue;
     }
 
+    // Only show road segments (skip rail, water, etc.)
+    if (feature.properties?.subtype !== 'road') {
+      continue;
+    }
+
     const style = getRoadStyle(feature.properties);
     const key = `${style.color}_${style.width}`;
 

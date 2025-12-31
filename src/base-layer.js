@@ -46,15 +46,18 @@ const COLORS = {
 // Layers are separated by Y position - sufficient gaps prevent depth conflicts
 const LAYER_DEPTHS = {
   terrain: -3.0,      // Terrain mesh at lowest position
-  water: -2.0,        // Water above terrain
-  land: -1.0,         // Base land above water
-  land_cover: -0.5,   // Land cover (forests, etc.) above base land
-  land_use: -0.25,    // Land use (parks, etc.) at highest ground level
-  default: -0.5
+  land: -2.0,         // Base land above terrain
+  land_cover: -1.5,   // Land cover (forests, etc.) above base land
+  land_use: -1.0,     // Land use (parks, etc.) above land cover
+  water: -0.5,        // Water above everything to be visible
+  default: -1.5
 };
 
 // Materials cache
 const materials = new Map();
+
+// Line materials cache for water lines (rivers)
+const lineMaterials = new Map();
 
 // Terrain material with vertex colors
 let terrainMaterial = null;
@@ -90,6 +93,21 @@ function getMaterial(color) {
     }));
   }
   return materials.get(color);
+}
+
+/**
+ * Get or create line material for water features (rivers)
+ * @param {number} color
+ * @returns {THREE.LineBasicMaterial}
+ */
+function getLineMaterial(color) {
+  if (!lineMaterials.has(color)) {
+    lineMaterials.set(color, new THREE.LineBasicMaterial({
+      color: color,
+      linewidth: 2
+    }));
+  }
+  return lineMaterials.get(color);
 }
 
 /**
@@ -309,26 +327,34 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
   console.log(`Base tile ${tileZ}/${tileX}/${tileY}: ${features.length} features`);
 
   if (features.length > 0) {
-    // Group features by color AND layer for proper z-fighting prevention
+    // Group polygon features by color AND layer for proper z-fighting prevention
     // Key format: "color-layer" to separate water from land even if same color
     const featuresByColorAndLayer = new Map();
+    // Group line features (rivers, streams) by color
+    const lineFeaturesByColor = new Map();
 
     for (const feature of features) {
-      if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') {
-        continue;
-      }
-
       const color = getColorForFeature(feature.layer, feature.properties);
       const layer = feature.layer || 'default';
-      const key = `${color}-${layer}`;
 
-      if (!featuresByColorAndLayer.has(key)) {
-        featuresByColorAndLayer.set(key, { color, layer, features: [] });
+      if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
+        const key = `${color}-${layer}`;
+        if (!featuresByColorAndLayer.has(key)) {
+          featuresByColorAndLayer.set(key, { color, layer, features: [] });
+        }
+        featuresByColorAndLayer.get(key).features.push(feature);
+      } else if (feature.type === 'LineString' || feature.type === 'MultiLineString') {
+        // Process line features for water (rivers, streams)
+        if (layer === 'water') {
+          if (!lineFeaturesByColor.has(color)) {
+            lineFeaturesByColor.set(color, []);
+          }
+          lineFeaturesByColor.get(color).push(feature);
+        }
       }
-      featuresByColorAndLayer.get(key).features.push(feature);
     }
 
-    // Create merged geometry for each color+layer combination
+    // Create merged geometry for each color+layer combination (polygons)
     for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
       const geometries = [];
 
@@ -378,10 +404,75 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
         }
       }
     }
+
+    // Create line geometries for water features (rivers, streams)
+    for (const [color, lineFeatures] of lineFeaturesByColor) {
+      const geometries = [];
+
+      for (const feature of lineFeatures) {
+        try {
+          if (feature.type === 'LineString') {
+            const geom = createWaterLineGeometry(feature.coordinates);
+            if (geom) geometries.push(geom);
+          } else if (feature.type === 'MultiLineString') {
+            for (const line of feature.coordinates) {
+              const geom = createWaterLineGeometry(line);
+              if (geom) geometries.push(geom);
+            }
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+
+      if (geometries.length > 0) {
+        try {
+          const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
+          if (merged) {
+            const line = new THREE.Line(merged, getLineMaterial(color));
+            line.position.y = LAYER_DEPTHS.water;
+            line.name = 'water-lines';
+            group.add(line);
+          }
+        } catch (e) {
+          // Fallback: add individually
+          for (const geom of geometries) {
+            const line = new THREE.Line(geom, getLineMaterial(color));
+            line.position.y = LAYER_DEPTHS.water;
+            group.add(line);
+          }
+        }
+
+        // Clean up
+        for (const geom of geometries) {
+          geom.dispose();
+        }
+      }
+    }
   }
 
   scene.add(group);
   return group;
+}
+
+/**
+ * Create line geometry for water features (rivers, streams)
+ * @param {Array} coordinates - Array of [lng, lat] coordinates
+ * @returns {THREE.BufferGeometry|null}
+ */
+function createWaterLineGeometry(coordinates) {
+  if (!coordinates || coordinates.length < 2) return null;
+
+  const points = [];
+  for (const coord of coordinates) {
+    const world = geoToWorld(coord[0], coord[1], 0);
+    points.push(new THREE.Vector3(world.x, 0, world.z));
+  }
+
+  if (points.length < 2) return null;
+
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  return geometry;
 }
 
 /**
