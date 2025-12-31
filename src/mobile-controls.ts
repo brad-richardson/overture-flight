@@ -8,7 +8,7 @@ let joystickStartX = 0;
 let joystickStartY = 0;
 let joystickCurrentX = 0;
 let joystickCurrentY = 0;
-let joystickTouchId = null;
+let joystickTouchId: number | null = null;
 
 // Joystick output (-1 to 1 for each axis)
 const joystickOutput = {
@@ -26,10 +26,25 @@ const JOYSTICK_RADIUS = 50; // Maximum joystick movement radius
 const DEAD_ZONE = 0.15; // Dead zone threshold
 
 /**
- * Check if this is a mobile/touch device
- * @returns {boolean}
+ * Joystick state interface
  */
-export function isMobileDevice() {
+export interface JoystickState {
+  x: number;
+  y: number;
+}
+
+/**
+ * Throttle state interface
+ */
+export interface ThrottleState {
+  up: boolean;
+  down: boolean;
+}
+
+/**
+ * Check if this is a mobile/touch device
+ */
+export function isMobileDevice(): boolean {
   return 'ontouchstart' in window ||
          navigator.maxTouchPoints > 0 ||
          window.innerWidth <= 768;
@@ -38,7 +53,7 @@ export function isMobileDevice() {
 /**
  * Initialize mobile controls UI
  */
-export function initMobileControls() {
+export function initMobileControls(): void {
   if (!isMobileDevice()) {
     return; // Don't show on desktop
   }
@@ -51,7 +66,7 @@ export function initMobileControls() {
 /**
  * Hide the desktop keyboard controls help on mobile
  */
-function hideDesktopControlsHelp() {
+function hideDesktopControlsHelp(): void {
   const controlsHelp = document.getElementById('controls-help');
   if (controlsHelp) {
     controlsHelp.style.display = 'none';
@@ -61,7 +76,7 @@ function hideDesktopControlsHelp() {
 /**
  * Create the joystick UI element
  */
-function createJoystickUI() {
+function createJoystickUI(): void {
   // Container for the joystick
   const container = document.createElement('div');
   container.id = 'joystick-container';
@@ -75,6 +90,8 @@ function createJoystickUI() {
 
   const base = document.getElementById('joystick-base');
   const stick = document.getElementById('joystick-stick');
+
+  if (!base || !stick) return;
 
   // Touch event handlers
   base.addEventListener('touchstart', (e) => {
@@ -113,7 +130,7 @@ function createJoystickUI() {
     }
   }, { passive: true });
 
-  const endJoystick = (e) => {
+  const endJoystick = (e: TouchEvent): void => {
     // Check if our touch ended
     if (joystickActive) {
       let found = false;
@@ -143,7 +160,7 @@ function createJoystickUI() {
 /**
  * Update joystick visual position
  */
-function updateJoystickVisual(stick) {
+function updateJoystickVisual(stick: HTMLElement): void {
   let dx = joystickCurrentX - joystickStartX;
   let dy = joystickCurrentY - joystickStartY;
 
@@ -160,9 +177,9 @@ function updateJoystickVisual(stick) {
 /**
  * Update joystick output values
  */
-function updateJoystickOutput() {
-  let dx = joystickCurrentX - joystickStartX;
-  let dy = joystickCurrentY - joystickStartY;
+function updateJoystickOutput(): void {
+  const dx = joystickCurrentX - joystickStartX;
+  const dy = joystickCurrentY - joystickStartY;
 
   // Normalize to -1 to 1
   joystickOutput.x = Math.max(-1, Math.min(1, dx / JOYSTICK_RADIUS));
@@ -176,7 +193,7 @@ function updateJoystickOutput() {
 /**
  * Create throttle up/down buttons
  */
-function createThrottleButtons() {
+function createThrottleButtons(): void {
   const container = document.createElement('div');
   container.id = 'throttle-container';
   container.innerHTML = `
@@ -187,6 +204,8 @@ function createThrottleButtons() {
 
   const upBtn = document.getElementById('throttle-up');
   const downBtn = document.getElementById('throttle-down');
+
+  if (!upBtn || !downBtn) return;
 
   // Throttle up
   upBtn.addEventListener('touchstart', (e) => {
@@ -227,24 +246,21 @@ function createThrottleButtons() {
 
 /**
  * Get current joystick state
- * @returns {{x: number, y: number}} Values from -1 to 1
  */
-export function getJoystickState() {
+export function getJoystickState(): JoystickState {
   return { ...joystickOutput };
 }
 
 /**
  * Get current throttle state
- * @returns {{up: boolean, down: boolean}}
  */
-export function getThrottleState() {
+export function getThrottleState(): ThrottleState {
   return { ...throttleOutput };
 }
 
 /**
  * Check if joystick is currently being used
- * @returns {boolean}
  */
-export function isJoystickActive() {
+export function isJoystickActive(): boolean {
   return joystickActive;
 }

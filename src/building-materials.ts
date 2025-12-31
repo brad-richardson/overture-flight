@@ -10,12 +10,26 @@ import * as THREE from 'three';
  * appropriate materials based on building class, subtype, height, and location.
  */
 
+// Types
+export interface BuildingFeature {
+  type: string;
+  coordinates: number[][][] | number[][][][];
+  properties?: Record<string, unknown>;
+  layer?: string;
+}
+
+interface ColorPalette {
+  walls: number[];
+  accents: number[];
+  roofs: number[];
+}
+
 // ============================================================================
 // Color Palettes by Building Type
 // ============================================================================
 
 // Predefined color palettes for different building categories
-const BUILDING_PALETTES = {
+const BUILDING_PALETTES: Record<string, ColorPalette> = {
   // Residential colors - warmer, more varied
   residential: {
     walls: [
@@ -184,7 +198,7 @@ const BUILDING_PALETTES = {
 // ============================================================================
 
 // Map Overture building classes to our palette categories
-const CLASS_TO_CATEGORY = {
+const CLASS_TO_CATEGORY: Record<string, string> = {
   // Residential
   house: 'residential',
   residential: 'residential',
@@ -285,8 +299,8 @@ const CLASS_TO_CATEGORY = {
  * Simple seeded random number generator for deterministic results
  * Uses mulberry32 algorithm
  */
-function seededRandom(seed) {
-  return function() {
+function seededRandom(seed: number): () => number {
+  return function(): number {
     let t = seed += 0x6D2B79F5;
     t = Math.imul(t ^ t >>> 15, t | 1);
     t ^= t + Math.imul(t ^ t >>> 7, t | 61);
@@ -298,7 +312,7 @@ function seededRandom(seed) {
  * Generate a deterministic seed from feature properties
  * Uses coordinates as fallback to ensure consistent results
  */
-function generateSeed(feature) {
+function generateSeed(feature: BuildingFeature): number {
   // Use feature ID if available, otherwise hash coordinates
   if (feature.properties?.id) {
     let hash = 0;
@@ -313,8 +327,8 @@ function generateSeed(feature) {
   // Fallback: use first coordinate as seed (deterministic)
   if (feature.coordinates) {
     const coords = feature.type === 'MultiPolygon'
-      ? feature.coordinates[0][0][0]
-      : feature.coordinates[0][0];
+      ? (feature.coordinates as number[][][][])[0][0][0]
+      : (feature.coordinates as number[][][])[0][0];
     if (coords && coords.length >= 2) {
       return Math.abs(Math.floor((coords[0] * 1000000) + (coords[1] * 1000)));
     }
@@ -331,19 +345,21 @@ function generateSeed(feature) {
 /**
  * Get the building category based on class and subtype
  */
-function getBuildingCategory(feature) {
+function getBuildingCategory(feature: BuildingFeature): string {
   const props = feature.properties || {};
 
   // Try class first
-  if (props.class && CLASS_TO_CATEGORY[props.class.toLowerCase()]) {
-    return CLASS_TO_CATEGORY[props.class.toLowerCase()];
+  const buildingClass = props.class as string | undefined;
+  if (buildingClass && CLASS_TO_CATEGORY[buildingClass.toLowerCase()]) {
+    return CLASS_TO_CATEGORY[buildingClass.toLowerCase()];
   }
 
   // Then try subtype
-  if (props.subtype) {
-    const subtype = props.subtype.toLowerCase();
-    if (BUILDING_PALETTES[subtype]) {
-      return subtype;
+  const subtype = props.subtype as string | undefined;
+  if (subtype) {
+    const subtypeLower = subtype.toLowerCase();
+    if (BUILDING_PALETTES[subtypeLower]) {
+      return subtypeLower;
     }
   }
 
@@ -354,7 +370,7 @@ function getBuildingCategory(feature) {
  * Create a shared material for a batch of buildings in the same category
  * (For performance when merging geometries)
  */
-export function createCategoryMaterial(category) {
+export function createCategoryMaterial(category: string): THREE.MeshStandardMaterial {
   const palette = BUILDING_PALETTES[category] || BUILDING_PALETTES.default;
 
   // Use a middle-ground color from the palette
@@ -372,8 +388,8 @@ export function createCategoryMaterial(category) {
 /**
  * Group features by their building category for efficient batching
  */
-export function groupFeaturesByCategory(features) {
-  const groups = {};
+export function groupFeaturesByCategory(features: BuildingFeature[]): Record<string, BuildingFeature[]> {
+  const groups: Record<string, BuildingFeature[]> = {};
 
   for (const feature of features) {
     const category = getBuildingCategory(feature);
@@ -390,7 +406,7 @@ export function groupFeaturesByCategory(features) {
  * Get a simple color for a feature (for use with merged geometry)
  * Returns a hex color value
  */
-export function getBuildingColor(feature) {
+export function getBuildingColor(feature: BuildingFeature): number {
   const category = getBuildingCategory(feature);
   const palette = BUILDING_PALETTES[category] || BUILDING_PALETTES.default;
 

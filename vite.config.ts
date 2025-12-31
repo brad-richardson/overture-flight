@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(() => ({
   // Base path configuration:
   // - Vercel/Netlify: use '/' (default)
   // - GitHub Pages: set VITE_BASE_PATH='/overture-flight/'

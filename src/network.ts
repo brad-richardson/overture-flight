@@ -1,30 +1,74 @@
 import PartySocket from 'partysocket';
 import { PARTYKIT_HOST, NETWORK } from './constants.js';
+import type { PlaneState } from './plane.js';
 
 // WebSocket readyState constants (not available in ES modules)
 const WS_OPEN = 1;
 
-let socket = null;
+let socket: PartySocket | null = null;
 let lastSendTime = 0;
 let isConnected = false;
 
 /**
- * @typedef {Object} NetworkCallbacks
- * @property {function(Object): void} onWelcome - Called when server sends welcome message
- * @property {function(Object): void} onSync - Called when server sends plane sync
- * @property {function(string): void} onPlayerLeft - Called when a player leaves
- * @property {function(Object): void} onPlayerJoined - Called when a player joins
- * @property {function(): void} [onDisconnect] - Called when connection is lost
- * @property {function(): void} [onReconnect] - Called when connection is restored
+ * Welcome message from server
  */
+export interface WelcomeMessage {
+  type: 'welcome';
+  id: string;
+  color: string;
+  planes?: Record<string, PlaneState>;
+}
+
+/**
+ * Player joined message
+ */
+export interface PlayerJoinedMessage {
+  type: 'playerJoined';
+  player: PlaneState;
+}
+
+/**
+ * Player left message
+ */
+export interface PlayerLeftMessage {
+  type: 'playerLeft';
+  id: string;
+}
+
+/**
+ * Sync message from server
+ */
+export interface SyncMessage {
+  type: 'sync';
+  planes: Record<string, PlaneState>;
+}
+
+/**
+ * Network callbacks interface
+ */
+export interface NetworkCallbacks {
+  onWelcome: (msg: WelcomeMessage) => void;
+  onSync: (planes: Record<string, PlaneState>) => void;
+  onPlayerLeft: (id: string) => void;
+  onPlayerJoined: (player: PlaneState) => void;
+  onDisconnect?: () => void;
+  onReconnect?: () => void;
+}
+
+/**
+ * Connection interface
+ */
+export interface Connection {
+  sendPosition: (planeState: PlaneState) => void;
+  sendTeleport: (lat: number, lng: number) => void;
+  isConnected: () => boolean;
+  close: () => void;
+}
 
 /**
  * Connect to the PartyKit server
- * @param {string} roomId - Room to join
- * @param {NetworkCallbacks} callbacks - Event callbacks
- * @returns {Object} Connection interface
  */
-export function createConnection(roomId, callbacks) {
+export function createConnection(roomId: string, callbacks: NetworkCallbacks): Connection {
   if (!PARTYKIT_HOST) {
     console.error('PartyKit host not configured');
     return createDisconnectedInterface();
@@ -46,20 +90,20 @@ export function createConnection(roomId, callbacks) {
 
   socket.addEventListener('message', (event) => {
     try {
-      const msg = JSON.parse(event.data);
+      const msg = JSON.parse(event.data as string);
 
       switch (msg.type) {
         case 'welcome':
-          callbacks.onWelcome(msg);
+          callbacks.onWelcome(msg as WelcomeMessage);
           break;
         case 'sync':
-          callbacks.onSync(msg.planes);
+          callbacks.onSync((msg as SyncMessage).planes);
           break;
         case 'playerJoined':
-          callbacks.onPlayerJoined(msg.player);
+          callbacks.onPlayerJoined((msg as PlayerJoinedMessage).player);
           break;
         case 'playerLeft':
-          callbacks.onPlayerLeft(msg.id);
+          callbacks.onPlayerLeft((msg as PlayerLeftMessage).id);
           break;
       }
     } catch (e) {
@@ -84,9 +128,8 @@ export function createConnection(roomId, callbacks) {
   return {
     /**
      * Send position update to server (throttled)
-     * @param {Object} planeState - Current plane state
      */
-    sendPosition: (planeState) => {
+    sendPosition: (planeState: PlaneState): void => {
       const now = Date.now();
       if (now - lastSendTime < NETWORK.UPDATE_RATE) return;
       lastSendTime = now;
@@ -109,10 +152,8 @@ export function createConnection(roomId, callbacks) {
 
     /**
      * Send teleport notification
-     * @param {number} lat
-     * @param {number} lng
      */
-    sendTeleport: (lat, lng) => {
+    sendTeleport: (lat: number, lng: number): void => {
       if (socket && socket.readyState === WS_OPEN) {
         socket.send(JSON.stringify({
           type: 'teleport',
@@ -123,14 +164,13 @@ export function createConnection(roomId, callbacks) {
 
     /**
      * Check if connected
-     * @returns {boolean}
      */
-    isConnected: () => isConnected,
+    isConnected: (): boolean => isConnected,
 
     /**
      * Close the connection
      */
-    close: () => {
+    close: (): void => {
       if (socket) {
         socket.close();
         socket = null;
@@ -142,13 +182,12 @@ export function createConnection(roomId, callbacks) {
 
 /**
  * Create a disconnected interface for when server is not configured
- * @returns {Object} Stub connection interface
  */
-function createDisconnectedInterface() {
+function createDisconnectedInterface(): Connection {
   return {
-    sendPosition: () => {},
-    sendTeleport: () => {},
-    isConnected: () => false,
-    close: () => {},
+    sendPosition: (): void => {},
+    sendTeleport: (): void => {},
+    isConnected: (): boolean => false,
+    close: (): void => {},
   };
 }

@@ -1,25 +1,31 @@
 {
   "name": "flight-sim",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
     "party:dev": "partykit dev",
     "party:deploy": "partykit deploy"
   },
   "dependencies": {
     "@loaders.gl/gltf": "^4.3.4",
     "@mapbox/vector-tile": "^2.0.4",
-    "maplibre-gl": "^4.7.1",
+    "maplibre-gl": "^5.0.0",
     "partysocket": "^1.0.2",
     "pbf": "^4.0.1",
     "pmtiles": "^4.3.2",
     "three": "^0.182.0"
   },
   "devDependencies": {
+    "@types/three": "^0.182.0",
+    "@types/pbf": "^3.0.5",
     "partykit": "^0.0.111",
     "typescript": "^5.7.2",
     "vite": "^6.0.7"

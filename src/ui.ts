@@ -1,40 +1,51 @@
-import { teleportPlane } from './plane.js';
 import { LOCATIONS } from './constants.js';
 import { getGroundHeight } from './collision.js';
+import type { PlaneState } from './plane.js';
 
-let crashMessageTimeout = null;
+let crashMessageTimeout: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Update HUD display with current plane state
- * @param {Object} planeState - Current plane state
  */
-export function updateHUD(planeState) {
+export function updateHUD(planeState: PlaneState): void {
   // Speed (convert m/s to km/h)
   const speedKmh = Math.round(planeState.speed * 3.6);
-  document.getElementById('speed-value').textContent = `${speedKmh} km/h`;
+  const speedEl = document.getElementById('speed-value');
+  if (speedEl) {
+    speedEl.textContent = `${speedKmh} km/h`;
+  }
 
   // Altitude
   const altitude = Math.round(planeState.altitude);
-  document.getElementById('altitude-value').textContent = `${altitude} m`;
+  const altEl = document.getElementById('altitude-value');
+  if (altEl) {
+    altEl.textContent = `${altitude} m`;
+  }
 
   // Ground level (terrain height)
   const groundHeight = Math.round(getGroundHeight(planeState.lng, planeState.lat));
-  document.getElementById('ground-value').textContent = `${groundHeight} m`;
+  const groundEl = document.getElementById('ground-value');
+  if (groundEl) {
+    groundEl.textContent = `${groundHeight} m`;
+  }
 
   // Heading
   const heading = Math.round(planeState.heading);
   const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
   const dirIndex = Math.round(heading / 45) % 8;
-  document.getElementById('heading-value').textContent = `${heading}° ${directions[dirIndex]}`;
+  const headingEl = document.getElementById('heading-value');
+  if (headingEl) {
+    headingEl.textContent = `${heading}° ${directions[dirIndex]}`;
+  }
 }
 
 /**
  * Update player list display
- * @param {Map<string, Object>} players - Map of player states
- * @param {string} localId - Local player's ID
  */
-export function updatePlayerList(players, localId) {
+export function updatePlayerList(players: Map<string, PlaneState>, localId: string): void {
   const list = document.getElementById('player-list');
+  if (!list) return;
+
   list.innerHTML = '';
 
   for (const [id, player] of players) {
@@ -60,8 +71,10 @@ export function updatePlayerList(players, localId) {
 /**
  * Show crash message briefly
  */
-export function showCrashMessage() {
+export function showCrashMessage(): void {
   const msg = document.getElementById('crash-message');
+  if (!msg) return;
+
   msg.style.display = 'block';
 
   if (crashMessageTimeout) {
@@ -75,14 +88,15 @@ export function showCrashMessage() {
 
 /**
  * Initialize location picker UI
- * @param {function(number, number): void} onTeleport - Callback when teleporting
  */
-export function initLocationPicker(onTeleport) {
-  const searchInput = document.getElementById('location-search');
+export function initLocationPicker(onTeleport: (lat: number, lng: number) => void): void {
+  const searchInput = document.getElementById('location-search') as HTMLInputElement | null;
   const teleportBtn = document.getElementById('teleport-btn');
+  const picker = document.getElementById('location-picker');
+
+  if (!searchInput || !teleportBtn || !picker) return;
 
   // Add preset location dropdown
-  const picker = document.getElementById('location-picker');
   const select = document.createElement('select');
   select.id = 'location-select';
   select.style.cssText = 'margin-left: 8px; padding: 8px; border-radius: 4px; border: none;';
@@ -103,7 +117,7 @@ export function initLocationPicker(onTeleport) {
 
   // Handle quick jump selection
   select.addEventListener('change', (e) => {
-    const key = e.target.value;
+    const key = (e.target as HTMLSelectElement).value;
     if (key && LOCATIONS[key]) {
       const loc = LOCATIONS[key];
       onTeleport(loc.lat, loc.lng);
@@ -127,7 +141,7 @@ export function initLocationPicker(onTeleport) {
           },
         }
       );
-      const results = await response.json();
+      const results = await response.json() as Array<{ lat: string; lon: string }>;
 
       if (results.length > 0) {
         const { lat, lon } = results[0];

@@ -2,9 +2,27 @@ import * as THREE from 'three';
 import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
 import { loadTransportationTile } from './tile-manager.js';
 
+// Types
+interface ParsedFeature {
+  type: string;
+  coordinates: number[] | number[][] | number[][][] | number[][][][];
+  properties: Record<string, unknown> | null;
+  layer: string;
+}
+
+interface RoadStyle {
+  color: number;
+  width: number;
+}
+
+interface StyleGroup {
+  style: RoadStyle;
+  features: ParsedFeature[];
+}
+
 // Road styling based on Overture road class
 // Colors are muted to not distract from the flight sim
-const ROAD_STYLES = {
+const ROAD_STYLES: Record<string, RoadStyle> = {
   // Major roads - lighter colors, wider lines
   motorway: { color: 0xd4a574, width: 3.0 },
   trunk: { color: 0xc4956a, width: 2.5 },
@@ -34,14 +52,12 @@ const ROAD_STYLES = {
 };
 
 // Materials cache
-const materials = new Map();
+const materials = new Map<number, THREE.LineBasicMaterial>();
 
 /**
  * Get or create line material for a road style
- * @param {number} color
- * @returns {THREE.LineBasicMaterial}
  */
-function getMaterial(color) {
+function getMaterial(color: number): THREE.LineBasicMaterial {
   if (!materials.has(color)) {
     materials.set(color, new THREE.LineBasicMaterial({
       color: color,
@@ -49,22 +65,20 @@ function getMaterial(color) {
       opacity: 0.8
     }));
   }
-  return materials.get(color);
+  return materials.get(color)!;
 }
 
 /**
  * Get road style based on feature properties
- * @param {Object} properties
- * @returns {{color: number, width: number}}
  */
-function getRoadStyle(properties) {
+function getRoadStyle(properties: Record<string, unknown> | null): RoadStyle {
   // Null safety check for properties
   if (!properties) {
     return ROAD_STYLES.default;
   }
 
   // Overture uses 'class' for road type
-  const roadClass = properties.class || properties.subtype || '';
+  const roadClass = (properties.class || properties.subtype || '') as string;
   const type = roadClass.toLowerCase();
 
   // Check for specific road class
@@ -89,12 +103,12 @@ function getRoadStyle(properties) {
 
 /**
  * Create transportation layer meshes (roads, paths) from tile features
- * @param {number} tileX
- * @param {number} tileY
- * @param {number} tileZ
- * @returns {Promise<THREE.Group>}
  */
-export async function createTransportationForTile(tileX, tileY, tileZ) {
+export async function createTransportationForTile(
+  tileX: number,
+  tileY: number,
+  tileZ: number
+): Promise<THREE.Group | null> {
   const scene = getScene();
   if (!scene) {
     console.warn('Scene not initialized');
@@ -111,7 +125,7 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
   group.name = `transportation-${tileZ}/${tileX}/${tileY}`;
 
   // Group features by color for batching
-  const featuresByStyle = new Map();
+  const featuresByStyle = new Map<string, StyleGroup>();
 
   for (const feature of features) {
     // Only process line geometries (roads are LineStrings or MultiLineStrings)
@@ -135,25 +149,25 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
     if (!featuresByStyle.has(key)) {
       featuresByStyle.set(key, { style, features: [] });
     }
-    featuresByStyle.get(key).features.push(feature);
+    featuresByStyle.get(key)!.features.push(feature);
   }
 
   // Create line geometries for each style
   for (const { style, features: styleFeatures } of featuresByStyle.values()) {
-    const geometries = [];
+    const geometries: THREE.BufferGeometry[] = [];
 
     for (const feature of styleFeatures) {
       try {
         if (feature.type === 'LineString') {
-          const geom = createLineGeometry(feature.coordinates, style.width);
+          const geom = createLineGeometry(feature.coordinates as number[][], style.width);
           if (geom) geometries.push(geom);
         } else if (feature.type === 'MultiLineString') {
-          for (const line of feature.coordinates) {
+          for (const line of feature.coordinates as number[][][]) {
             const geom = createLineGeometry(line, style.width);
             if (geom) geometries.push(geom);
           }
         }
-      } catch (e) {
+      } catch {
         // Skip invalid geometries
         continue;
       }
@@ -170,7 +184,7 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
           group.add(mesh);
           mergeSucceeded = true;
         }
-      } catch (e) {
+      } catch {
         // Fallback: add individually (geometries are still in use, don't dispose)
         for (const geom of geometries) {
           const mesh = new THREE.Line(geom, getMaterial(style.color));
@@ -195,14 +209,14 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
 
 /**
  * Create line geometry from coordinates
- * @param {Array} coordinates - Array of [lng, lat] coordinates
- * @param {number} width - Line width (for future use with tubes/ribbons)
- * @returns {THREE.BufferGeometry|null}
  */
-function createLineGeometry(coordinates, width) {
+function createLineGeometry(
+  coordinates: number[][],
+  _width: number
+): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length < 2) return null;
 
-  const points = [];
+  const points: THREE.Vector3[] = [];
   for (const coord of coordinates) {
     const world = geoToWorld(coord[0], coord[1], 0);
     points.push(new THREE.Vector3(world.x, 0, world.z));
@@ -216,9 +230,8 @@ function createLineGeometry(coordinates, width) {
 
 /**
  * Remove transportation layer meshes for a tile
- * @param {THREE.Group} group
  */
-export function removeTransportationGroup(group) {
+export function removeTransportationGroup(group: THREE.Group): void {
   if (!group) return;
 
   const scene = getScene();
@@ -228,8 +241,9 @@ export function removeTransportationGroup(group) {
 
   // Dispose of geometries
   group.traverse((child) => {
-    if (child.isLine) {
-      if (child.geometry) child.geometry.dispose();
+    if ((child as THREE.Line).isLine) {
+      const line = child as THREE.Line;
+      if (line.geometry) line.geometry.dispose();
     }
   });
 }
