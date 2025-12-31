@@ -36,6 +36,7 @@ let onFeatureClick: ((features: StoredFeature[], worldPos: THREE.Vector3) => voi
 
 // State tracking
 let isEnabled = false;
+let isInitialized = false;
 let clickStartPos: { x: number; y: number } | null = null;
 const CLICK_THRESHOLD = 5; // pixels - max movement to consider a click vs drag
 
@@ -235,10 +236,13 @@ export function findFeaturesAtLocation(
 function handlePointerDown(event: MouseEvent | TouchEvent): void {
   if (!isEnabled) return;
 
-  const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX;
-  const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY;
-
-  clickStartPos = { x: clientX, y: clientY };
+  // Safety check for touch events with empty touches array
+  if ('touches' in event) {
+    if (event.touches.length === 0) return;
+    clickStartPos = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+  } else {
+    clickStartPos = { x: event.clientX, y: event.clientY };
+  }
 }
 
 /**
@@ -247,8 +251,20 @@ function handlePointerDown(event: MouseEvent | TouchEvent): void {
 function handlePointerUp(event: MouseEvent | TouchEvent): void {
   if (!isEnabled || !clickStartPos || !onFeatureClick) return;
 
-  const clientX = 'changedTouches' in event ? event.changedTouches[0].clientX : event.clientX;
-  const clientY = 'changedTouches' in event ? event.changedTouches[0].clientY : event.clientY;
+  // Safety check for touch events with empty changedTouches array
+  let clientX: number;
+  let clientY: number;
+  if ('changedTouches' in event) {
+    if (event.changedTouches.length === 0) {
+      clickStartPos = null;
+      return;
+    }
+    clientX = event.changedTouches[0].clientX;
+    clientY = event.changedTouches[0].clientY;
+  } else {
+    clientX = event.clientX;
+    clientY = event.clientY;
+  }
 
   // Check if this was a click (minimal movement)
   const dx = clientX - clickStartPos.x;
@@ -303,6 +319,13 @@ function handlePointerUp(event: MouseEvent | TouchEvent): void {
 export function initFeaturePicker(
   callback: (features: StoredFeature[], worldPos: THREE.Vector3) => void
 ): void {
+  // Prevent duplicate initialization (e.g., during HMR)
+  if (isInitialized) {
+    console.warn('Feature picker already initialized, updating callback only');
+    onFeatureClick = callback;
+    return;
+  }
+
   onFeatureClick = callback;
 
   const renderer = getRenderer();
@@ -322,6 +345,7 @@ export function initFeaturePicker(
   canvas.addEventListener('touchend', handlePointerUp, { passive: true });
 
   isEnabled = true;
+  isInitialized = true;
   console.log('Feature picker initialized');
 }
 

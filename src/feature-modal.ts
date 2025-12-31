@@ -15,8 +15,13 @@ let content: HTMLElement | null = null;
 let coordsDisplay: HTMLElement | null = null;
 let isOpen = false;
 
-// Escape key handler
-let escapeKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+// Keyboard handler (escape + focus trap)
+let keyboardHandler: ((e: KeyboardEvent) => void) | null = null;
+
+// Focus trap elements
+let focusableElements: HTMLElement[] = [];
+let firstFocusable: HTMLElement | null = null;
+let lastFocusable: HTMLElement | null = null;
 
 /**
  * Format a property value for display
@@ -163,6 +168,28 @@ function renderFeature(feature: StoredFeature, index: number, total: number): st
 }
 
 /**
+ * Sets up focus trap for the modal to ensure keyboard users
+ * cannot tab out to background elements (WCAG compliance).
+ */
+function setupFocusTrap(): void {
+  if (!modal) return;
+
+  // Find all focusable elements within the modal
+  const focusableSelectors = [
+    'button:not([disabled])',
+    'input:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])'
+  ].join(', ');
+
+  focusableElements = Array.from(modal.querySelectorAll<HTMLElement>(focusableSelectors));
+
+  if (focusableElements.length > 0) {
+    firstFocusable = focusableElements[0];
+    lastFocusable = focusableElements[focusableElements.length - 1];
+  }
+}
+
+/**
  * Open the modal with feature data
  */
 export function showFeatureModal(features: StoredFeature[], worldPos: THREE.Vector3): void {
@@ -187,10 +214,12 @@ export function showFeatureModal(features: StoredFeature[], worldPos: THREE.Vect
   isOpen = true;
   modal.classList.add('feature-modal-open');
 
+  // Setup focus trap
+  setupFocusTrap();
+
   // Focus first focusable element
   setTimeout(() => {
-    const closeBtn = document.getElementById('feature-close-btn');
-    closeBtn?.focus();
+    firstFocusable?.focus();
   }, 100);
 }
 
@@ -236,18 +265,39 @@ export function initFeatureModal(): void {
     }
   });
 
-  // Remove existing escape handler if present (prevents duplicates during HMR)
-  if (escapeKeyHandler) {
-    document.removeEventListener('keydown', escapeKeyHandler);
+  // Remove existing keyboard handler if present (prevents duplicates during HMR)
+  if (keyboardHandler) {
+    document.removeEventListener('keydown', keyboardHandler);
   }
 
-  // Escape key to close
-  escapeKeyHandler = (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && isOpen) {
+  // Keyboard handler for escape and focus trap
+  keyboardHandler = (e: KeyboardEvent) => {
+    if (!isOpen) return;
+
+    // Escape key to close
+    if (e.key === 'Escape') {
       closeFeatureModal();
+      return;
+    }
+
+    // Focus trap: handle Tab key
+    if (e.key === 'Tab') {
+      if (e.shiftKey) {
+        // Shift+Tab: if on first element, wrap to last
+        if (document.activeElement === firstFocusable) {
+          e.preventDefault();
+          lastFocusable?.focus();
+        }
+      } else {
+        // Tab: if on last element, wrap to first
+        if (document.activeElement === lastFocusable) {
+          e.preventDefault();
+          firstFocusable?.focus();
+        }
+      }
     }
   };
-  document.addEventListener('keydown', escapeKeyHandler);
+  document.addEventListener('keydown', keyboardHandler);
 
   console.log('Feature modal initialized');
 }

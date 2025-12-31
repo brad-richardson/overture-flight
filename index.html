@@ -855,11 +855,11 @@
   </div>
 
   <!-- Feature Properties Modal -->
-  <div id="feature-modal">
+  <div id="feature-modal" role="dialog" aria-modal="true" aria-labelledby="feature-modal-title">
     <div id="feature-container">
       <div id="feature-header">
-        <h2>Feature Properties</h2>
-        <button id="feature-close-btn">&times;</button>
+        <h2 id="feature-modal-title">Feature Properties</h2>
+        <button id="feature-close-btn" aria-label="Close feature properties">&times;</button>
       </div>
       <div id="feature-content">
         <!-- Feature cards will be inserted here -->
