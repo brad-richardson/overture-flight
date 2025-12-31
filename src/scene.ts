@@ -3,30 +3,54 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { PLANE_MODEL_URL, PLANE_RENDER, DEFAULT_LOCATION } from './constants.js';
 
-// Export for use in buildings.js
+// Export for use in buildings.ts
 export { BufferGeometryUtils };
 
 // Scene components
-let scene, camera, renderer;
-let planeModel = null;
-let planeMeshes = new Map(); // id -> mesh
+let scene: THREE.Scene | null = null;
+let camera: THREE.PerspectiveCamera | null = null;
+let renderer: THREE.WebGLRenderer | null = null;
+let planeModel: THREE.Group | null = null;
+const planeMeshes = new Map<string, THREE.Object3D>(); // id -> mesh
 
 // World origin (for geo to world conversion)
-let originLng = DEFAULT_LOCATION.lng;
-let originLat = DEFAULT_LOCATION.lat;
+let originLng: number = DEFAULT_LOCATION.lng;
+let originLat: number = DEFAULT_LOCATION.lat;
 
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
-const metersPerDegreeLng = (lat) => 111320 * Math.cos(lat * Math.PI / 180);
+const metersPerDegreeLng = (lat: number): number => 111320 * Math.cos(lat * Math.PI / 180);
+
+// Types
+export interface WorldCoords {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface GeoCoords {
+  lng: number;
+  lat: number;
+  alt: number;
+}
+
+export interface PlaneState {
+  id: string;
+  lat: number;
+  lng: number;
+  altitude: number;
+  heading: number;
+  pitch: number;
+  roll: number;
+  speed: number;
+  color: string;
+  name?: string;
+}
 
 /**
  * Convert geo coordinates to world coordinates
- * @param {number} lng - Longitude
- * @param {number} lat - Latitude
- * @param {number} alt - Altitude in meters
- * @returns {{x: number, y: number, z: number}}
  */
-export function geoToWorld(lng, lat, alt) {
+export function geoToWorld(lng: number, lat: number, alt: number): WorldCoords {
   return {
     x: (lng - originLng) * metersPerDegreeLng(originLat),
     y: alt,
@@ -36,12 +60,8 @@ export function geoToWorld(lng, lat, alt) {
 
 /**
  * Convert world coordinates back to geo
- * @param {number} x
- * @param {number} y
- * @param {number} z
- * @returns {{lng: number, lat: number, alt: number}}
  */
-export function worldToGeo(x, y, z) {
+export function worldToGeo(x: number, y: number, z: number): GeoCoords {
   return {
     lng: originLng + x / metersPerDegreeLng(originLat),
     lat: originLat - z / METERS_PER_DEGREE_LAT,
@@ -51,27 +71,27 @@ export function worldToGeo(x, y, z) {
 
 /**
  * Set the world origin for coordinate conversion
- * @param {number} lng
- * @param {number} lat
  */
-export function setOrigin(lng, lat) {
+export function setOrigin(lng: number, lat: number): void {
   originLng = lng;
   originLat = lat;
 }
 
 /**
  * Get current origin
- * @returns {{lng: number, lat: number}}
  */
-export function getOrigin() {
+export function getOrigin(): { lng: number; lat: number } {
   return { lng: originLng, lat: originLat };
 }
 
 /**
  * Initialize the Three.js scene
- * @returns {Promise<{scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THREE.WebGLRenderer}>}
  */
-export async function initScene() {
+export async function initScene(): Promise<{
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  renderer: THREE.WebGLRenderer;
+}> {
   // Create scene
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x87CEEB); // Sky blue
@@ -91,8 +111,10 @@ export async function initScene() {
 
   // Replace map container content with Three.js canvas
   const container = document.getElementById('map');
-  container.innerHTML = '';
-  container.appendChild(renderer.domElement);
+  if (container) {
+    container.innerHTML = '';
+    container.appendChild(renderer.domElement);
+  }
 
   // Lighting
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -113,9 +135,11 @@ export async function initScene() {
 
   // Handle window resize
   window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    if (camera && renderer) {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
   });
 
   // Load plane model
@@ -135,20 +159,21 @@ export async function initScene() {
 /**
  * Load the plane GLTF model
  */
-async function loadPlaneModel() {
-  return new Promise((resolve, reject) => {
+async function loadPlaneModel(): Promise<THREE.Group> {
+  return new Promise((resolve) => {
     const loader = new GLTFLoader();
     loader.load(
       PLANE_MODEL_URL,
       (gltf) => {
         planeModel = gltf.scene;
         planeModel.traverse((child) => {
-          if (child.isMesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
+          if ((child as THREE.Mesh).isMesh) {
+            const mesh = child as THREE.Mesh;
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
             // Override any existing texture with a neutral white base
             // This allows player colors to show properly
-            child.material = new THREE.MeshStandardMaterial({
+            mesh.material = new THREE.MeshStandardMaterial({
               color: 0xffffff,
               roughness: 0.6,
               metalness: 0.3
@@ -172,7 +197,7 @@ async function loadPlaneModel() {
 /**
  * Create a fallback plane mesh if GLTF fails to load
  */
-function createFallbackPlane() {
+function createFallbackPlane(): THREE.Group {
   const group = new THREE.Group();
 
   // White/silver aircraft materials
@@ -216,13 +241,10 @@ function createFallbackPlane() {
 
 /**
  * Get or create a plane mesh for a player
- * @param {string} id - Player ID
- * @param {string} color - Plane color
- * @returns {THREE.Object3D}
  */
-function getOrCreatePlaneMesh(id, color) {
+function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null {
   if (planeMeshes.has(id)) {
-    return planeMeshes.get(id);
+    return planeMeshes.get(id)!;
   }
 
   if (!planeModel) {
@@ -235,24 +257,24 @@ function getOrCreatePlaneMesh(id, color) {
 
   // Apply color to the plane
   mesh.traverse((child) => {
-    if (child.isMesh) {
-      child.material = child.material.clone();
-      child.material.color.set(color || '#3b82f6');
+    if ((child as THREE.Mesh).isMesh) {
+      const meshChild = child as THREE.Mesh;
+      meshChild.material = (meshChild.material as THREE.MeshStandardMaterial).clone();
+      (meshChild.material as THREE.MeshStandardMaterial).color.set(color || '#3b82f6');
     }
   });
 
-  scene.add(mesh);
+  if (scene) {
+    scene.add(mesh);
+  }
   planeMeshes.set(id, mesh);
   return mesh;
 }
 
 /**
  * Update a plane's position and rotation
- * @param {Object} planeState - Plane state with lng, lat, altitude, heading, pitch, roll
- * @param {string} id - Player ID
- * @param {string} color - Plane color
  */
-export function updatePlaneMesh(planeState, id, color) {
+export function updatePlaneMesh(planeState: PlaneState, id: string, color: string): void {
   const mesh = getOrCreatePlaneMesh(id, color);
   if (!mesh) return;
 
@@ -283,11 +305,10 @@ export function updatePlaneMesh(planeState, id, color) {
 
 /**
  * Remove a plane mesh
- * @param {string} id
  */
-export function removePlaneMesh(id) {
+export function removePlaneMesh(id: string): void {
   const mesh = planeMeshes.get(id);
-  if (mesh) {
+  if (mesh && scene) {
     scene.remove(mesh);
     planeMeshes.delete(id);
   }
@@ -295,32 +316,29 @@ export function removePlaneMesh(id) {
 
 /**
  * Get the Three.js scene
- * @returns {THREE.Scene}
  */
-export function getScene() {
+export function getScene(): THREE.Scene | null {
   return scene;
 }
 
 /**
  * Get the Three.js camera
- * @returns {THREE.PerspectiveCamera}
  */
-export function getCamera() {
+export function getCamera(): THREE.PerspectiveCamera | null {
   return camera;
 }
 
 /**
  * Get the Three.js renderer
- * @returns {THREE.WebGLRenderer}
  */
-export function getRenderer() {
+export function getRenderer(): THREE.WebGLRenderer | null {
   return renderer;
 }
 
 /**
  * Render the scene
  */
-export function render() {
+export function render(): void {
   if (renderer && scene && camera) {
     renderer.render(scene, camera);
   }

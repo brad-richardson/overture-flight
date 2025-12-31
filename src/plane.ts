@@ -1,21 +1,38 @@
 import { FLIGHT, DEFAULT_LOCATION } from './constants.js';
 
 /**
- * @typedef {Object} PlaneState
- * @property {string} id - Unique player ID
- * @property {number} lat - Latitude in degrees
- * @property {number} lng - Longitude in degrees
- * @property {number} altitude - Altitude in meters
- * @property {number} heading - Compass heading 0-360
- * @property {number} pitch - Nose pitch in degrees (positive = up)
- * @property {number} roll - Bank angle in degrees (positive = right)
- * @property {number} speed - Speed in m/s
- * @property {string} color - Assigned plane color
- * @property {string} [name] - Optional player name
+ * Plane state interface
  */
+export interface PlaneState {
+  id: string;
+  lat: number;
+  lng: number;
+  altitude: number;
+  heading: number;
+  pitch: number;
+  roll: number;
+  speed: number;
+  color: string;
+  name: string;
+}
 
-/** @type {PlaneState} */
-let planeState = {
+/**
+ * Joystick input interface
+ */
+export interface JoystickInput {
+  x: number;
+  y: number;
+}
+
+/**
+ * Throttle input interface
+ */
+export interface ThrottleInput {
+  up: boolean;
+  down: boolean;
+}
+
+let planeState: PlaneState = {
   id: '',
   lat: DEFAULT_LOCATION.lat,
   lng: DEFAULT_LOCATION.lng,
@@ -48,10 +65,8 @@ const mobileInput = {
 
 /**
  * Set mobile joystick input
- * @param {{x: number, y: number}} joystick - Joystick values (-1 to 1)
- * @param {{up: boolean, down: boolean}} throttle - Throttle button state
  */
-export function setMobileInput(joystick, throttle) {
+export function setMobileInput(joystick: JoystickInput, throttle: ThrottleInput): void {
   // X = roll (left/right), Y = pitch (up/down but inverted - push forward = dive)
   mobileInput.roll = joystick.x;
   mobileInput.pitch = -joystick.y; // Invert: pushing joystick up = nose down
@@ -62,7 +77,7 @@ export function setMobileInput(joystick, throttle) {
 /**
  * Initialize keyboard controls
  */
-export function initControls() {
+export function initControls(): void {
   document.addEventListener('keydown', (e) => {
     handleKeyChange(e.code, true);
   });
@@ -74,10 +89,8 @@ export function initControls() {
 
 /**
  * Handle key state changes
- * @param {string} code - Key code
- * @param {boolean} pressed - Whether key is pressed
  */
-function handleKeyChange(code, pressed) {
+function handleKeyChange(code: string, pressed: boolean): void {
   switch (code) {
     case 'KeyW':
     case 'ArrowUp':
@@ -108,9 +121,8 @@ function handleKeyChange(code, pressed) {
 
 /**
  * Update plane physics for one frame
- * @param {number} deltaTime - Time since last frame in seconds
  */
-export function updatePlane(deltaTime) {
+export function updatePlane(deltaTime: number): void {
   // Combine keyboard and mobile input
   // Keyboard uses boolean, mobile uses analog (-1 to 1)
   const pitchInput = (input.pitchUp ? 1 : 0) - (input.pitchDown ? 1 : 0) + mobileInput.pitch;
@@ -190,28 +202,23 @@ export function updatePlane(deltaTime) {
 
 /**
  * Get current plane state
- * @returns {PlaneState}
  */
-export function getPlaneState() {
+export function getPlaneState(): PlaneState {
   return { ...planeState };
 }
 
 /**
  * Set plane ID and color (from server)
- * @param {string} id
- * @param {string} color
  */
-export function setPlaneIdentity(id, color) {
+export function setPlaneIdentity(id: string, color: string): void {
   planeState.id = id;
   planeState.color = color;
 }
 
 /**
  * Teleport plane to a new location
- * @param {number} lat
- * @param {number} lng
  */
-export function teleportPlane(lat, lng) {
+export function teleportPlane(lat: number, lng: number): void {
   planeState.lat = lat;
   planeState.lng = lng;
   planeState.altitude = FLIGHT.SPAWN_ALTITUDE;
@@ -224,7 +231,7 @@ export function teleportPlane(lat, lng) {
 /**
  * Reset plane after crash (same location, respawn altitude)
  */
-export function resetPlane() {
+export function resetPlane(): void {
   planeState.altitude = FLIGHT.SPAWN_ALTITUDE;
   planeState.pitch = 0;
   planeState.roll = 0;

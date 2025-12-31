@@ -4,8 +4,22 @@ import { loadBaseTile, tileToBounds, lngLatToTile } from './tile-manager.js';
 import { getElevationDataForTile, sampleElevation } from './elevation.js';
 import { ELEVATION } from './constants.js';
 
+// Types
+interface ParsedFeature {
+  type: string;
+  coordinates: number[] | number[][] | number[][][] | number[][][][];
+  properties: Record<string, unknown>;
+  layer: string;
+}
+
+interface FeatureGroup {
+  color: number;
+  layer: string;
+  features: ParsedFeature[];
+}
+
 // Colors for different feature types (Overture-inspired, darkened for flight sim)
-const COLORS = {
+const COLORS: Record<string, number> = {
   // Water types - blue tones
   ocean: 0x1e5f8a,
   sea: 0x1e5f8a,
@@ -44,7 +58,7 @@ const COLORS = {
 
 // Layer depth configuration to prevent z-fighting
 // Layers are separated by Y position - sufficient gaps prevent depth conflicts
-const LAYER_DEPTHS = {
+const LAYER_DEPTHS: Record<string, number> = {
   terrain: -3.0,      // Terrain mesh at lowest position
   land: -2.0,         // Base land above terrain
   land_cover: -1.5,   // Land cover (forests, etc.) above base land
@@ -54,18 +68,18 @@ const LAYER_DEPTHS = {
 };
 
 // Materials cache
-const materials = new Map();
+const materials = new Map<number, THREE.MeshStandardMaterial>();
 
 // Line materials cache for water lines (rivers)
-const lineMaterials = new Map();
+const lineMaterials = new Map<number, THREE.LineBasicMaterial>();
 
 // Terrain material with vertex colors
-let terrainMaterial = null;
+let terrainMaterial: THREE.MeshStandardMaterial | null = null;
 
 /**
  * Get or create terrain material
  */
-function getTerrainMaterial() {
+function getTerrainMaterial(): THREE.MeshStandardMaterial {
   if (!terrainMaterial) {
     terrainMaterial = new THREE.MeshStandardMaterial({
       color: COLORS.terrain,
@@ -80,10 +94,8 @@ function getTerrainMaterial() {
 
 /**
  * Get or create material for a color
- * @param {number} color
- * @returns {THREE.MeshStandardMaterial}
  */
-function getMaterial(color) {
+function getMaterial(color: number): THREE.MeshStandardMaterial {
   if (!materials.has(color)) {
     materials.set(color, new THREE.MeshStandardMaterial({
       color: color,
@@ -92,32 +104,27 @@ function getMaterial(color) {
       side: THREE.DoubleSide
     }));
   }
-  return materials.get(color);
+  return materials.get(color)!;
 }
 
 /**
  * Get or create line material for water features (rivers)
- * @param {number} color
- * @returns {THREE.LineBasicMaterial}
  */
-function getLineMaterial(color) {
+function getLineMaterial(color: number): THREE.LineBasicMaterial {
   if (!lineMaterials.has(color)) {
     lineMaterials.set(color, new THREE.LineBasicMaterial({
       color: color,
       linewidth: 2
     }));
   }
-  return lineMaterials.get(color);
+  return lineMaterials.get(color)!;
 }
 
 /**
  * Get color for a feature based on its layer and subtype
- * @param {string} layer
- * @param {Object} properties
- * @returns {number}
  */
-function getColorForFeature(layer, properties) {
-  const subtype = properties.subtype || properties.class || '';
+function getColorForFeature(layer: string, properties: Record<string, unknown>): number {
+  const subtype = (properties.subtype || properties.class || '') as string;
   const type = subtype.toLowerCase();
 
   // Check for specific subtype first
@@ -151,12 +158,12 @@ function getColorForFeature(layer, properties) {
 
 /**
  * Create a terrain mesh with elevation data for a tile
- * @param {number} tileX - Tile X (at building zoom level 14)
- * @param {number} tileY - Tile Y (at building zoom level 14)
- * @param {number} tileZ - Tile zoom (typically 14)
- * @returns {Promise<THREE.Mesh|null>}
  */
-async function createTerrainMesh(tileX, tileY, tileZ) {
+async function createTerrainMesh(
+  tileX: number,
+  tileY: number,
+  tileZ: number
+): Promise<THREE.Mesh | null> {
   // Get tile bounds in world coordinates
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const centerLng = (bounds.west + bounds.east) / 2;
@@ -260,7 +267,7 @@ async function createTerrainMesh(tileX, tileY, tileZ) {
 /**
  * Create a flat terrain mesh (fallback when no elevation data)
  */
-function createFlatTerrainMesh(tileX, tileY, tileZ) {
+function createFlatTerrainMesh(tileX: number, tileY: number, tileZ: number): THREE.Mesh {
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const worldMin = geoToWorld(bounds.west, bounds.south, 0);
   const worldMax = geoToWorld(bounds.east, bounds.north, 0);
@@ -285,12 +292,12 @@ function createFlatTerrainMesh(tileX, tileY, tileZ) {
 /**
  * Create base layer meshes (land, water) from tile features
  * Now also includes terrain elevation mesh
- * @param {number} tileX
- * @param {number} tileY
- * @param {number} tileZ
- * @returns {Promise<THREE.Group>}
  */
-export async function createBaseLayerForTile(tileX, tileY, tileZ) {
+export async function createBaseLayerForTile(
+  tileX: number,
+  tileY: number,
+  tileZ: number
+): Promise<THREE.Group | null> {
   const scene = getScene();
   if (!scene) {
     console.warn('Scene not initialized');
@@ -329,9 +336,9 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
   if (features.length > 0) {
     // Group polygon features by color AND layer for proper z-fighting prevention
     // Key format: "color-layer" to separate water from land even if same color
-    const featuresByColorAndLayer = new Map();
+    const featuresByColorAndLayer = new Map<string, FeatureGroup>();
     // Group line features (rivers, streams) by color
-    const lineFeaturesByColor = new Map();
+    const lineFeaturesByColor = new Map<number, ParsedFeature[]>();
 
     for (const feature of features) {
       const color = getColorForFeature(feature.layer, feature.properties);
@@ -342,34 +349,34 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
         if (!featuresByColorAndLayer.has(key)) {
           featuresByColorAndLayer.set(key, { color, layer, features: [] });
         }
-        featuresByColorAndLayer.get(key).features.push(feature);
+        featuresByColorAndLayer.get(key)!.features.push(feature);
       } else if (feature.type === 'LineString' || feature.type === 'MultiLineString') {
         // Process line features for water (rivers, streams)
         if (layer === 'water') {
           if (!lineFeaturesByColor.has(color)) {
             lineFeaturesByColor.set(color, []);
           }
-          lineFeaturesByColor.get(color).push(feature);
+          lineFeaturesByColor.get(color)!.push(feature);
         }
       }
     }
 
     // Create merged geometry for each color+layer combination (polygons)
     for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
-      const geometries = [];
+      const geometries: THREE.BufferGeometry[] = [];
 
       for (const feature of layerFeatures) {
         try {
           if (feature.type === 'Polygon') {
-            const geom = createFlatPolygonGeometry(feature.coordinates);
+            const geom = createFlatPolygonGeometry(feature.coordinates as number[][][]);
             if (geom) geometries.push(geom);
           } else if (feature.type === 'MultiPolygon') {
-            for (const polygon of feature.coordinates) {
+            for (const polygon of feature.coordinates as number[][][][]) {
               const geom = createFlatPolygonGeometry(polygon);
               if (geom) geometries.push(geom);
             }
           }
-        } catch (e) {
+        } catch {
           // Skip invalid geometries
           continue;
         }
@@ -388,7 +395,7 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
             mesh.name = `features-${layer}`;
             group.add(mesh);
           }
-        } catch (e) {
+        } catch {
           // Fallback: add individually
           for (const geom of geometries) {
             const mesh = new THREE.Mesh(geom, getMaterial(color));
@@ -407,20 +414,20 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
 
     // Create line geometries for water features (rivers, streams)
     for (const [color, lineFeatures] of lineFeaturesByColor) {
-      const geometries = [];
+      const geometries: THREE.BufferGeometry[] = [];
 
       for (const feature of lineFeatures) {
         try {
           if (feature.type === 'LineString') {
-            const geom = createWaterLineGeometry(feature.coordinates);
+            const geom = createWaterLineGeometry(feature.coordinates as number[][]);
             if (geom) geometries.push(geom);
           } else if (feature.type === 'MultiLineString') {
-            for (const line of feature.coordinates) {
+            for (const line of feature.coordinates as number[][][]) {
               const geom = createWaterLineGeometry(line);
               if (geom) geometries.push(geom);
             }
           }
-        } catch (e) {
+        } catch {
           continue;
         }
       }
@@ -434,7 +441,7 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
             line.name = 'water-lines';
             group.add(line);
           }
-        } catch (e) {
+        } catch {
           // Fallback: add individually
           for (const geom of geometries) {
             const line = new THREE.Line(geom, getLineMaterial(color));
@@ -457,13 +464,11 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
 
 /**
  * Create line geometry for water features (rivers, streams)
- * @param {Array} coordinates - Array of [lng, lat] coordinates
- * @returns {THREE.BufferGeometry|null}
  */
-function createWaterLineGeometry(coordinates) {
+function createWaterLineGeometry(coordinates: number[][]): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length < 2) return null;
 
-  const points = [];
+  const points: THREE.Vector3[] = [];
   for (const coord of coordinates) {
     const world = geoToWorld(coord[0], coord[1], 0);
     points.push(new THREE.Vector3(world.x, 0, world.z));
@@ -477,17 +482,15 @@ function createWaterLineGeometry(coordinates) {
 
 /**
  * Create flat polygon geometry at Y=0
- * @param {Array} coordinates - GeoJSON polygon coordinates [outer ring, ...holes]
- * @returns {THREE.BufferGeometry|null}
  */
-function createFlatPolygonGeometry(coordinates) {
+function createFlatPolygonGeometry(coordinates: number[][][]): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length === 0) return null;
 
   const outerRing = coordinates[0];
   if (!outerRing || outerRing.length < 3) return null;
 
   // Convert outer ring to Three.js points
-  const points = [];
+  const points: THREE.Vector2[] = [];
   for (const coord of outerRing) {
     const world = geoToWorld(coord[0], coord[1], 0);
     points.push(new THREE.Vector2(world.x, world.z));
@@ -521,7 +524,7 @@ function createFlatPolygonGeometry(coordinates) {
       const holeRing = coordinates[i];
       if (!holeRing || holeRing.length < 3) continue;
 
-      const holePoints = [];
+      const holePoints: THREE.Vector2[] = [];
       for (const coord of holeRing) {
         const world = geoToWorld(coord[0], coord[1], 0);
         holePoints.push(new THREE.Vector2(world.x, world.z));
@@ -552,7 +555,7 @@ function createFlatPolygonGeometry(coordinates) {
     geometry.rotateX(-Math.PI / 2);
 
     return geometry;
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -560,7 +563,7 @@ function createFlatPolygonGeometry(coordinates) {
 /**
  * Calculate signed area of a 2D polygon
  */
-function calculatePolygonArea(points) {
+function calculatePolygonArea(points: THREE.Vector2[]): number {
   let area = 0;
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
     area += (points[j].x + points[i].x) * (points[j].y - points[i].y);
@@ -570,9 +573,8 @@ function calculatePolygonArea(points) {
 
 /**
  * Remove base layer meshes for a tile
- * @param {THREE.Group} group
  */
-export function removeBaseLayerGroup(group) {
+export function removeBaseLayerGroup(group: THREE.Group): void {
   if (!group) return;
 
   const scene = getScene();
@@ -582,8 +584,9 @@ export function removeBaseLayerGroup(group) {
 
   // Dispose of geometries
   group.traverse((child) => {
-    if (child.isMesh) {
-      if (child.geometry) child.geometry.dispose();
+    if ((child as THREE.Mesh).isMesh) {
+      const mesh = child as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
     }
   });
 }

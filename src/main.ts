@@ -1,7 +1,7 @@
 import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin } from './scene.js';
-import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane, setMobileInput } from './plane.js';
+import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane, setMobileInput, PlaneState } from './plane.js';
 import { initCameraControls, followPlane } from './camera.js';
-import { createConnection } from './network.js';
+import { createConnection, Connection, WelcomeMessage } from './network.js';
 import { checkCollision } from './collision.js';
 import { updateHUD, updatePlayerList, showCrashMessage, initLocationPicker } from './ui.js';
 import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile } from './tile-manager.js';
@@ -11,27 +11,33 @@ import { createTransportationForTile, removeTransportationGroup } from './transp
 import { preloadElevationTiles, unloadDistantElevationTiles } from './elevation.js';
 import { DEFAULT_LOCATION, ELEVATION } from './constants.js';
 import { initMobileControls, getJoystickState, getThrottleState, isMobileDevice } from './mobile-controls.js';
+import * as THREE from 'three';
+
+// Tile meshes type
+interface TileMeshes {
+  buildings: THREE.Group | null;
+  base: THREE.Group | null;
+  transportation: THREE.Group | null;
+}
 
 // Game state
-let connection = null;
+let connection: Connection | null = null;
 let localId = '';
 let localColor = '#3b82f6';
 let lastTime = 0;
 let isRunning = false;
 
 // All known players (including self)
-const players = new Map();
+const players = new Map<string, PlaneState>();
 
 // Tile meshes tracking
-const tileMeshes = new Map(); // key -> { buildings: Group, base: Group, transportation: Group }
-const loadingTiles = new Set(); // Track tiles currently being loaded
+const tileMeshes = new Map<string, TileMeshes>(); // key -> { buildings: Group, base: Group, transportation: Group }
+const loadingTiles = new Set<string>(); // Track tiles currently being loaded
 
 /**
  * Load tiles around the current position
- * @param {number} lng
- * @param {number} lat
  */
-async function updateTiles(lng, lat) {
+async function updateTiles(lng: number, lat: number): Promise<void> {
   const tilesToLoad = getTilesToLoad(lng, lat);
 
   // Load new tiles
@@ -84,9 +90,8 @@ async function updateTiles(lng, lat) {
 
 /**
  * Main game loop
- * @param {number} time - Current timestamp
  */
-function gameLoop(time) {
+function gameLoop(time: number): void {
   if (!isRunning) return;
 
   // Calculate delta time
@@ -143,9 +148,8 @@ function gameLoop(time) {
 
 /**
  * Handle welcome message from server
- * @param {Object} msg - Welcome message
  */
-function handleWelcome(msg) {
+function handleWelcome(msg: WelcomeMessage): void {
   console.log('Welcome! ID:', msg.id, 'Color:', msg.color);
   localId = msg.id;
   localColor = msg.color || '#3b82f6';
@@ -164,9 +168,8 @@ function handleWelcome(msg) {
 
 /**
  * Handle sync message from server
- * @param {Object} planes - All plane states
  */
-function handleSync(planes) {
+function handleSync(planes: Record<string, PlaneState>): void {
   // Update players map and plane meshes
   for (const [id, plane] of Object.entries(planes)) {
     if (id !== localId) {
@@ -178,9 +181,8 @@ function handleSync(planes) {
 
 /**
  * Handle player joined message
- * @param {Object} player - New player info
  */
-function handlePlayerJoined(player) {
+function handlePlayerJoined(player: PlaneState): void {
   console.log('Player joined:', player.id);
   players.set(player.id, player);
   updatePlaneMesh(player, player.id, player.color);
@@ -188,9 +190,8 @@ function handlePlayerJoined(player) {
 
 /**
  * Handle player left message
- * @param {string} id - Player ID who left
  */
-function handlePlayerLeft(id) {
+function handlePlayerLeft(id: string): void {
   console.log('Player left:', id);
   players.delete(id);
   removePlaneMesh(id);
@@ -199,10 +200,8 @@ function handlePlayerLeft(id) {
 
 /**
  * Handle teleport action
- * @param {number} lat - Destination latitude
- * @param {number} lng - Destination longitude
  */
-async function handleTeleport(lat, lng) {
+async function handleTeleport(lat: number, lng: number): Promise<void> {
   // Update origin for new location
   setOrigin(lng, lat);
 
@@ -233,11 +232,8 @@ async function handleTeleport(lat, lng) {
 
 /**
  * Show error notification to user
- * @param {string} title - Error title
- * @param {string[]} [details] - Optional array of detail messages
- * @param {string} [footer] - Optional footer text
  */
-function showError(title, details = [], footer = '') {
+function showError(title: string, details: string[] = [], footer: string = ''): void {
   // Create or update error display
   let errorDiv = document.getElementById('error-message');
   if (!errorDiv) {
@@ -284,14 +280,14 @@ function showError(title, details = [], footer = '') {
 
   // Auto-hide after 8 seconds
   setTimeout(() => {
-    errorDiv.style.display = 'none';
+    errorDiv!.style.display = 'none';
   }, 8000);
 }
 
 /**
  * Initialize the game
  */
-async function init() {
+async function init(): Promise<void> {
   console.log('Initializing Flight Simulator...');
 
   try {
@@ -351,7 +347,7 @@ async function init() {
 
   } catch (error) {
     console.error('Failed to initialize:', error);
-    showError('Failed to start:', [error.message]);
+    showError('Failed to start:', [(error as Error).message]);
   }
 }
 

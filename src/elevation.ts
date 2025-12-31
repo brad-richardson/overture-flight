@@ -6,51 +6,56 @@
  * height_meters = (R * 256 + G + B/256) - 32768
  */
 
-import { lngLatToTile, tileToBounds } from './tile-manager.js';
+import { lngLatToTile, tileToBounds, TileBounds } from './tile-manager.js';
 import { ELEVATION } from './constants.js';
 
+// Types
+interface ElevationCacheEntry {
+  heights: Float32Array | null;
+  loading: boolean;
+}
+
+export interface ElevationData {
+  heights: Float32Array;
+  bounds: TileBounds;
+}
+
 // Elevation tile cache: "z/x/y" -> { heights: Float32Array, loading: boolean }
-const elevationCache = new Map();
+const elevationCache = new Map<string, ElevationCacheEntry>();
 
 // Pending load promises to avoid duplicate fetches
-const pendingLoads = new Map();
+const pendingLoads = new Map<string, Promise<Float32Array>>();
 
 /**
  * Decode Terrarium RGB values to height in meters
  * Formula: height = (R * 256 + G + B/256) - 32768
- * @param {number} r - Red channel (0-255)
- * @param {number} g - Green channel (0-255)
- * @param {number} b - Blue channel (0-255)
- * @returns {number} Height in meters
  */
-function decodeTerrarium(r, g, b) {
+function decodeTerrarium(r: number, g: number, b: number): number {
   return (r * 256 + g + b / 256) - ELEVATION.TERRARIUM_OFFSET;
 }
 
 /**
  * Load an image from URL
- * @param {string} url
- * @returns {Promise<HTMLImageElement>}
  */
-function loadImage(url) {
+function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
-    img.onerror = (e) => reject(new Error(`Failed to load image: ${url}`));
+    img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
     img.src = url;
   });
 }
 
 /**
  * Perform bilinear interpolation on a height grid
- * @param {Float32Array} heights - Height grid data
- * @param {number} gridX - X position in grid coordinates (can be fractional)
- * @param {number} gridY - Y position in grid coordinates (can be fractional)
- * @param {number} gridSize - Size of the grid (typically ELEVATION.TILE_SIZE)
- * @returns {number} Interpolated height value
  */
-function bilinearInterpolate(heights, gridX, gridY, gridSize) {
+function bilinearInterpolate(
+  heights: Float32Array,
+  gridX: number,
+  gridY: number,
+  gridSize: number
+): number {
   // Clamp grid coordinates to valid range
   const clampedX = Math.max(0, Math.min(gridSize - 1, gridX));
   const clampedY = Math.max(0, Math.min(gridSize - 1, gridY));
@@ -84,17 +89,13 @@ function bilinearInterpolate(heights, gridX, gridY, gridSize) {
 
 /**
  * Load elevation tile and decode to height grid
- * @param {number} x - Tile X coordinate
- * @param {number} y - Tile Y coordinate
- * @param {number} z - Zoom level
- * @returns {Promise<Float32Array>} 256x256 height grid in meters (NaN for no data)
  */
-async function loadElevationTile(x, y, z) {
+async function loadElevationTile(x: number, y: number, z: number): Promise<Float32Array> {
   const key = `${z}/${x}/${y}`;
 
   // Return cached data if available
   if (elevationCache.has(key)) {
-    const cached = elevationCache.get(key);
+    const cached = elevationCache.get(key)!;
     if (!cached.loading && cached.heights) {
       return cached.heights;
     }
@@ -102,13 +103,13 @@ async function loadElevationTile(x, y, z) {
 
   // Return pending promise if already loading
   if (pendingLoads.has(key)) {
-    return pendingLoads.get(key);
+    return pendingLoads.get(key)!;
   }
 
   // Mark as loading
   elevationCache.set(key, { heights: null, loading: true });
 
-  const loadPromise = (async () => {
+  const loadPromise = (async (): Promise<Float32Array> => {
     try {
       const url = ELEVATION.TERRARIUM_URL
         .replace('{z}', z.toString())
@@ -123,7 +124,7 @@ async function loadElevationTile(x, y, z) {
       const canvas = document.createElement('canvas');
       canvas.width = ELEVATION.TILE_SIZE;
       canvas.height = ELEVATION.TILE_SIZE;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d')!;
       ctx.drawImage(img, 0, 0, ELEVATION.TILE_SIZE, ELEVATION.TILE_SIZE);
 
       const imageData = ctx.getImageData(0, 0, ELEVATION.TILE_SIZE, ELEVATION.TILE_SIZE);
@@ -167,11 +168,8 @@ async function loadElevationTile(x, y, z) {
 
 /**
  * Validate geographic coordinates
- * @param {number} lng - Longitude
- * @param {number} lat - Latitude
- * @returns {boolean} True if coordinates are valid
  */
-function isValidCoordinate(lng, lat) {
+function isValidCoordinate(lng: number, lat: number): boolean {
   return (
     typeof lng === 'number' && !Number.isNaN(lng) &&
     typeof lat === 'number' && !Number.isNaN(lat) &&
@@ -182,11 +180,8 @@ function isValidCoordinate(lng, lat) {
 
 /**
  * Get the elevation tile key for a geographic coordinate
- * @param {number} lng - Longitude
- * @param {number} lat - Latitude
- * @returns {{key: string, x: number, y: number, z: number}}
  */
-function getElevationTileInfo(lng, lat) {
+function getElevationTileInfo(lng: number, lat: number): { key: string; x: number; y: number; z: number } {
   const z = ELEVATION.ZOOM;
   const [x, y] = lngLatToTile(lng, lat, z);
   return { key: `${z}/${x}/${y}`, x, y, z };
@@ -194,11 +189,8 @@ function getElevationTileInfo(lng, lat) {
 
 /**
  * Get terrain height at a geographic coordinate using bilinear interpolation
- * @param {number} lng - Longitude
- * @param {number} lat - Latitude
- * @returns {number} Height in meters (0 if not loaded or invalid coordinates)
  */
-export function getTerrainHeight(lng, lat) {
+export function getTerrainHeight(lng: number, lat: number): number {
   // Validate input coordinates
   if (!isValidCoordinate(lng, lat)) {
     return 0;
@@ -233,11 +225,8 @@ export function getTerrainHeight(lng, lat) {
 
 /**
  * Get terrain height (async version that ensures tile is loaded)
- * @param {number} lng - Longitude
- * @param {number} lat - Latitude
- * @returns {Promise<number>} Height in meters
  */
-export async function getTerrainHeightAsync(lng, lat) {
+export async function getTerrainHeightAsync(lng: number, lat: number): Promise<number> {
   if (!isValidCoordinate(lng, lat)) {
     return 0;
   }
@@ -249,12 +238,12 @@ export async function getTerrainHeightAsync(lng, lat) {
 
 /**
  * Preload elevation tiles around a geographic point
- * @param {number} lng - Center longitude
- * @param {number} lat - Center latitude
- * @param {number} radius - Tile radius to load (default 2)
- * @returns {Promise<void>}
  */
-export async function preloadElevationTiles(lng, lat, radius = 2) {
+export async function preloadElevationTiles(
+  lng: number,
+  lat: number,
+  radius: number = 2
+): Promise<void> {
   if (!isValidCoordinate(lng, lat)) {
     console.warn('Invalid coordinates for elevation preload');
     return;
@@ -263,7 +252,7 @@ export async function preloadElevationTiles(lng, lat, radius = 2) {
   const z = ELEVATION.ZOOM;
   const [centerX, centerY] = lngLatToTile(lng, lat, z);
 
-  const promises = [];
+  const promises: Promise<Float32Array>[] = [];
   for (let dx = -radius; dx <= radius; dx++) {
     for (let dy = -radius; dy <= radius; dy++) {
       const x = centerX + dx;
@@ -278,11 +267,11 @@ export async function preloadElevationTiles(lng, lat, radius = 2) {
 
 /**
  * Get elevation data for a tile (for terrain mesh generation)
- * @param {number} tileX - Tile X coordinate (at ELEVATION.ZOOM)
- * @param {number} tileY - Tile Y coordinate (at ELEVATION.ZOOM)
- * @returns {Promise<{heights: Float32Array, bounds: Object}|null>}
  */
-export async function getElevationDataForTile(tileX, tileY) {
+export async function getElevationDataForTile(
+  tileX: number,
+  tileY: number
+): Promise<ElevationData | null> {
   const z = ELEVATION.ZOOM;
   const key = `${z}/${tileX}/${tileY}`;
 
@@ -299,23 +288,24 @@ export async function getElevationDataForTile(tileX, tileY) {
 /**
  * Sample elevation from a height grid using bilinear interpolation
  * Exported for use in terrain mesh generation
- * @param {Float32Array} heights - Height grid data
- * @param {number} gridX - X position in grid coordinates
- * @param {number} gridY - Y position in grid coordinates
- * @param {number} gridSize - Size of the grid
- * @returns {number} Interpolated height value
  */
-export function sampleElevation(heights, gridX, gridY, gridSize) {
+export function sampleElevation(
+  heights: Float32Array,
+  gridX: number,
+  gridY: number,
+  gridSize: number
+): number {
   return bilinearInterpolate(heights, gridX, gridY, gridSize);
 }
 
 /**
  * Unload elevation tiles that are far from the given position
- * @param {number} lng - Center longitude
- * @param {number} lat - Center latitude
- * @param {number} maxDistance - Max tile distance before unloading (default 4)
  */
-export function unloadDistantElevationTiles(lng, lat, maxDistance = 4) {
+export function unloadDistantElevationTiles(
+  lng: number,
+  lat: number,
+  maxDistance: number = 4
+): void {
   if (!isValidCoordinate(lng, lat)) {
     return;
   }

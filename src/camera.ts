@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CAMERA } from './constants.js';
 import { getCamera, geoToWorld } from './scene.js';
+import type { PlaneState } from './plane.js';
 
 let orbitAngle = 0;  // Horizontal offset from plane heading
 let orbitPitch = CAMERA.DEFAULT_PITCH;
@@ -11,10 +12,8 @@ let lastMouseY = 0;
 
 /**
  * Handle drag movement (shared between mouse and touch)
- * @param {number} clientX
- * @param {number} clientY
  */
-function handleDragMove(clientX, clientY) {
+function handleDragMove(clientX: number, clientY: number): void {
   if (!isDragging) return;
 
   const deltaX = clientX - lastMouseX;
@@ -35,8 +34,9 @@ function handleDragMove(clientX, clientY) {
 /**
  * Initialize camera mouse and touch controls for orbiting
  */
-export function initCameraControls() {
+export function initCameraControls(): void {
   const container = document.getElementById('map');
+  if (!container) return;
 
   // Mouse controls
   container.addEventListener('mousedown', (e) => {
@@ -52,7 +52,10 @@ export function initCameraControls() {
 
   document.addEventListener('mouseup', () => {
     isDragging = false;
-    document.getElementById('map').style.cursor = 'grab';
+    const mapEl = document.getElementById('map');
+    if (mapEl) {
+      mapEl.style.cursor = 'grab';
+    }
   });
 
   // Touch controls for camera orbit (single finger on the map area, not on controls)
@@ -108,9 +111,8 @@ export function initCameraControls() {
 
 /**
  * Update camera to follow plane (Three.js version)
- * @param {Object} planeState - Current plane state
  */
-export function followPlane(planeState) {
+export function followPlane(planeState: PlaneState): void {
   const camera = getCamera();
   if (!camera) return;
 
@@ -140,23 +142,21 @@ export function followPlane(planeState) {
 /**
  * Reset camera to default position
  */
-export function resetCamera() {
+export function resetCamera(): void {
   orbitAngle = 0;
   orbitPitch = CAMERA.DEFAULT_PITCH;
 }
 
 /**
  * Get current orbit angle
- * @returns {number}
  */
-export function getOrbitAngle() {
+export function getOrbitAngle(): number {
   return orbitAngle;
 }
 
 /**
  * Get current orbit pitch
- * @returns {number}
  */
-export function getOrbitPitch() {
+export function getOrbitPitch(): number {
   return orbitPitch;
 }

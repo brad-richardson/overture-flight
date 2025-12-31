@@ -1,13 +1,21 @@
 import { getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
+import type { PlaneState } from './plane.js';
+
+/**
+ * Collision result interface
+ */
+export interface CollisionResult {
+  collided: boolean;
+  type?: 'ground' | 'terrain' | 'building';
+  height?: number;
+}
 
 /**
  * Check if plane has collided with terrain or buildings
  * Uses elevation data for accurate ground collision detection
- * @param {Object} planeState - Current plane state with lng, lat, altitude
- * @returns {boolean} True if collision detected
  */
-export function checkCollision(planeState) {
+export function checkCollision(planeState: PlaneState): boolean {
   const { lng, lat, altitude } = planeState;
 
   // Get terrain height at plane position
@@ -28,18 +36,9 @@ export function checkCollision(planeState) {
 }
 
 /**
- * @typedef {Object} CollisionResult
- * @property {boolean} collided - Whether a collision occurred
- * @property {string} [type] - Type of collision ('ground' | 'terrain' | 'building')
- * @property {number} [height] - Height of obstacle
- */
-
-/**
  * Check collision with detailed information
- * @param {Object} planeState - Current plane state with lng, lat, altitude
- * @returns {CollisionResult}
  */
-export function checkCollisionDetailed(planeState) {
+export function checkCollisionDetailed(planeState: PlaneState): CollisionResult {
   const { lng, lat, altitude } = planeState;
 
   // Get terrain height at plane position
@@ -65,11 +64,8 @@ export function checkCollisionDetailed(planeState) {
 /**
  * Get the ground height at a specific location
  * Useful for UI display or spawn point calculation
- * @param {number} lng - Longitude
- * @param {number} lat - Latitude
- * @returns {number} Ground height in meters
  */
-export function getGroundHeight(lng, lat) {
+export function getGroundHeight(lng: number, lat: number): number {
   if (!ELEVATION.TERRAIN_ENABLED) {
     return 0;
   }

@@ -5,22 +5,23 @@ import {
   getBuildingColor,
   groupFeaturesByCategory,
   createCategoryMaterial,
+  BuildingFeature,
 } from './building-materials.js';
 
 // Default building height when not specified
 const DEFAULT_BUILDING_HEIGHT = 10;
 
 // Material cache by category for performance
-const materialCache = new Map();
+const materialCache = new Map<string, THREE.MeshStandardMaterial>();
 
 /**
  * Get or create a material for a building category
  */
-function getCategoryMaterial(category) {
+function getCategoryMaterial(category: string): THREE.MeshStandardMaterial {
   if (!materialCache.has(category)) {
     materialCache.set(category, createCategoryMaterial(category));
   }
-  return materialCache.get(category);
+  return materialCache.get(category)!;
 }
 
 /**
@@ -34,12 +35,12 @@ const vertexColorMaterial = new THREE.MeshStandardMaterial({
 
 /**
  * Create building meshes from tile features with realistic textures
- * @param {number} tileX
- * @param {number} tileY
- * @param {number} tileZ
- * @returns {Promise<THREE.Group>}
  */
-export async function createBuildingsForTile(tileX, tileY, tileZ) {
+export async function createBuildingsForTile(
+  tileX: number,
+  tileY: number,
+  tileZ: number
+): Promise<THREE.Group | null> {
   const scene = getScene();
   if (!scene) {
     console.warn('Scene not initialized');
@@ -56,20 +57,21 @@ export async function createBuildingsForTile(tileX, tileY, tileZ) {
   group.name = `buildings-${tileZ}/${tileX}/${tileY}`;
 
   // Group features by category for better material batching
-  const categoryGroups = groupFeaturesByCategory(features);
+  const categoryGroups = groupFeaturesByCategory(features as BuildingFeature[]);
   let totalGeometries = 0;
 
   // Process each category separately
   for (const [category, categoryFeatures] of Object.entries(categoryGroups)) {
-    const geometries = [];
+    const geometries: THREE.BufferGeometry[] = [];
 
     for (const feature of categoryFeatures) {
       if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') {
         continue;
       }
 
-      const height = feature.properties?.height ||
-                     (feature.properties?.num_floors ? feature.properties.num_floors * 3 : 0) ||
+      const props = feature.properties || {};
+      const height = (props.height as number) ||
+                     (props.num_floors ? (props.num_floors as number) * 3 : 0) ||
                      DEFAULT_BUILDING_HEIGHT;
 
       // Get building-specific color
@@ -77,15 +79,19 @@ export async function createBuildingsForTile(tileX, tileY, tileZ) {
 
       try {
         if (feature.type === 'Polygon') {
-          const geom = createBuildingGeometry(feature.coordinates, height, buildingColor);
+          const geom = createBuildingGeometry(
+            feature.coordinates as number[][][],
+            height,
+            buildingColor
+          );
           if (geom) geometries.push(geom);
         } else if (feature.type === 'MultiPolygon') {
-          for (const polygon of feature.coordinates) {
+          for (const polygon of feature.coordinates as number[][][][]) {
             const geom = createBuildingGeometry(polygon, height, buildingColor);
             if (geom) geometries.push(geom);
           }
         }
-      } catch (e) {
+      } catch {
         // Skip invalid geometries
         continue;
       }
@@ -107,7 +113,7 @@ export async function createBuildingsForTile(tileX, tileY, tileZ) {
         group.add(mesh);
       }
     } catch (e) {
-      console.warn(`Failed to merge ${category} buildings for ${tileZ}/${tileX}/${tileY}:`, e.message);
+      console.warn(`Failed to merge ${category} buildings for ${tileZ}/${tileX}/${tileY}:`, (e as Error).message);
       // Fallback: add individually with category material
       const categoryMaterial = getCategoryMaterial(category);
       for (const geom of geometries) {
@@ -139,19 +145,19 @@ export async function createBuildingsForTile(tileX, tileY, tileZ) {
 
 /**
  * Create extruded geometry for a building polygon with vertex colors
- * @param {Array} coordinates - GeoJSON polygon coordinates [outer ring, ...holes]
- * @param {number} height - Building height in meters
- * @param {number} color - Hex color for the building
- * @returns {THREE.BufferGeometry|null}
  */
-function createBuildingGeometry(coordinates, height, color = 0x888899) {
+function createBuildingGeometry(
+  coordinates: number[][][],
+  height: number,
+  color: number = 0x888899
+): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length === 0) return null;
 
   const outerRing = coordinates[0];
   if (!outerRing || outerRing.length < 3) return null;
 
   // Convert outer ring to Three.js points
-  const points = [];
+  const points: THREE.Vector2[] = [];
   for (const coord of outerRing) {
     const world = geoToWorld(coord[0], coord[1], 0);
     points.push(new THREE.Vector2(world.x, world.z));
@@ -185,7 +191,7 @@ function createBuildingGeometry(coordinates, height, color = 0x888899) {
       const holeRing = coordinates[i];
       if (!holeRing || holeRing.length < 3) continue;
 
-      const holePoints = [];
+      const holePoints: THREE.Vector2[] = [];
       for (const coord of holeRing) {
         const world = geoToWorld(coord[0], coord[1], 0);
         holePoints.push(new THREE.Vector2(world.x, world.z));
@@ -222,7 +228,7 @@ function createBuildingGeometry(coordinates, height, color = 0x888899) {
     addVertexColors(geometry, color, height);
 
     return geometry;
-  } catch (e) {
+  } catch {
     // Shape creation can fail for invalid polygons
     return null;
   }
@@ -231,11 +237,12 @@ function createBuildingGeometry(coordinates, height, color = 0x888899) {
 /**
  * Add vertex colors to a building geometry
  * Applies the base color with optional height-based variation
- * @param {THREE.BufferGeometry} geometry
- * @param {number} hexColor - Base hex color
- * @param {number} height - Building height for gradient effects
  */
-function addVertexColors(geometry, hexColor, height) {
+function addVertexColors(
+  geometry: THREE.BufferGeometry,
+  hexColor: number,
+  height: number
+): void {
   const positions = geometry.attributes.position;
   const count = positions.count;
   const colors = new Float32Array(count * 3);
@@ -274,7 +281,7 @@ function addVertexColors(geometry, hexColor, height) {
  * Calculate signed area of a 2D polygon
  * Positive = clockwise, Negative = counter-clockwise
  */
-function calculatePolygonArea(points) {
+function calculatePolygonArea(points: THREE.Vector2[]): number {
   let area = 0;
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
     area += (points[j].x + points[i].x) * (points[j].y - points[i].y);
@@ -284,9 +291,8 @@ function calculatePolygonArea(points) {
 
 /**
  * Remove building meshes for a tile
- * @param {THREE.Group} group
  */
-export function removeBuildingsGroup(group) {
+export function removeBuildingsGroup(group: THREE.Group): void {
   if (!group) return;
 
   const scene = getScene();
@@ -296,11 +302,12 @@ export function removeBuildingsGroup(group) {
 
   // Dispose of geometries and materials
   group.traverse((child) => {
-    if (child.isMesh) {
-      if (child.geometry) child.geometry.dispose();
+    if ((child as THREE.Mesh).isMesh) {
+      const mesh = child as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
       // Always dispose cloned materials (they're not in the cache)
-      if (child.material) {
-        child.material.dispose();
+      if (mesh.material) {
+        (mesh.material as THREE.Material).dispose();
       }
     }
   });
@@ -309,7 +316,7 @@ export function removeBuildingsGroup(group) {
 /**
  * Get statistics about loaded building categories
  */
-export function getBuildingStats() {
+export function getBuildingStats(): { materialCacheSize: number; categories: string[] } {
   return {
     materialCacheSize: materialCache.size,
     categories: Array.from(materialCache.keys())

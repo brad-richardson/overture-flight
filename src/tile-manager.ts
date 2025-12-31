@@ -4,28 +4,69 @@ import Pbf from 'pbf';
 import { OVERTURE_BUILDINGS_PMTILES, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from './constants.js';
 import { getOrigin } from './scene.js';
 
+// Types
+export interface TileBounds {
+  west: number;
+  east: number;
+  north: number;
+  south: number;
+}
+
+export interface WorldBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+export interface ParsedFeature {
+  type: string;
+  coordinates: number[] | number[][] | number[][][] | number[][][][];
+  properties: Record<string, unknown>;
+  layer: string;
+}
+
+export interface TileInfo {
+  x: number;
+  y: number;
+  z: number;
+  key: string;
+}
+
+interface TileData {
+  meshes: unknown[];
+  loading: boolean;
+}
+
+interface InitStatus {
+  buildings: boolean;
+  base: boolean;
+  transportation: boolean;
+  errors: string[];
+}
+
 // PMTiles sources
-let buildingsPMTiles = null;
-let basePMTiles = null;
-let transportationPMTiles = null;
+let buildingsPMTiles: PMTiles | null = null;
+let basePMTiles: PMTiles | null = null;
+let transportationPMTiles: PMTiles | null = null;
 
 // Track initialization errors for user feedback
-let initErrors = [];
+let initErrors: string[] = [];
 
 /**
  * Retry a fetch operation with exponential backoff
- * @param {Function} operation - Async function to retry
- * @param {number} maxRetries - Maximum number of retries (default 3)
- * @param {number} baseDelay - Initial delay in ms (default 1000)
- * @returns {Promise<any>}
  */
-async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
-  let lastError;
+async function retryWithBackoff<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<T> {
+  let lastError: Error | undefined;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await operation();
     } catch (error) {
-      lastError = error;
+      lastError = error as Error;
       if (attempt < maxRetries) {
         const delay = baseDelay * Math.pow(2, attempt);
         console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
@@ -38,14 +79,13 @@ async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
 
 /**
  * Get any initialization errors that occurred
- * @returns {Array<string>}
  */
-export function getInitErrors() {
+export function getInitErrors(): string[] {
   return [...initErrors];
 }
 
 // Loaded tiles cache
-const loadedTiles = new Map(); // "z/x/y" -> { meshes: [], loading: boolean }
+const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loading: boolean }
 
 // Tile loading settings
 const TILE_ZOOM = 14; // Zoom level for tile loading
@@ -53,12 +93,12 @@ const TILE_RADIUS = 2; // Load tiles within this radius of center
 
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
-const metersPerDegreeLng = (lat) => 111320 * Math.cos(lat * Math.PI / 180);
+const metersPerDegreeLng = (lat: number): number => 111320 * Math.cos(lat * Math.PI / 180);
 
 /**
  * Initialize PMTiles sources with retry logic
  */
-export async function initTileManager() {
+export async function initTileManager(): Promise<InitStatus> {
   initErrors = [];
 
   buildingsPMTiles = new PMTiles(OVERTURE_BUILDINGS_PMTILES);
@@ -68,13 +108,14 @@ export async function initTileManager() {
   // Get metadata to verify sources are working with retry
   try {
     const buildingsHeader = await retryWithBackoff(
-      () => buildingsPMTiles.getHeader(),
+      () => buildingsPMTiles!.getHeader(),
       3,
       1000
     );
     console.log('Buildings PMTiles initialized:', buildingsHeader);
   } catch (e) {
-    const msg = `Failed to load buildings data: ${e.message || 'Network error'}`;
+    const error = e as Error;
+    const msg = `Failed to load buildings data: ${error.message || 'Network error'}`;
     console.error(msg, e);
     initErrors.push(msg);
     buildingsPMTiles = null;
@@ -82,13 +123,14 @@ export async function initTileManager() {
 
   try {
     const baseHeader = await retryWithBackoff(
-      () => basePMTiles.getHeader(),
+      () => basePMTiles!.getHeader(),
       3,
       1000
     );
     console.log('Base PMTiles initialized:', baseHeader);
   } catch (e) {
-    const msg = `Failed to load terrain data: ${e.message || 'Network error'}`;
+    const error = e as Error;
+    const msg = `Failed to load terrain data: ${error.message || 'Network error'}`;
     console.error(msg, e);
     initErrors.push(msg);
     basePMTiles = null;
@@ -96,13 +138,14 @@ export async function initTileManager() {
 
   try {
     const transportationHeader = await retryWithBackoff(
-      () => transportationPMTiles.getHeader(),
+      () => transportationPMTiles!.getHeader(),
       3,
       1000
     );
     console.log('Transportation PMTiles initialized:', transportationHeader);
   } catch (e) {
-    const msg = `Failed to load transportation data: ${e.message || 'Network error'}`;
+    const error = e as Error;
+    const msg = `Failed to load transportation data: ${error.message || 'Network error'}`;
     console.error(msg, e);
     initErrors.push(msg);
     transportationPMTiles = null;
@@ -119,12 +162,8 @@ export async function initTileManager() {
 
 /**
  * Convert lng/lat to tile coordinates
- * @param {number} lng
- * @param {number} lat
- * @param {number} zoom
- * @returns {[number, number]} [x, y] tile coordinates
  */
-export function lngLatToTile(lng, lat, zoom) {
+export function lngLatToTile(lng: number, lat: number, zoom: number): [number, number] {
   const n = Math.pow(2, zoom);
   const x = Math.floor((lng + 180) / 360 * n);
   const latRad = lat * Math.PI / 180;
@@ -134,12 +173,8 @@ export function lngLatToTile(lng, lat, zoom) {
 
 /**
  * Convert tile coordinates to lng/lat bounds
- * @param {number} x
- * @param {number} y
- * @param {number} zoom
- * @returns {{west: number, east: number, north: number, south: number}}
  */
-export function tileToBounds(x, y, zoom) {
+export function tileToBounds(x: number, y: number, zoom: number): TileBounds {
   const n = Math.pow(2, zoom);
   const west = x / n * 360 - 180;
   const east = (x + 1) / n * 360 - 180;
@@ -150,12 +185,8 @@ export function tileToBounds(x, y, zoom) {
 
 /**
  * Convert tile bounds to world coordinates
- * @param {number} x
- * @param {number} y
- * @param {number} zoom
- * @returns {{minX: number, maxX: number, minZ: number, maxZ: number}}
  */
-export function tileToWorldBounds(x, y, zoom) {
+export function tileToWorldBounds(x: number, y: number, zoom: number): WorldBounds {
   const origin = getOrigin();
   const bounds = tileToBounds(x, y, zoom);
 
@@ -169,13 +200,16 @@ export function tileToWorldBounds(x, y, zoom) {
 
 /**
  * Parse MVT data and extract features
- * @param {ArrayBuffer} data - Raw MVT data
- * @param {string} [layerName] - Optional layer name to filter
- * @returns {Array<Object>} Parsed features
  */
-export function parseMVT(data, tileX, tileY, zoom, layerName = null) {
+export function parseMVT(
+  data: ArrayBuffer,
+  tileX: number,
+  tileY: number,
+  zoom: number,
+  layerName: string | null = null
+): ParsedFeature[] {
   const tile = new VectorTile(new Pbf(data));
-  const features = [];
+  const features: ParsedFeature[] = [];
 
   const allLayerNames = Object.keys(tile.layers);
   console.log(`MVT layers at ${zoom}/${tileX}/${tileY}: [${allLayerNames.join(', ')}] requested: ${layerName}`);
@@ -194,7 +228,7 @@ export function parseMVT(data, tileX, tileY, zoom, layerName = null) {
       features.push({
         type: geojson.geometry.type,
         coordinates: geojson.geometry.coordinates,
-        properties: feature.properties,
+        properties: feature.properties as Record<string, unknown>,
         layer: name
       });
     }
@@ -205,13 +239,13 @@ export function parseMVT(data, tileX, tileY, zoom, layerName = null) {
 
 /**
  * Get tile data from PMTiles source with retry logic
- * @param {PMTiles} pmtiles - PMTiles source
- * @param {number} z - Zoom level
- * @param {number} x - Tile X
- * @param {number} y - Tile Y
- * @returns {Promise<ArrayBuffer|null>}
  */
-async function getTileData(pmtiles, z, x, y) {
+async function getTileData(
+  pmtiles: PMTiles | null,
+  z: number,
+  x: number,
+  y: number
+): Promise<ArrayBuffer | null> {
   if (!pmtiles) {
     return null;
   }
@@ -229,7 +263,7 @@ async function getTileData(pmtiles, z, x, y) {
   } catch (e) {
     // Only log occasionally to avoid spam
     if (Math.random() < 0.1) {
-      console.warn(`PMTiles tile ${z}/${x}/${y} failed after retries:`, e.message);
+      console.warn(`PMTiles tile ${z}/${x}/${y} failed after retries:`, (e as Error).message);
     }
     return null;
   }
@@ -237,12 +271,12 @@ async function getTileData(pmtiles, z, x, y) {
 
 /**
  * Load building features for a tile
- * @param {number} x
- * @param {number} y
- * @param {number} zoom
- * @returns {Promise<Array<Object>>}
  */
-export async function loadBuildingTile(x, y, zoom = TILE_ZOOM) {
+export async function loadBuildingTile(
+  x: number,
+  y: number,
+  zoom: number = TILE_ZOOM
+): Promise<ParsedFeature[]> {
   if (!buildingsPMTiles) return [];
 
   const data = await getTileData(buildingsPMTiles, zoom, x, y);
@@ -253,12 +287,12 @@ export async function loadBuildingTile(x, y, zoom = TILE_ZOOM) {
 
 /**
  * Load base layer features for a tile (land, water, etc.)
- * @param {number} x
- * @param {number} y
- * @param {number} zoom
- * @returns {Promise<Array<Object>>}
  */
-export async function loadBaseTile(x, y, zoom = TILE_ZOOM) {
+export async function loadBaseTile(
+  x: number,
+  y: number,
+  zoom: number = TILE_ZOOM
+): Promise<ParsedFeature[]> {
   if (!basePMTiles) {
     console.warn('Base PMTiles not initialized');
     return [];
@@ -283,12 +317,12 @@ export async function loadBaseTile(x, y, zoom = TILE_ZOOM) {
 
 /**
  * Load transportation features for a tile (roads, paths, railways)
- * @param {number} x
- * @param {number} y
- * @param {number} zoom
- * @returns {Promise<Array<Object>>}
  */
-export async function loadTransportationTile(x, y, zoom = TILE_ZOOM) {
+export async function loadTransportationTile(
+  x: number,
+  y: number,
+  zoom: number = TILE_ZOOM
+): Promise<ParsedFeature[]> {
   if (!transportationPMTiles) {
     console.warn('Transportation PMTiles not initialized');
     return [];
@@ -305,13 +339,10 @@ export async function loadTransportationTile(x, y, zoom = TILE_ZOOM) {
 
 /**
  * Get which tiles should be loaded based on plane position
- * @param {number} lng
- * @param {number} lat
- * @returns {Array<{x: number, y: number, z: number, key: string}>}
  */
-export function getTilesToLoad(lng, lat) {
+export function getTilesToLoad(lng: number, lat: number): TileInfo[] {
   const [centerX, centerY] = lngLatToTile(lng, lat, TILE_ZOOM);
-  const tiles = [];
+  const tiles: TileInfo[] = [];
 
   // Debug: Log tile calculation (only occasionally to avoid spam)
   if (Math.random() < 0.01) {
@@ -334,53 +365,44 @@ export function getTilesToLoad(lng, lat) {
 
 /**
  * Check if a tile is loaded
- * @param {string} key
- * @returns {boolean}
  */
-export function isTileLoaded(key) {
-  return loadedTiles.has(key) && !loadedTiles.get(key).loading;
+export function isTileLoaded(key: string): boolean {
+  return loadedTiles.has(key) && !loadedTiles.get(key)!.loading;
 }
 
 /**
  * Mark a tile as loading
- * @param {string} key
  */
-export function markTileLoading(key) {
+export function markTileLoading(key: string): void {
   loadedTiles.set(key, { meshes: [], loading: true });
 }
 
 /**
  * Mark a tile as loaded with its meshes
- * @param {string} key
- * @param {Array} meshes
  */
-export function markTileLoaded(key, meshes) {
+export function markTileLoaded(key: string, meshes: unknown[]): void {
   loadedTiles.set(key, { meshes, loading: false });
 }
 
 /**
  * Get meshes for a tile
- * @param {string} key
- * @returns {Array|null}
  */
-export function getTileMeshes(key) {
+export function getTileMeshes(key: string): unknown[] | null {
   const tile = loadedTiles.get(key);
   return tile ? tile.meshes : null;
 }
 
 /**
  * Get keys of tiles that should be unloaded
- * @param {number} lng
- * @param {number} lat
- * @param {number} [maxDistance=4] - Max tile distance before unloading
- * @returns {Array<string>}
  */
-export function getTilesToUnload(lng, lat, maxDistance = 4) {
+export function getTilesToUnload(lng: number, lat: number, maxDistance: number = 4): string[] {
   const [centerX, centerY] = lngLatToTile(lng, lat, TILE_ZOOM);
-  const toUnload = [];
+  const toUnload: string[] = [];
 
-  for (const [key, tile] of loadedTiles) {
-    const [z, x, y] = key.split('/').map(Number);
+  for (const [key] of loadedTiles) {
+    const [, xStr, yStr] = key.split('/');
+    const x = Number(xStr);
+    const y = Number(yStr);
     const distance = Math.max(Math.abs(x - centerX), Math.abs(y - centerY));
 
     if (distance > maxDistance) {
@@ -393,22 +415,25 @@ export function getTilesToUnload(lng, lat, maxDistance = 4) {
 
 /**
  * Remove a tile from cache
- * @param {string} key
  */
-export function removeTile(key) {
+export function removeTile(key: string): void {
   loadedTiles.delete(key);
 }
 
 /**
  * Get the PMTiles sources
  */
-export function getPMTilesSources() {
+export function getPMTilesSources(): {
+  buildingsPMTiles: PMTiles | null;
+  basePMTiles: PMTiles | null;
+  transportationPMTiles: PMTiles | null;
+} {
   return { buildingsPMTiles, basePMTiles, transportationPMTiles };
 }
 
 /**
  * Get the tile zoom level being used
  */
-export function getTileZoom() {
+export function getTileZoom(): number {
   return TILE_ZOOM;
 }
