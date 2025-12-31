@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
 import { loadBaseTile, tileToBounds, lngLatToTile } from './tile-manager.js';
-import { getElevationDataForTile, isElevationTileLoaded } from './elevation.js';
+import { getElevationDataForTile, sampleElevation } from './elevation.js';
 import { ELEVATION } from './constants.js';
 
 // Colors for different feature types (Overture-inspired, darkened for flight sim)
@@ -195,38 +195,19 @@ async function createTerrainMesh(tileX, tileY, tileZ) {
       const lng = bounds.west + relX * (bounds.east - bounds.west);
       const lat = bounds.north - relZ * (bounds.north - bounds.south);
 
-      // Map to elevation tile coordinates
+      // Map to elevation tile coordinates and sample using shared helper
       const elevRelX = (lng - elevBounds.west) / (elevBounds.east - elevBounds.west);
       const elevRelY = (elevBounds.north - lat) / (elevBounds.north - elevBounds.south);
-
-      // Sample from elevation grid with bilinear interpolation
       const gridX = elevRelX * (ELEVATION.TILE_SIZE - 1);
       const gridY = elevRelY * (ELEVATION.TILE_SIZE - 1);
 
-      const x0 = Math.floor(gridX);
-      const y0 = Math.floor(gridY);
-      const x1 = Math.min(x0 + 1, ELEVATION.TILE_SIZE - 1);
-      const y1 = Math.min(y0 + 1, ELEVATION.TILE_SIZE - 1);
+      // Use shared bilinear interpolation helper
+      let elevation = sampleElevation(heights, gridX, gridY, ELEVATION.TILE_SIZE);
 
-      // Clamp to valid range
-      const sx0 = Math.max(0, Math.min(ELEVATION.TILE_SIZE - 1, x0));
-      const sy0 = Math.max(0, Math.min(ELEVATION.TILE_SIZE - 1, y0));
-      const sx1 = Math.max(0, Math.min(ELEVATION.TILE_SIZE - 1, x1));
-      const sy1 = Math.max(0, Math.min(ELEVATION.TILE_SIZE - 1, y1));
-
-      const fx = gridX - x0;
-      const fy = gridY - y0;
-
-      const h00 = heights[sy0 * ELEVATION.TILE_SIZE + sx0];
-      const h10 = heights[sy0 * ELEVATION.TILE_SIZE + sx1];
-      const h01 = heights[sy1 * ELEVATION.TILE_SIZE + sx0];
-      const h11 = heights[sy1 * ELEVATION.TILE_SIZE + sx1];
-
-      let elevation =
-        h00 * (1 - fx) * (1 - fy) +
-        h10 * fx * (1 - fy) +
-        h01 * (1 - fx) * fy +
-        h11 * fx * fy;
+      // Handle NaN (no data) - use 0 as fallback
+      if (Number.isNaN(elevation)) {
+        elevation = 0;
+      }
 
       // Apply vertical exaggeration
       elevation *= ELEVATION.VERTICAL_EXAGGERATION;

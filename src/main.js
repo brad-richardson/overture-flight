@@ -8,7 +8,7 @@ import { initTileManager, getTilesToLoad, getTilesToUnload, isTileLoaded, markTi
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
-import { preloadElevationTiles, unloadDistantElevationTiles, getElevationStats } from './elevation.js';
+import { preloadElevationTiles, unloadDistantElevationTiles } from './elevation.js';
 import { DEFAULT_LOCATION, ELEVATION } from './constants.js';
 
 // Game state
@@ -212,7 +212,9 @@ async function handleTeleport(lat, lng) {
   // Preload elevation tiles for the new location
   if (ELEVATION.TERRAIN_ENABLED) {
     console.log(`Preloading elevation tiles for teleport to (${lat.toFixed(4)}, ${lng.toFixed(4)})...`);
-    preloadElevationTiles(lng, lat, 2); // Don't await, let it load in background
+    preloadElevationTiles(lng, lat, 2).catch((error) => {
+      console.warn('Failed to preload elevation tiles:', error);
+    });
   }
 
   // Teleport plane

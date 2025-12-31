@@ -6,7 +6,6 @@
  * height_meters = (R * 256 + G + B/256) - 32768
  */
 
-import { getOrigin } from './scene.js';
 import { lngLatToTile, tileToBounds } from './tile-manager.js';
 import { ELEVATION } from './constants.js';
 
@@ -44,11 +43,51 @@ function loadImage(url) {
 }
 
 /**
+ * Perform bilinear interpolation on a height grid
+ * @param {Float32Array} heights - Height grid data
+ * @param {number} gridX - X position in grid coordinates (can be fractional)
+ * @param {number} gridY - Y position in grid coordinates (can be fractional)
+ * @param {number} gridSize - Size of the grid (typically ELEVATION.TILE_SIZE)
+ * @returns {number} Interpolated height value
+ */
+function bilinearInterpolate(heights, gridX, gridY, gridSize) {
+  // Clamp grid coordinates to valid range
+  const clampedX = Math.max(0, Math.min(gridSize - 1, gridX));
+  const clampedY = Math.max(0, Math.min(gridSize - 1, gridY));
+
+  const x0 = Math.floor(clampedX);
+  const y0 = Math.floor(clampedY);
+  const x1 = Math.min(x0 + 1, gridSize - 1);
+  const y1 = Math.min(y0 + 1, gridSize - 1);
+
+  const fx = clampedX - x0;
+  const fy = clampedY - y0;
+
+  const h00 = heights[y0 * gridSize + x0];
+  const h10 = heights[y0 * gridSize + x1];
+  const h01 = heights[y1 * gridSize + x0];
+  const h11 = heights[y1 * gridSize + x1];
+
+  // Handle NaN values - if any corner is NaN, return NaN
+  if (Number.isNaN(h00) || Number.isNaN(h10) || Number.isNaN(h01) || Number.isNaN(h11)) {
+    return NaN;
+  }
+
+  // Bilinear interpolation formula
+  return (
+    h00 * (1 - fx) * (1 - fy) +
+    h10 * fx * (1 - fy) +
+    h01 * (1 - fx) * fy +
+    h11 * fx * fy
+  );
+}
+
+/**
  * Load elevation tile and decode to height grid
  * @param {number} x - Tile X coordinate
  * @param {number} y - Tile Y coordinate
  * @param {number} z - Zoom level
- * @returns {Promise<Float32Array>} 256x256 height grid in meters
+ * @returns {Promise<Float32Array>} 256x256 height grid in meters (NaN for no data)
  */
 async function loadElevationTile(x, y, z) {
   const key = `${z}/${x}/${y}`;
@@ -104,16 +143,18 @@ async function loadElevationTile(x, y, z) {
       // Log elevation range for debugging
       let min = Infinity, max = -Infinity;
       for (const h of heights) {
-        if (h < min) min = h;
-        if (h > max) max = h;
+        if (!Number.isNaN(h)) {
+          if (h < min) min = h;
+          if (h > max) max = h;
+        }
       }
       console.log(`Elevation tile ${key}: range ${min.toFixed(1)}m to ${max.toFixed(1)}m`);
 
       return heights;
     } catch (error) {
       console.error(`Failed to load elevation tile ${key}:`, error);
-      // Cache a flat elevation on error (sea level)
-      const fallback = new Float32Array(ELEVATION.TILE_SIZE * ELEVATION.TILE_SIZE).fill(0);
+      // Cache NaN values to indicate no data (handles below-sea-level areas correctly)
+      const fallback = new Float32Array(ELEVATION.TILE_SIZE * ELEVATION.TILE_SIZE).fill(NaN);
       elevationCache.set(key, { heights: fallback, loading: false });
       pendingLoads.delete(key);
       return fallback;
@@ -122,6 +163,21 @@ async function loadElevationTile(x, y, z) {
 
   pendingLoads.set(key, loadPromise);
   return loadPromise;
+}
+
+/**
+ * Validate geographic coordinates
+ * @param {number} lng - Longitude
+ * @param {number} lat - Latitude
+ * @returns {boolean} True if coordinates are valid
+ */
+function isValidCoordinate(lng, lat) {
+  return (
+    typeof lng === 'number' && !Number.isNaN(lng) &&
+    typeof lat === 'number' && !Number.isNaN(lat) &&
+    lng >= -180 && lng <= 180 &&
+    lat >= -90 && lat <= 90
+  );
 }
 
 /**
@@ -140,9 +196,14 @@ function getElevationTileInfo(lng, lat) {
  * Get terrain height at a geographic coordinate using bilinear interpolation
  * @param {number} lng - Longitude
  * @param {number} lat - Latitude
- * @returns {number} Height in meters (0 if not loaded)
+ * @returns {number} Height in meters (0 if not loaded or invalid coordinates)
  */
 export function getTerrainHeight(lng, lat) {
+  // Validate input coordinates
+  if (!isValidCoordinate(lng, lat)) {
+    return 0;
+  }
+
   const { key, x, y, z } = getElevationTileInfo(lng, lat);
 
   const cached = elevationCache.get(key);
@@ -163,28 +224,11 @@ export function getTerrainHeight(lng, lat) {
   const gridX = relX * (ELEVATION.TILE_SIZE - 1);
   const gridY = relY * (ELEVATION.TILE_SIZE - 1);
 
-  // Bilinear interpolation
-  const x0 = Math.floor(gridX);
-  const y0 = Math.floor(gridY);
-  const x1 = Math.min(x0 + 1, ELEVATION.TILE_SIZE - 1);
-  const y1 = Math.min(y0 + 1, ELEVATION.TILE_SIZE - 1);
+  // Use shared bilinear interpolation helper
+  const height = bilinearInterpolate(heights, gridX, gridY, ELEVATION.TILE_SIZE);
 
-  const fx = gridX - x0;
-  const fy = gridY - y0;
-
-  const h00 = heights[y0 * ELEVATION.TILE_SIZE + x0];
-  const h10 = heights[y0 * ELEVATION.TILE_SIZE + x1];
-  const h01 = heights[y1 * ELEVATION.TILE_SIZE + x0];
-  const h11 = heights[y1 * ELEVATION.TILE_SIZE + x1];
-
-  // Bilinear interpolation formula
-  const height =
-    h00 * (1 - fx) * (1 - fy) +
-    h10 * fx * (1 - fy) +
-    h01 * (1 - fx) * fy +
-    h11 * fx * fy;
-
-  return height;
+  // Return 0 for NaN (no data) to avoid physics issues
+  return Number.isNaN(height) ? 0 : height;
 }
 
 /**
@@ -194,6 +238,10 @@ export function getTerrainHeight(lng, lat) {
  * @returns {Promise<number>} Height in meters
  */
 export async function getTerrainHeightAsync(lng, lat) {
+  if (!isValidCoordinate(lng, lat)) {
+    return 0;
+  }
+
   const { x, y, z } = getElevationTileInfo(lng, lat);
   await loadElevationTile(x, y, z);
   return getTerrainHeight(lng, lat);
@@ -207,6 +255,11 @@ export async function getTerrainHeightAsync(lng, lat) {
  * @returns {Promise<void>}
  */
 export async function preloadElevationTiles(lng, lat, radius = 2) {
+  if (!isValidCoordinate(lng, lat)) {
+    console.warn('Invalid coordinates for elevation preload');
+    return;
+  }
+
   const z = ELEVATION.ZOOM;
   const [centerX, centerY] = lngLatToTile(lng, lat, z);
 
@@ -244,15 +297,16 @@ export async function getElevationDataForTile(tileX, tileY) {
 }
 
 /**
- * Check if elevation tile is loaded and available
- * @param {number} tileX
- * @param {number} tileY
- * @returns {boolean}
+ * Sample elevation from a height grid using bilinear interpolation
+ * Exported for use in terrain mesh generation
+ * @param {Float32Array} heights - Height grid data
+ * @param {number} gridX - X position in grid coordinates
+ * @param {number} gridY - Y position in grid coordinates
+ * @param {number} gridSize - Size of the grid
+ * @returns {number} Interpolated height value
  */
-export function isElevationTileLoaded(tileX, tileY) {
-  const key = `${ELEVATION.ZOOM}/${tileX}/${tileY}`;
-  const cached = elevationCache.get(key);
-  return cached && !cached.loading && cached.heights !== null;
+export function sampleElevation(heights, gridX, gridY, gridSize) {
+  return bilinearInterpolate(heights, gridX, gridY, gridSize);
 }
 
 /**
@@ -262,6 +316,10 @@ export function isElevationTileLoaded(tileX, tileY) {
  * @param {number} maxDistance - Max tile distance before unloading (default 4)
  */
 export function unloadDistantElevationTiles(lng, lat, maxDistance = 4) {
+  if (!isValidCoordinate(lng, lat)) {
+    return;
+  }
+
   const z = ELEVATION.ZOOM;
   const [centerX, centerY] = lngLatToTile(lng, lat, z);
 
@@ -275,23 +333,4 @@ export function unloadDistantElevationTiles(lng, lat, maxDistance = 4) {
       console.log(`Unloaded distant elevation tile ${key}`);
     }
   }
-}
-
-/**
- * Get statistics about loaded elevation tiles
- * @returns {{loaded: number, loading: number, cacheSize: number}}
- */
-export function getElevationStats() {
-  let loaded = 0;
-  let loading = 0;
-
-  for (const [, value] of elevationCache) {
-    if (value.loading) {
-      loading++;
-    } else if (value.heights) {
-      loaded++;
-    }
-  }
-
-  return { loaded, loading, cacheSize: elevationCache.size };
 }
