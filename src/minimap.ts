@@ -16,18 +16,41 @@ let modal: HTMLElement | null = null;
 let lockBtn: HTMLElement | null = null;
 let coordsDisplay: HTMLElement | null = null;
 
+// Event listener references for cleanup
+let escapeKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+// Rate limiting for Nominatim API (max 1 request per second)
+let lastSearchTime = 0;
+const SEARCH_RATE_LIMIT_MS = 1000;
+
+// Focusable elements for focus trap
+let focusableElements: HTMLElement[] = [];
+let firstFocusable: HTMLElement | null = null;
+let lastFocusable: HTMLElement | null = null;
+
 /**
- * Create plane marker element
+ * Creates the plane marker element with a nested rotation container.
+ * Uses a nested element for rotation to avoid conflicts with MapLibre's
+ * positioning transforms on the parent element.
+ *
+ * @returns The marker container element
  */
-function createPlaneMarkerElement(heading: number = 0): HTMLElement {
-  const el = document.createElement('div');
-  el.className = 'minimap-plane-marker';
-  el.style.transform = `rotate(${heading}deg)`;
-  return el;
+function createPlaneMarkerElement(): HTMLElement {
+  const container = document.createElement('div');
+  container.className = 'minimap-plane-marker';
+
+  // Use a nested element for rotation to avoid transform conflicts
+  const rotator = document.createElement('div');
+  rotator.className = 'minimap-plane-rotator';
+  container.appendChild(rotator);
+
+  return container;
 }
 
 /**
- * Create target marker element
+ * Creates the target marker element for teleport destination.
+ *
+ * @returns The target marker element with pulse animation
  */
 function createTargetMarkerElement(): HTMLElement {
   const el = document.createElement('div');
@@ -36,7 +59,9 @@ function createTargetMarkerElement(): HTMLElement {
 }
 
 /**
- * Update lock button appearance
+ * Updates the lock/unlock button appearance based on current following state.
+ * Changes icon, text, and styling to reflect whether the map is following
+ * the plane or unlocked for manual panning.
  */
 function updateLockButton(): void {
   if (!lockBtn) return;
@@ -60,18 +85,39 @@ function updateLockButton(): void {
 }
 
 /**
- * Update coordinates display
+ * Updates the coordinates display with labeled lat/lng values.
+ *
+ * @param lng - Longitude in decimal degrees
+ * @param lat - Latitude in decimal degrees
  */
 function updateCoordsDisplay(lng: number, lat: number): void {
   if (!coordsDisplay) return;
-  coordsDisplay.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  coordsDisplay.textContent = `Lat: ${lat.toFixed(5)}, Lon: ${lng.toFixed(5)}`;
 }
 
 /**
- * Perform geocoding search
+ * Performs geocoding search using the Nominatim API.
+ *
+ * Nominatim has a rate limit of 1 request per second. This function
+ * implements client-side rate limiting to prevent API throttling.
+ *
+ * @param query - The location search query string
+ * @throws Displays user-friendly error messages for various failure modes
+ *
+ * @see https://nominatim.org/release-docs/latest/api/Search/
  */
 async function searchLocation(query: string): Promise<void> {
   if (!query.trim() || !map) return;
+
+  // Rate limiting check
+  const now = Date.now();
+  const timeSinceLastSearch = now - lastSearchTime;
+  if (timeSinceLastSearch < SEARCH_RATE_LIMIT_MS) {
+    const waitTime = Math.ceil((SEARCH_RATE_LIMIT_MS - timeSinceLastSearch) / 1000);
+    alert(`Please wait ${waitTime} second${waitTime > 1 ? 's' : ''} before searching again.`);
+    return;
+  }
+  lastSearchTime = now;
 
   try {
     const response = await fetch(
@@ -82,6 +128,15 @@ async function searchLocation(query: string): Promise<void> {
         },
       }
     );
+
+    if (!response.ok) {
+      if (response.status === 429) {
+        alert('Too many requests. Please wait a moment before searching again.');
+        return;
+      }
+      throw new Error(`HTTP ${response.status}`);
+    }
+
     const results = await response.json() as Array<{ lat: string; lon: string }>;
 
     if (results.length > 0) {
@@ -106,16 +161,24 @@ async function searchLocation(query: string): Promise<void> {
       // Update coords
       updateCoordsDisplay(lngNum, latNum);
     } else {
-      alert('Location not found');
+      alert(`No results found for "${query}". Try a different search term.`);
     }
   } catch (e) {
     console.error('Geocoding failed:', e);
-    alert('Search failed. Please try again.');
+    if (e instanceof TypeError && e.message.includes('fetch')) {
+      alert('Network error. Please check your internet connection.');
+    } else {
+      alert('Search failed due to a server error. Please try again later.');
+    }
   }
 }
 
 /**
- * Show target marker at a location
+ * Shows the target marker at the specified location.
+ * Removes any existing target marker before creating a new one.
+ *
+ * @param lng - Longitude for the marker position
+ * @param lat - Latitude for the marker position
  */
 function showTargetMarker(lng: number, lat: number): void {
   if (!map) return;
@@ -135,7 +198,7 @@ function showTargetMarker(lng: number, lat: number): void {
 }
 
 /**
- * Hide target marker
+ * Hides and removes the target marker from the map.
  */
 function hideTargetMarker(): void {
   if (targetMarker) {
@@ -145,7 +208,11 @@ function hideTargetMarker(): void {
 }
 
 /**
- * Handle map click for teleportation
+ * Handles click events on the map for teleportation.
+ * Shows a target marker and teleports the plane after a brief delay
+ * for visual feedback.
+ *
+ * @param e - The MapLibre mouse event containing click coordinates
  */
 function handleMapClick(e: maplibregl.MapMouseEvent): void {
   if (!onTeleportCallback) return;
@@ -169,18 +236,73 @@ function handleMapClick(e: maplibregl.MapMouseEvent): void {
 }
 
 /**
- * Open the minimap modal
+ * Sets up focus trap for the modal to ensure keyboard users
+ * cannot tab out to background elements (WCAG compliance).
+ */
+function setupFocusTrap(): void {
+  if (!modal) return;
+
+  // Find all focusable elements within the modal
+  const focusableSelectors = [
+    'button:not([disabled])',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])'
+  ].join(', ');
+
+  focusableElements = Array.from(modal.querySelectorAll<HTMLElement>(focusableSelectors));
+
+  if (focusableElements.length > 0) {
+    firstFocusable = focusableElements[0];
+    lastFocusable = focusableElements[focusableElements.length - 1];
+  }
+}
+
+/**
+ * Handles keyboard navigation within the modal for focus trapping.
+ *
+ * @param e - The keyboard event
+ */
+function handleFocusTrap(e: KeyboardEvent): void {
+  if (e.key !== 'Tab' || !isOpen) return;
+
+  if (e.shiftKey) {
+    // Shift+Tab: if on first element, wrap to last
+    if (document.activeElement === firstFocusable) {
+      e.preventDefault();
+      lastFocusable?.focus();
+    }
+  } else {
+    // Tab: if on last element, wrap to first
+    if (document.activeElement === lastFocusable) {
+      e.preventDefault();
+      firstFocusable?.focus();
+    }
+  }
+}
+
+/**
+ * Opens the minimap modal and sets up focus management.
+ * Resets to following mode and centers on the plane position.
  */
 function openModal(): void {
   if (!modal || !map) return;
 
   isOpen = true;
-  modal.classList.add('active');
+  modal.classList.add('minimap-modal-open');
 
   // Reset to following mode when opening
   isFollowing = true;
   updateLockButton();
   hideTargetMarker();
+
+  // Setup focus trap
+  setupFocusTrap();
+
+  // Focus first focusable element
+  setTimeout(() => {
+    firstFocusable?.focus();
+  }, 100);
 
   // Resize map to fit container
   setTimeout(() => {
@@ -196,18 +318,24 @@ function openModal(): void {
 }
 
 /**
- * Close the minimap modal
+ * Closes the minimap modal and cleans up state.
  */
 function closeModal(): void {
   if (!modal) return;
 
   isOpen = false;
-  modal.classList.remove('active');
+  modal.classList.remove('minimap-modal-open');
   hideTargetMarker();
 }
 
 /**
- * Initialize the minimap modal
+ * Initializes the minimap modal with MapLibre GL.
+ *
+ * Sets up the map instance, markers, event listeners, and UI controls.
+ * This function should be called once during application initialization.
+ *
+ * @param onTeleport - Callback function invoked when user selects a teleport location.
+ *                     Receives latitude and longitude as parameters.
  */
 export function initMinimap(onTeleport: (lat: number, lng: number) => void): void {
   onTeleportCallback = onTeleport;
@@ -294,19 +422,27 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
     closeBtn.addEventListener('click', closeModal);
   }
 
-  // Click outside to close
+  // Click outside to close (check if click is directly on backdrop)
   modal.addEventListener('click', (e) => {
     if (e.target === modal) {
       closeModal();
     }
   });
 
-  // Escape key to close
-  document.addEventListener('keydown', (e) => {
+  // Remove existing escape handler if present (prevents duplicates during HMR)
+  if (escapeKeyHandler) {
+    document.removeEventListener('keydown', escapeKeyHandler);
+  }
+
+  // Create and store escape key handler
+  escapeKeyHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && isOpen) {
       closeModal();
     }
-  });
+    // Handle focus trap
+    handleFocusTrap(e);
+  };
+  document.addEventListener('keydown', escapeKeyHandler);
 
   // Lock/unlock button
   if (lockBtn) {
@@ -382,8 +518,13 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
 }
 
 /**
- * Update the minimap with current plane state
- * Called every frame from the game loop
+ * Updates the minimap with the current plane state.
+ *
+ * This function is called every frame from the game loop to keep
+ * the plane marker position and rotation synchronized. When in
+ * following mode, the map center is also updated to track the plane.
+ *
+ * @param planeState - The current plane state containing position and heading
  */
 export function updateMinimap(planeState: PlaneState): void {
   currentPlaneState = planeState;
@@ -393,10 +534,11 @@ export function updateMinimap(planeState: PlaneState): void {
   // Update plane marker position
   planeMarker.setLngLat([planeState.lng, planeState.lat]);
 
-  // Rotate plane marker to match heading
+  // Rotate the nested rotator element to avoid transform conflicts
   const markerEl = planeMarker.getElement();
-  if (markerEl) {
-    markerEl.style.transform = `rotate(${planeState.heading}deg)`;
+  const rotator = markerEl?.querySelector('.minimap-plane-rotator') as HTMLElement | null;
+  if (rotator) {
+    rotator.style.transform = `rotate(${planeState.heading}deg)`;
   }
 
   // Follow plane if locked
@@ -407,7 +549,9 @@ export function updateMinimap(planeState: PlaneState): void {
 }
 
 /**
- * Check if minimap modal is open
+ * Checks if the minimap modal is currently open.
+ *
+ * @returns True if the modal is open, false otherwise
  */
 export function isMinimapOpen(): boolean {
   return isOpen;
