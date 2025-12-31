@@ -3,168 +3,118 @@ import * as THREE from 'three';
 /**
  * Sky System for Overture Flight Simulator
  *
- * Features:
- * - Procedural atmospheric sky with Rayleigh scattering simulation
- * - Visible sun disk
- * - Procedural clouds at realistic altitudes
- * - Atmospheric fog/haze
+ * Creates a procedural daytime sky with:
+ * - Gradient sky dome (darker blue at zenith, lighter near horizon)
+ * - Visible sun disk with glow effects
+ * - Multi-layer procedural clouds at realistic altitudes
+ * - Atmospheric fog/haze for depth perception
+ *
+ * Side effects on initialization:
+ * - Sets scene.background to null (sky dome replaces solid color)
+ * - Adds exponential fog to scene.fog
  */
 
-// Sky configuration
+// ============================================================================
+// Configuration
+// ============================================================================
+
 export interface SkyConfig {
   sunPosition: THREE.Vector3;
-  turbidity: number;        // Atmospheric turbidity (haziness) 1-10
-  rayleigh: number;         // Rayleigh scattering coefficient
-  mieCoefficient: number;   // Mie scattering coefficient
-  mieDirectionalG: number;  // Mie directional parameter
-  cloudDensity: number;     // 0-1 cloud coverage
-  cloudAltitude: number;    // Cloud layer altitude in meters
+  turbidity: number;        // Atmospheric haziness 1-10 (affects horizon color)
+  cloudDensity: number;     // Cloud coverage 0-1
+  cloudAltitude: number;    // Base cloud layer altitude in meters
   fogDensity: number;       // Atmospheric fog density
+  fogColor: number;         // Fog color (hex)
 }
 
 const DEFAULT_CONFIG: SkyConfig = {
   sunPosition: new THREE.Vector3(1000, 2000, 1000),
   turbidity: 2,
-  rayleigh: 1.5,
-  mieCoefficient: 0.005,
-  mieDirectionalG: 0.8,
   cloudDensity: 0.4,
   cloudAltitude: 3000,
-  fogDensity: 0.00008
+  fogDensity: 0.00008,
+  fogColor: 0x9dc4e8
 };
 
-// Sky shader - atmospheric scattering
+// ============================================================================
+// Constants - Sky Geometry
+// ============================================================================
+
+/** Radius of the sky dome sphere in meters */
+const SKY_DOME_RADIUS = 90000;
+
+/** Distance from camera to place the sun mesh */
+const SUN_DISTANCE = 80000;
+
+/** Radius of the visible sun disk in meters */
+const SUN_DISK_RADIUS = 500;
+
+/** Radius of the inner sun glow in meters */
+const SUN_INNER_GLOW_RADIUS = 800;
+
+/** Radius of the outer sun glow in meters */
+const SUN_OUTER_GLOW_RADIUS = 1200;
+
+// ============================================================================
+// Sky Shader - Simple gradient with sun
+// ============================================================================
+
 const skyVertexShader = `
   varying vec3 vWorldPosition;
-  varying vec3 vSunDirection;
-  varying float vSunfade;
-  varying vec3 vBetaR;
-  varying vec3 vBetaM;
-  varying float vSunE;
-
-  uniform vec3 sunPosition;
-  uniform float rayleigh;
-  uniform float turbidity;
-  uniform float mieCoefficient;
-
-  const float e = 2.71828182845904523536028747135266249775724709369995957;
-  const float pi = 3.141592653589793238462643383279502884197169;
-  const float n = 1.0003; // refractive index of air
-  const float N = 2.545E25; // number of molecules per unit volume
-  const float pn = 0.035; // depolarization factor for standard air
-  const vec3 lambda = vec3(680E-9, 550E-9, 450E-9);
-  const vec3 K = vec3(0.686, 0.678, 0.666);
-  const float v = 4.0;
-  const float rayleighZenithLength = 8.4E3;
-  const float mieZenithLength = 1.25E3;
-  const vec3 up = vec3(0.0, 1.0, 0.0);
-  const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848692873900859324;
-  const float cutoffAngle = pi / 1.95;
-  const float steepness = 1.5;
-
-  vec3 totalRayleigh(vec3 lambda) {
-    return (8.0 * pow(pi, 3.0) * pow(pow(n, 2.0) - 1.0, 2.0) * (6.0 + 3.0 * pn)) /
-           (3.0 * N * pow(lambda, vec3(4.0)) * (6.0 - 7.0 * pn));
-  }
-
-  float rayleighPhase(float cosTheta) {
-    return (3.0 / (16.0 * pi)) * (1.0 + pow(cosTheta, 2.0));
-  }
-
-  vec3 totalMie(vec3 lambda, vec3 K, float T) {
-    float c = (0.2 * T) * 10E-18;
-    return 0.434 * c * pi * pow((2.0 * pi) / lambda, vec3(v - 2.0)) * K;
-  }
-
-  float hgPhase(float cosTheta, float g) {
-    return (1.0 / (4.0 * pi)) * ((1.0 - pow(g, 2.0)) / pow(1.0 - 2.0 * g * cosTheta + pow(g, 2.0), 1.5));
-  }
-
-  float sunIntensity(float zenithAngleCos) {
-    return max(0.0, 1.0 - exp(-((cutoffAngle - acos(zenithAngleCos)) / steepness)));
-  }
 
   void main() {
     vec4 worldPosition = modelMatrix * vec4(position, 1.0);
     vWorldPosition = worldPosition.xyz;
-
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-
-    vSunDirection = normalize(sunPosition);
-    vSunE = sunIntensity(dot(vSunDirection, up));
-    vSunfade = 1.0 - clamp(1.0 - exp((sunPosition.y / 450000.0)), 0.0, 1.0);
-
-    float rayleighCoefficient = rayleigh - (1.0 * (1.0 - vSunfade));
-    vBetaR = totalRayleigh(lambda) * rayleighCoefficient;
-    vBetaM = totalMie(lambda, K, turbidity) * mieCoefficient;
   }
 `;
 
 const skyFragmentShader = `
-  varying vec3 vWorldPosition;
-  varying vec3 vSunDirection;
-  varying float vSunfade;
-  varying vec3 vBetaR;
-  varying vec3 vBetaM;
-  varying float vSunE;
-
-  uniform float mieDirectionalG;
   uniform vec3 sunPosition;
+  uniform float turbidity;
 
-  const float pi = 3.141592653589793238462643383279502884197169;
-  const float rayleighZenithLength = 8.4E3;
-  const float mieZenithLength = 1.25E3;
-  const vec3 up = vec3(0.0, 1.0, 0.0);
-  const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848692873900859324;
-
-  float rayleighPhase(float cosTheta) {
-    return (3.0 / (16.0 * pi)) * (1.0 + pow(cosTheta, 2.0));
-  }
-
-  float hgPhase(float cosTheta, float g) {
-    return (1.0 / (4.0 * pi)) * ((1.0 - pow(g, 2.0)) / pow(1.0 - 2.0 * g * cosTheta + pow(g, 2.0), 1.5));
-  }
+  varying vec3 vWorldPosition;
 
   void main() {
-    vec3 direction = normalize(vWorldPosition - cameraPosition);
-    float zenithAngle = acos(max(0.0, dot(up, direction)));
-    float inverse = 1.0 / (cos(zenithAngle) + 0.15 * pow(93.885 - ((zenithAngle * 180.0) / pi), -1.253));
-    float sR = rayleighZenithLength * inverse;
-    float sM = mieZenithLength * inverse;
+    // Get view direction (normalized position on sky dome)
+    vec3 direction = normalize(vWorldPosition);
 
-    vec3 Fex = exp(-(vBetaR * sR + vBetaM * sM));
+    // Height factor: 0 at horizon, 1 at zenith
+    float height = max(0.0, direction.y);
 
-    float cosTheta = dot(direction, vSunDirection);
-    float rPhase = rayleighPhase(cosTheta * 0.5 + 0.5);
-    vec3 betaRTheta = vBetaR * rPhase;
+    // Sky colors - fixed daytime palette
+    vec3 zenithColor = vec3(0.25, 0.55, 0.95);   // Deep blue at top
+    vec3 horizonColor = vec3(0.65, 0.82, 0.95);  // Light blue-white at horizon
 
-    float mPhase = hgPhase(cosTheta, mieDirectionalG);
-    vec3 betaMTheta = vBetaM * mPhase;
+    // Add slight warmth based on turbidity (haziness)
+    float hazeAmount = (turbidity - 1.0) / 9.0;  // 0-1 based on turbidity 1-10
+    horizonColor = mix(horizonColor, vec3(0.85, 0.85, 0.8), hazeAmount * 0.3);
 
-    vec3 Lin = pow(vSunE * ((betaRTheta + betaMTheta) / (vBetaR + vBetaM)) * (1.0 - Fex), vec3(1.5));
-    Lin *= mix(vec3(1.0), pow(vSunE * ((betaRTheta + betaMTheta) / (vBetaR + vBetaM)) * Fex, vec3(0.5)),
-               clamp(pow(1.0 - dot(up, vSunDirection), 5.0), 0.0, 1.0));
+    // Smooth gradient from horizon to zenith
+    float gradientFactor = pow(height, 0.8);
+    vec3 skyColor = mix(horizonColor, zenithColor, gradientFactor);
 
-    // Night sky
-    float theta = acos(direction.y);
-    float phi = atan(direction.z, direction.x);
-    vec2 uv = vec2(phi, theta) / vec2(2.0 * pi, pi) + vec2(0.5, 0.0);
-    vec3 L0 = vec3(0.1) * Fex;
+    // Sun glow effect
+    vec3 sunDir = normalize(sunPosition);
+    float sunAngle = dot(direction, sunDir);
 
-    // Sun disk
-    float sundisk = smoothstep(sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta);
-    L0 += (vSunE * 19000.0 * Fex) * sundisk;
+    // Atmospheric glow around sun
+    float sunGlow = pow(max(0.0, sunAngle), 8.0) * 0.4;
+    vec3 glowColor = vec3(1.0, 0.95, 0.8);
+    skyColor += glowColor * sunGlow;
 
-    vec3 texColor = (Lin + L0) * 0.04 + vec3(0.0, 0.0003, 0.00075);
+    // Subtle golden tint near horizon in sun direction
+    float horizonSunGlow = pow(max(0.0, sunAngle), 2.0) * (1.0 - height) * 0.15;
+    skyColor += vec3(0.3, 0.2, 0.05) * horizonSunGlow;
 
-    // Tone mapping
-    vec3 retColor = pow(texColor, vec3(1.0 / (1.2 + (1.2 * vSunfade))));
-
-    gl_FragColor = vec4(retColor, 1.0);
+    gl_FragColor = vec4(skyColor, 1.0);
   }
 `;
 
-// Cloud shader
+// ============================================================================
+// Cloud Shader
+// ============================================================================
+
 const cloudVertexShader = `
   varying vec2 vUv;
   varying vec3 vWorldPosition;
@@ -304,20 +254,39 @@ const cloudFragmentShader = `
   }
 `;
 
-// Sky system class
+// ============================================================================
+// Cloud Layer Configuration
+// ============================================================================
+
+interface CloudLayerConfig {
+  altitudeOffset: number;  // Offset from base cloud altitude
+  size: number;            // Size of cloud plane
+  opacity: number;         // Layer opacity
+}
+
+const CLOUD_LAYERS: CloudLayerConfig[] = [
+  { altitudeOffset: 0, size: 80000, opacity: 0.7 },
+  { altitudeOffset: 500, size: 70000, opacity: 0.5 },
+  { altitudeOffset: 1000, size: 60000, opacity: 0.3 }
+];
+
+// ============================================================================
+// Sky System Class
+// ============================================================================
+
 export class SkySystem {
   private scene: THREE.Scene;
   private config: SkyConfig;
   private skyMesh: THREE.Mesh | null = null;
   private sunMesh: THREE.Mesh | null = null;
   private cloudLayers: THREE.Mesh[] = [];
-  private skyUniforms: { [key: string]: THREE.IUniform } = {};
-  private cloudUniforms: { [key: string]: THREE.IUniform } = {};
+  private skyUniforms: { [key: string]: THREE.IUniform };
   private time: number = 0;
 
   constructor(scene: THREE.Scene, config: Partial<SkyConfig> = {}) {
     this.scene = scene;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.skyUniforms = {};
     this.init();
   }
 
@@ -329,13 +298,9 @@ export class SkySystem {
   }
 
   private createSky(): void {
-    // Sky uniforms for shader
     this.skyUniforms = {
       sunPosition: { value: this.config.sunPosition.clone() },
-      rayleigh: { value: this.config.rayleigh },
-      turbidity: { value: this.config.turbidity },
-      mieCoefficient: { value: this.config.mieCoefficient },
-      mieDirectionalG: { value: this.config.mieDirectionalG }
+      turbidity: { value: this.config.turbidity }
     };
 
     const skyMaterial = new THREE.ShaderMaterial({
@@ -346,19 +311,17 @@ export class SkySystem {
       depthWrite: false
     });
 
-    // Large sphere for sky dome
-    const skyGeometry = new THREE.SphereGeometry(90000, 32, 32);
+    const skyGeometry = new THREE.SphereGeometry(SKY_DOME_RADIUS, 32, 32);
     this.skyMesh = new THREE.Mesh(skyGeometry, skyMaterial);
-    this.skyMesh.renderOrder = -1000; // Render first
+    this.skyMesh.renderOrder = -1000;
     this.scene.add(this.skyMesh);
 
-    // Remove the solid color background
+    // Remove solid color background - sky dome replaces it
     this.scene.background = null;
   }
 
   private createSun(): void {
-    // Create a glowing sun sprite
-    const sunGeometry = new THREE.SphereGeometry(500, 32, 32);
+    const sunGeometry = new THREE.SphereGeometry(SUN_DISK_RADIUS, 32, 32);
     const sunMaterial = new THREE.MeshBasicMaterial({
       color: 0xffffee,
       transparent: true,
@@ -367,14 +330,13 @@ export class SkySystem {
 
     this.sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
 
-    // Position sun based on light direction
     const sunDir = this.config.sunPosition.clone().normalize();
-    this.sunMesh.position.copy(sunDir.multiplyScalar(80000));
+    this.sunMesh.position.copy(sunDir.multiplyScalar(SUN_DISTANCE));
 
     this.scene.add(this.sunMesh);
 
-    // Add sun glow
-    const glowGeometry = new THREE.SphereGeometry(800, 32, 32);
+    // Inner glow
+    const glowGeometry = new THREE.SphereGeometry(SUN_INNER_GLOW_RADIUS, 32, 32);
     const glowMaterial = new THREE.MeshBasicMaterial({
       color: 0xffff88,
       transparent: true,
@@ -384,8 +346,8 @@ export class SkySystem {
     const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
     this.sunMesh.add(glowMesh);
 
-    // Add outer glow
-    const outerGlowGeometry = new THREE.SphereGeometry(1200, 32, 32);
+    // Outer glow
+    const outerGlowGeometry = new THREE.SphereGeometry(SUN_OUTER_GLOW_RADIUS, 32, 32);
     const outerGlowMaterial = new THREE.MeshBasicMaterial({
       color: 0xffeeaa,
       transparent: true,
@@ -397,41 +359,32 @@ export class SkySystem {
   }
 
   private createClouds(): void {
-    this.cloudUniforms = {
-      time: { value: 0 },
-      cloudDensity: { value: this.config.cloudDensity },
-      sunPosition: { value: this.config.sunPosition.clone() },
-      opacity: { value: 0.85 }
-    };
-
-    const cloudMaterial = new THREE.ShaderMaterial({
-      uniforms: this.cloudUniforms,
-      vertexShader: cloudVertexShader,
-      fragmentShader: cloudFragmentShader,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    });
-
-    // Create multiple cloud layers at different altitudes
-    const cloudLayerConfigs = [
-      { altitude: this.config.cloudAltitude, size: 80000, opacity: 0.7 },
-      { altitude: this.config.cloudAltitude + 500, size: 70000, opacity: 0.5 },
-      { altitude: this.config.cloudAltitude + 1000, size: 60000, opacity: 0.3 }
-    ];
-
-    cloudLayerConfigs.forEach((layerConfig, index) => {
-      const cloudGeometry = new THREE.PlaneGeometry(layerConfig.size, layerConfig.size, 1, 1);
-      const layerMaterial = cloudMaterial.clone();
-      layerMaterial.uniforms = {
-        ...this.cloudUniforms,
+    CLOUD_LAYERS.forEach((layerConfig, index) => {
+      // Create independent uniforms for each layer
+      const layerUniforms = {
+        time: { value: 0 },
+        cloudDensity: { value: this.config.cloudDensity },
+        sunPosition: { value: this.config.sunPosition.clone() },
         opacity: { value: layerConfig.opacity }
       };
 
-      const cloudMesh = new THREE.Mesh(cloudGeometry, layerMaterial);
+      const cloudMaterial = new THREE.ShaderMaterial({
+        uniforms: layerUniforms,
+        vertexShader: cloudVertexShader,
+        fragmentShader: cloudFragmentShader,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      });
+
+      const cloudGeometry = new THREE.PlaneGeometry(layerConfig.size, layerConfig.size, 1, 1);
+      const cloudMesh = new THREE.Mesh(cloudGeometry, cloudMaterial);
       cloudMesh.rotation.x = -Math.PI / 2;
-      cloudMesh.position.y = layerConfig.altitude;
+      cloudMesh.position.y = this.config.cloudAltitude + layerConfig.altitudeOffset;
       cloudMesh.renderOrder = -900 + index;
+
+      // Store reference to uniforms on the mesh for updates
+      (cloudMesh as any).cloudUniforms = layerUniforms;
 
       this.cloudLayers.push(cloudMesh);
       this.scene.add(cloudMesh);
@@ -439,20 +392,18 @@ export class SkySystem {
   }
 
   private setupFog(): void {
-    // Exponential fog for atmospheric depth
-    this.scene.fog = new THREE.FogExp2(0x9dc4e8, this.config.fogDensity);
+    this.scene.fog = new THREE.FogExp2(this.config.fogColor, this.config.fogDensity);
   }
 
   /**
-   * Update the sky system (call in animation loop)
+   * Update the sky system - call each frame
    */
   public update(deltaTime: number, cameraPosition?: THREE.Vector3): void {
     this.time += deltaTime;
 
-    // Update cloud animation
-    if (this.cloudUniforms.time) {
-      this.cloudUniforms.time.value = this.time;
-    }
+    // Pre-calculate wind offset once per frame
+    const windOffsetX = Math.sin(this.time * 0.01) * 1000;
+    const windOffsetZ = Math.cos(this.time * 0.008) * 800;
 
     // Keep sky dome centered on camera
     if (cameraPosition && this.skyMesh) {
@@ -462,14 +413,21 @@ export class SkySystem {
     // Keep sun at consistent visual position relative to camera
     if (cameraPosition && this.sunMesh) {
       const sunDir = this.config.sunPosition.clone().normalize();
-      this.sunMesh.position.copy(cameraPosition).add(sunDir.multiplyScalar(80000));
+      this.sunMesh.position.copy(cameraPosition).add(sunDir.multiplyScalar(SUN_DISTANCE));
     }
 
-    // Move cloud layers slightly with wind
+    // Update cloud layers
     this.cloudLayers.forEach((cloud, index) => {
-      const windSpeed = 0.5 + index * 0.2;
-      cloud.position.x = Math.sin(this.time * 0.01 * windSpeed) * 1000;
-      cloud.position.z = Math.cos(this.time * 0.008 * windSpeed) * 800;
+      // Update time uniform
+      const uniforms = (cloud as any).cloudUniforms;
+      if (uniforms) {
+        uniforms.time.value = this.time;
+      }
+
+      // Apply wind with layer-specific speed multiplier
+      const layerSpeedMultiplier = 1.0 + index * 0.4;
+      cloud.position.x = windOffsetX * layerSpeedMultiplier;
+      cloud.position.z = windOffsetZ * layerSpeedMultiplier;
 
       // Keep clouds centered around camera horizontally
       if (cameraPosition) {
@@ -481,6 +439,7 @@ export class SkySystem {
 
   /**
    * Update sun position (affects sky color and cloud lighting)
+   * Note: Also updates the visual sun mesh position relative to current camera
    */
   public setSunPosition(position: THREE.Vector3): void {
     this.config.sunPosition.copy(position);
@@ -489,13 +448,17 @@ export class SkySystem {
       this.skyUniforms.sunPosition.value.copy(position);
     }
 
-    if (this.cloudUniforms.sunPosition) {
-      this.cloudUniforms.sunPosition.value.copy(position);
-    }
+    // Update cloud uniforms
+    this.cloudLayers.forEach(cloud => {
+      const uniforms = (cloud as any).cloudUniforms;
+      if (uniforms?.sunPosition) {
+        uniforms.sunPosition.value.copy(position);
+      }
+    });
 
     if (this.sunMesh) {
       const sunDir = position.clone().normalize();
-      this.sunMesh.position.copy(sunDir.multiplyScalar(80000));
+      this.sunMesh.position.copy(sunDir.multiplyScalar(SUN_DISTANCE));
     }
   }
 
@@ -504,13 +467,16 @@ export class SkySystem {
    */
   public setCloudDensity(density: number): void {
     this.config.cloudDensity = Math.max(0, Math.min(1, density));
-    if (this.cloudUniforms.cloudDensity) {
-      this.cloudUniforms.cloudDensity.value = this.config.cloudDensity;
-    }
+    this.cloudLayers.forEach(cloud => {
+      const uniforms = (cloud as any).cloudUniforms;
+      if (uniforms?.cloudDensity) {
+        uniforms.cloudDensity.value = this.config.cloudDensity;
+      }
+    });
   }
 
   /**
-   * Set atmospheric turbidity (haziness)
+   * Set atmospheric turbidity (haziness 1-10)
    */
   public setTurbidity(turbidity: number): void {
     this.config.turbidity = Math.max(1, Math.min(10, turbidity));
@@ -530,7 +496,7 @@ export class SkySystem {
   }
 
   /**
-   * Clean up resources
+   * Clean up all resources
    */
   public dispose(): void {
     if (this.skyMesh) {
@@ -554,7 +520,10 @@ export class SkySystem {
   }
 }
 
-// Singleton instance
+// ============================================================================
+// Module API
+// ============================================================================
+
 let skySystemInstance: SkySystem | null = null;
 
 /**

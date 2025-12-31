@@ -96,7 +96,7 @@ export async function initScene(): Promise<{
 }> {
   // Create scene
   scene = new THREE.Scene();
-  // Sky system will set the background (procedural atmospheric sky)
+  // Note: Sky dome replaces solid color background (set to null by initSkySystem)
 
   // Create camera
   const aspect = window.innerWidth / window.innerHeight;
@@ -139,7 +139,6 @@ export async function initScene(): Promise<{
   initSkySystem(scene, {
     sunPosition: sunLight.position.clone(),
     turbidity: 2,
-    rayleigh: 1.5,
     cloudDensity: 0.35,
     cloudAltitude: 3000,
     fogDensity: 0.00006
