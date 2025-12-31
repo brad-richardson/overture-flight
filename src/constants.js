@@ -1,14 +1,22 @@
 // PMTiles URLs for Overture Maps building data
-export const OVERTURE_BUILDINGS_PMTILES = 'pmtiles://https://overturemaps-tiles-us-west-2-beta.s3.amazonaws.com/2024-11-13/buildings.pmtiles';
+// Check https://docs.overturemaps.org/guides/pmtiles/ for latest releases
+// Can be overridden via VITE_PMTILES_URL environment variable
+export const OVERTURE_BUILDINGS_PMTILES = import.meta.env.VITE_PMTILES_URL
+  || 'pmtiles://https://overturemaps-tiles-us-west-2-beta.s3.amazonaws.com/2024-11-13/buildings.pmtiles';
 
 // MapTiler style (requires API key for production)
 // For development, using a free OSM-based style
 export const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
 // PartyKit configuration
-export const PARTYKIT_HOST = import.meta.env.DEV
-  ? 'localhost:1999'
-  : 'flight-sim.your-username.partykit.dev'; // Update with your deployed URL
+// Set VITE_PARTYKIT_HOST environment variable for production deployment
+export const PARTYKIT_HOST = import.meta.env.VITE_PARTYKIT_HOST
+  || (import.meta.env.DEV ? 'localhost:1999' : null);
+
+// Validate PartyKit host is configured in production
+if (!PARTYKIT_HOST && !import.meta.env.DEV) {
+  console.error('VITE_PARTYKIT_HOST environment variable must be set for production builds');
+}
 
 // Flight physics constants
 export const FLIGHT = {

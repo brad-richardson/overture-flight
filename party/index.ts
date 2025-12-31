@@ -24,6 +24,37 @@ const COLORS = [
   '#ec4899', // pink
 ];
 
+// Validation constants
+const LIMITS = {
+  LAT_MIN: -90,
+  LAT_MAX: 90,
+  LNG_MIN: -180,
+  LNG_MAX: 180,
+  ALT_MIN: 0,
+  ALT_MAX: 10000,
+  SPEED_MIN: 0,
+  SPEED_MAX: 500,
+};
+
+/**
+ * Validate and clamp position data
+ */
+function validatePositionData(data: Partial<PlaneState>): Partial<PlaneState> | null {
+  if (typeof data.lat !== 'number' || typeof data.lng !== 'number') {
+    return null;
+  }
+
+  return {
+    lat: Math.max(LIMITS.LAT_MIN, Math.min(LIMITS.LAT_MAX, data.lat)),
+    lng: Math.max(LIMITS.LNG_MIN, Math.min(LIMITS.LNG_MAX, data.lng)),
+    altitude: Math.max(LIMITS.ALT_MIN, Math.min(LIMITS.ALT_MAX, data.altitude || 0)),
+    heading: ((data.heading || 0) % 360 + 360) % 360,
+    pitch: Math.max(-90, Math.min(90, data.pitch || 0)),
+    roll: Math.max(-180, Math.min(180, data.roll || 0)),
+    speed: Math.max(LIMITS.SPEED_MIN, Math.min(LIMITS.SPEED_MAX, data.speed || 0)),
+  };
+}
+
 export default class FlightServer implements Party.Server {
   options: Party.ServerOptions = { hibernate: true };
   planes: Map<string, PlaneState> = new Map();
@@ -73,29 +104,36 @@ export default class FlightServer implements Party.Server {
       const msg = JSON.parse(message);
 
       if (msg.type === 'position') {
+        const validated = validatePositionData(msg.data);
+        if (!validated) {
+          console.warn('Invalid position data from', sender.id);
+          return;
+        }
+
         const existing = this.planes.get(sender.id);
         const plane: PlaneState = {
-          ...msg.data,
+          ...validated,
           id: sender.id,
           color: existing?.color || '#888',
           name: existing?.name,
-        };
+        } as PlaneState;
         this.planes.set(sender.id, plane);
 
-        // Broadcast updated state to all clients
+        // Broadcast updated state to all OTHER clients (exclude sender)
         this.room.broadcast(
           JSON.stringify({
             type: 'sync',
             planes: Object.fromEntries(this.planes),
-          })
+          }),
+          [sender.id]
         );
       }
 
       if (msg.type === 'teleport') {
         const existing = this.planes.get(sender.id);
-        if (existing) {
-          existing.lat = msg.data.lat;
-          existing.lng = msg.data.lng;
+        if (existing && typeof msg.data?.lat === 'number' && typeof msg.data?.lng === 'number') {
+          existing.lat = Math.max(LIMITS.LAT_MIN, Math.min(LIMITS.LAT_MAX, msg.data.lat));
+          existing.lng = Math.max(LIMITS.LNG_MIN, Math.min(LIMITS.LNG_MAX, msg.data.lng));
           existing.altitude = 500;
           existing.heading = 0;
           existing.pitch = 0;
@@ -106,8 +144,8 @@ export default class FlightServer implements Party.Server {
 
       if (msg.type === 'setName') {
         const existing = this.planes.get(sender.id);
-        if (existing) {
-          existing.name = msg.data.name;
+        if (existing && typeof msg.data?.name === 'string') {
+          existing.name = msg.data.name.slice(0, 20); // Limit name length
           this.planes.set(sender.id, existing);
         }
       }

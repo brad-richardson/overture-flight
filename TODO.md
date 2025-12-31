@@ -6,20 +6,20 @@ Critical issues found in existing code that need addressing before continuing.
 
 ### Critical (Must Fix)
 
-- [ ] **constants.js**: Update PartyKit production URL from placeholder `flight-sim.your-username.partykit.dev`
-- [ ] **constants.js**: Consider PMTiles URL versioning strategy (currently hardcoded to `2024-11-13`)
-- [ ] **map.js**: Add terrain source for elevation queries (currently returns 0/null)
-- [ ] **map.js**: Verify `source-layer: 'building'` matches actual PMTiles layer name
-- [ ] **network.js**: Fix `WebSocket.OPEN` reference (not available in ES module context)
-- [ ] **party/index.ts**: Add input validation for position data (lat/lng ranges, altitude limits)
-- [ ] **party/index.ts**: Don't broadcast sync back to sender (wastes bandwidth)
+- [x] **constants.js**: Update PartyKit production URL from placeholder `flight-sim.your-username.partykit.dev`
+- [x] **constants.js**: Consider PMTiles URL versioning strategy (currently hardcoded to `2024-11-13`)
+- [x] **map.js**: Add terrain source for elevation queries (currently returns 0/null)
+- [x] **map.js**: Verify `source-layer: 'building'` matches actual PMTiles layer name
+- [x] **network.js**: Fix `WebSocket.OPEN` reference (not available in ES module context)
+- [x] **party/index.ts**: Add input validation for position data (lat/lng ranges, altitude limits)
+- [x] **party/index.ts**: Don't broadcast sync back to sender (wastes bandwidth)
 
 ### Important (Should Fix)
 
-- [ ] **vite.config.js**: Reconcile GitHub Pages base path with Vercel/Netlify deployment plan
-- [ ] **network.js**: Add reconnection logic for dropped connections
+- [x] **vite.config.js**: Reconcile GitHub Pages base path with Vercel/Netlify deployment plan
+- [x] **network.js**: Add reconnection logic for dropped connections
 - [ ] **main.js**: Add error handling for network connection failures
-- [ ] **other-planes.js**: Implement position interpolation for smooth motion
+- [x] **other-planes.js**: Implement position interpolation for smooth motion
 - [ ] **ui.js**: Add proper User-Agent header for Nominatim API compliance
 - [ ] **ui.js**: Add rate limiting on geocoding search requests
 
@@ -46,7 +46,7 @@ Critical issues found in existing code that need addressing before continuing.
 - [x] Configure MapLibre with base style
 - [x] Add PMTiles protocol for Overture buildings
 - [x] Add fill-extrusion layer using building height
-- [ ] Enable 3D terrain (MapTiler terrain source)
+- [x] Enable 3D terrain (MapTiler terrain source) - via VITE_MAPTILER_KEY env var
 - [x] Set initial camera to NYC
 
 ---

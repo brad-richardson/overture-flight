@@ -3,6 +3,7 @@ import { Protocol } from 'pmtiles';
 import { OVERTURE_BUILDINGS_PMTILES, MAP_STYLE, DEFAULT_LOCATION } from './constants.js';
 
 let map = null;
+let terrainEnabled = false;
 
 /**
  * Initialize the MapLibre map with PMTiles support and 3D buildings
@@ -45,6 +46,8 @@ export async function initMap() {
   });
 
   // Add 3D building extrusion layer
+  // Note: source-layer 'building' matches Overture PMTiles schema
+  // Verify at https://docs.overturemaps.org/schema/reference/buildings/building
   map.addLayer({
     id: 'buildings-3d',
     type: 'fill-extrusion',
@@ -66,6 +69,24 @@ export async function initMap() {
       'fill-extrusion-opacity': 0.85,
     },
   });
+
+  // Add terrain if API key is available
+  // Set VITE_MAPTILER_KEY environment variable to enable terrain
+  const maptilerKey = import.meta.env.VITE_MAPTILER_KEY;
+  if (maptilerKey) {
+    try {
+      map.addSource('terrain', {
+        type: 'raster-dem',
+        url: `https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=${maptilerKey}`,
+        tileSize: 256,
+      });
+      map.setTerrain({ source: 'terrain', exaggeration: 1.0 });
+      terrainEnabled = true;
+      console.log('Terrain enabled');
+    } catch (e) {
+      console.warn('Failed to enable terrain:', e);
+    }
+  }
 
   return map;
 }
@@ -135,9 +156,20 @@ export function queryBuildingsAt(lng, lat) {
  * @returns {number} Elevation in meters
  */
 export function getTerrainElevation(lng, lat) {
-  if (!map) return 0;
+  if (!map || !terrainEnabled) return 0;
 
-  // MapLibre terrain elevation query
-  const elevation = map.queryTerrainElevation([lng, lat]);
-  return elevation || 0;
+  try {
+    const elevation = map.queryTerrainElevation([lng, lat]);
+    return elevation || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+/**
+ * Check if terrain is enabled
+ * @returns {boolean}
+ */
+export function isTerrainEnabled() {
+  return terrainEnabled;
 }
