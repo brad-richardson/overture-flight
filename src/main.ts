@@ -9,7 +9,7 @@ import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles } from './elevation.js';
-import { DEFAULT_LOCATION, ELEVATION } from './constants.js';
+import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS } from './constants.js';
 import { initMobileControls, getJoystickState, getThrottleState, isMobileDevice } from './mobile-controls.js';
 import * as THREE from 'three';
 
@@ -26,6 +26,13 @@ let localId = '';
 let localColor = '#3b82f6';
 let lastTime = 0;
 let isRunning = false;
+
+/**
+ * Generate a unique local ID for offline/single-player mode
+ */
+function generateLocalId(): string {
+  return 'local-' + Math.random().toString(36).substring(2, 11);
+}
 
 // All known players (including self)
 const players = new Map<string, PlaneState>();
@@ -151,6 +158,14 @@ function gameLoop(time: number): void {
  */
 function handleWelcome(msg: WelcomeMessage): void {
   console.log('Welcome! ID:', msg.id, 'Color:', msg.color);
+
+  // Remove the temporary local plane mesh before updating ID
+  const oldLocalId = localId;
+  if (oldLocalId && oldLocalId !== msg.id) {
+    removePlaneMesh(oldLocalId);
+    players.delete(oldLocalId);
+  }
+
   localId = msg.id;
   localColor = msg.color || '#3b82f6';
   setPlaneIdentity(msg.id, msg.color);
@@ -330,6 +345,12 @@ async function init(): Promise<void> {
     // Initialize UI
     initLocationPicker(handleTeleport);
     console.log('UI initialized');
+
+    // Generate local ID and color immediately so plane renders without network
+    localId = generateLocalId();
+    localColor = PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)];
+    setPlaneIdentity(localId, localColor);
+    console.log('Local player initialized:', localId);
 
     // Connect to multiplayer server
     connection = createConnection('global', {
