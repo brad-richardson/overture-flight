@@ -1,5 +1,7 @@
 # Overture Flight Simulator
 
+[![Play Now](https://img.shields.io/badge/Play%20Now-Live%20Demo-brightgreen?logo=github)](https://brad-richardson.github.io/overture-flight/)
+
 A multiplayer 3D flight simulator built with Three.js using real-world building and terrain data from Overture Maps.
 
 ## Features
@@ -58,20 +60,24 @@ npm run build
 
 ```
 src/
-├── main.js          # Game loop and initialization
-├── scene.js         # Three.js scene, camera, renderer
-├── plane.js         # Flight physics and controls
-├── camera.js        # Chase camera logic
-├── tile-manager.js  # PMTiles loading and tile management
-├── buildings.js     # Building extrusion from Overture data
-├── base-layer.js    # Land/water polygons from Overture data
-├── collision.js     # Ground collision detection
-├── network.js       # PartyKit WebSocket client
-├── ui.js            # HUD and UI components
-└── constants.js     # Configuration values
+├── main.ts              # Game loop and initialization
+├── scene.ts             # Three.js scene, camera, renderer
+├── plane.ts             # Flight physics and controls
+├── camera.ts            # Chase camera logic
+├── tile-manager.ts      # PMTiles loading and tile management
+├── buildings.ts         # Building extrusion from Overture data
+├── building-materials.ts # Procedural building materials
+├── base-layer.ts        # Land/water polygons from Overture data
+├── transportation-layer.ts # Roads rendering from Overture data
+├── elevation.ts         # Terrain elevation from Terrarium tiles
+├── collision.ts         # Ground/terrain collision detection
+├── network.ts           # PartyKit WebSocket client
+├── mobile-controls.ts   # Touch controls for mobile devices
+├── ui.ts                # HUD and UI components
+└── constants.ts         # Configuration values
 
 party/
-└── server.js        # PartyKit multiplayer server
+└── index.ts             # PartyKit multiplayer server
 ```
 
 ## Data Sources

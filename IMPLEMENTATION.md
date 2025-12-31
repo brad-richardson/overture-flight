@@ -8,10 +8,12 @@ Build a browser-based multiplayer flight simulator where players fly planes over
 
 | Component              | Technology                                             | Rationale                                                                      |
 | ---------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| **3D Map Rendering**   | MapLibre GL JS                                         | Native PMTiles support, fill-extrusion for 2.5D buildings, good camera control |
+| **3D Rendering**       | Three.js                                               | Full 3D scene control, proper perspective camera, GLTF model support           |
 | **Building Data**      | Overture Maps Buildings PMTiles                        | Open data, includes height attributes, global coverage                         |
+| **Terrain Data**       | AWS Terrarium Tiles                                    | Free elevation tiles, Terrarium RGB encoding                                   |
+| **Road Data**          | Overture Maps Transportation PMTiles                   | Road network for ground detail                                                 |
 | **Multiplayer**        | PartyKit                                               | Simple WebSocket rooms, runs on Cloudflare edge, free tier sufficient          |
-| **Frontend Framework** | Vanilla JS or lightweight (Preact optional)            | Keep bundle small, MapLibre is the heavy lifting                               |
+| **Language**           | TypeScript                                             | Type safety, better IDE support                                                |
 | **Build Tool**         | Vite                                                   | Fast dev server, good for this scale                                           |
 | **Deployment**         | Vercel/Netlify (frontend) + PartyKit managed (backend) | Simple, free tiers                                                             |
 
@@ -22,8 +24,8 @@ Build a browser-based multiplayer flight simulator where players fly planes over
 │                         Browser Client                          │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   Game      │  │  MapLibre   │  │    PartyKit Client      │  │
-│  │   Loop      │──│  GL JS      │  │    (PartySocket)        │  │
+│  │   Game      │  │  Three.js   │  │    PartyKit Client      │  │
+│  │   Loop      │──│  Scene      │  │    (PartySocket)        │  │
 │  │  (60fps)    │  │  + PMTiles  │  │                         │  │
 │  └──────┬──────┘  └──────┬──────┘  └────────────┬────────────┘  │
 │         │                │                      │               │
@@ -33,6 +35,14 @@ Build a browser-based multiplayer flight simulator where players fly planes over
 │  │  - myPlane: {lat, lng, alt, heading, pitch, roll, speed}   ││
 │  │  - otherPlanes: Map<id, PlaneState>                        ││
 │  │  - camera: {orbitAngle, orbitPitch, distance}              ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                    Data Sources                             ││
+│  │  - Overture Buildings PMTiles → 3D building meshes          ││
+│  │  - Overture Base PMTiles → Land/water polygons              ││
+│  │  - Overture Transportation → Roads layer                    ││
+│  │  - AWS Terrarium Tiles → Elevation data                     ││
 │  └─────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -44,7 +54,7 @@ Build a browser-based multiplayer flight simulator where players fly planes over
 │  - Receives position updates from each client                   │
 │  - Broadcasts all plane positions to all clients                │
 │  - Handles join/leave (assigns plane colors/ids)                │
-│  - No physics, no validation (trust clients)                    │
+│  - Validates position data (lat/lng ranges, altitude limits)    │
 │  - Uses Hibernation for cost efficiency                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -88,25 +98,31 @@ type ServerMessage =
 ## File Structure
 
 ```
-flight-sim/
+overture-flight/
 ├── package.json
-├── vite.config.js
+├── vite.config.ts
 ├── index.html
 ├── src/
-│   ├── main.js                 # Entry point, initializes everything
-│   ├── map.js                  # MapLibre setup, building layer, terrain
-│   ├── plane.js                # Plane physics/controls, local state
-│   ├── camera.js               # Third-person camera orbiting logic
-│   ├── network.js              # PartyKit client connection
-│   ├── ui.js                   # HUD, location picker, player list
-│   ├── collision.js            # Building/terrain collision detection
-│   ├── other-planes.js         # Rendering other players' planes
-│   └── constants.js            # Tuning values, PMTiles URLs
+│   ├── main.ts                 # Entry point, game loop initialization
+│   ├── scene.ts                # Three.js scene, camera, renderer, plane models
+│   ├── plane.ts                # Flight physics and keyboard controls
+│   ├── camera.ts               # Third-person chase camera with orbit
+│   ├── tile-manager.ts         # PMTiles loading and tile management
+│   ├── buildings.ts            # Building extrusion from Overture data
+│   ├── building-materials.ts   # Procedural building materials
+│   ├── base-layer.ts           # Land/water polygons from Overture data
+│   ├── transportation-layer.ts # Roads rendering from Overture data
+│   ├── elevation.ts            # Terrain elevation from Terrarium tiles
+│   ├── collision.ts            # Ground/terrain collision detection
+│   ├── network.ts              # PartyKit WebSocket client
+│   ├── mobile-controls.ts      # Touch controls for mobile devices
+│   ├── ui.ts                   # HUD, location picker, player list
+│   └── constants.ts            # Configuration values, PMTiles URLs
 ├── party/
-│   └── index.ts                # PartyKit server
+│   └── index.ts                # PartyKit multiplayer server
 ├── partykit.json               # PartyKit config
 └── public/
-    └── plane.glb               # 3D plane model (optional, can use marker)
+    └── models/plane.glb        # 3D plane GLTF model
 ```
 
 ## Implementation Phases
