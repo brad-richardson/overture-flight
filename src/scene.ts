@@ -121,7 +121,7 @@ function createAircraftSkinTexture(playerColor: string): THREE.CanvasTexture {
 
 /**
  * Create enhanced aircraft materials with realistic texturing
- * Uses polygon offset to prevent z-fighting between overlapping surfaces
+ * Uses differentiated polygon offset values to prevent z-fighting between mesh types
  */
 function createAircraftMaterials(playerColor: string): {
   fuselage: THREE.MeshStandardMaterial;
@@ -131,28 +131,32 @@ function createAircraftMaterials(playerColor: string): {
   const skinTexture = createAircraftSkinTexture(playerColor);
 
   // Main fuselage material - metallic with panel lines
-  // Polygon offset pushes fuselage slightly back in depth buffer
+  // Largest polygon offset pushes fuselage furthest back in depth buffer
   const fuselage = new THREE.MeshStandardMaterial({
     map: skinTexture,
     roughness: 0.4,
     metalness: 0.6,
     envMapIntensity: 0.8,
     polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
+    polygonOffsetFactor: 2,
+    polygonOffsetUnits: 2,
   });
 
   // Wing material - similar but with more visible color stripes
-  // No polygon offset - wings render in front of fuselage at intersections
+  // Medium polygon offset - wings render in front of fuselage
   const wingTexture = createAircraftSkinTexture(playerColor);
   wingTexture.repeat.set(1, 3); // Stretch stripes across wing span
   const wings = new THREE.MeshStandardMaterial({
     map: wingTexture,
     roughness: 0.45,
     metalness: 0.5,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
   });
 
   // Accent material for trim pieces - solid player color
+  // No polygon offset - accent parts render in front of everything
   const accent = new THREE.MeshStandardMaterial({
     color: playerColor,
     roughness: 0.3,
@@ -323,6 +327,9 @@ async function loadPlaneModel(): Promise<THREE.Group> {
       PLANE_MODEL_URL,
       (gltf) => {
         planeModel = gltf.scene;
+        // Apply differentiated polygon offset to prevent z-fighting
+        // Different meshes get different offsets based on their index
+        let meshIndex = 0;
         planeModel.traverse((child) => {
           if ((child as THREE.Mesh).isMesh) {
             const mesh = child as THREE.Mesh;
@@ -330,15 +337,17 @@ async function loadPlaneModel(): Promise<THREE.Group> {
             mesh.receiveShadow = true;
             // Override any existing texture with a neutral white base
             // This allows player colors to show properly
-            // Use polygon offset to help prevent z-fighting in model geometry
+            // Use varying polygon offset based on mesh index to prevent z-fighting
+            const offsetFactor = 1 + (meshIndex % 3);
             mesh.material = new THREE.MeshStandardMaterial({
               color: 0xffffff,
               roughness: 0.6,
               metalness: 0.3,
               polygonOffset: true,
-              polygonOffsetFactor: 1,
-              polygonOffsetUnits: 1,
+              polygonOffsetFactor: offsetFactor,
+              polygonOffsetUnits: offsetFactor,
             });
+            meshIndex++;
           }
         });
         console.log('Plane model loaded');
@@ -393,6 +402,7 @@ function createFallbackPlane(): THREE.Group {
   // Fuselage radius is ~2, so wings start at z=±2.5 to avoid overlap
   const wingSpan = 11.5; // Each wing segment length (from fuselage edge to tip)
   const wingOffset = 2.5; // Start wings outside fuselage radius
+  // Wing ends at: wingOffset + wingSpan = 2.5 + 11.5 = 14
 
   // Left wing segment
   const leftWingGeometry = new THREE.BoxGeometry(4, 0.3, wingSpan);
@@ -413,24 +423,26 @@ function createFallbackPlane(): THREE.Group {
   rightFairingGeometry.translate(0, 0.3, -2);
   fuselageGeometries.push(rightFairingGeometry);
 
-  // Wing tips (angled)
+  // Wing tips (angled) - positioned at z=±14 to align with wing segment ends
   const leftWingTipGeo = new THREE.BoxGeometry(2, 0.2, 4);
   leftWingTipGeo.rotateX(Math.PI / 6);
-  leftWingTipGeo.translate(0, 0.5, 15);
+  leftWingTipGeo.translate(0, 0.5, 14);
   wingGeometries.push(leftWingTipGeo);
 
   const rightWingTipGeo = new THREE.BoxGeometry(2, 0.2, 4);
   rightWingTipGeo.rotateX(-Math.PI / 6);
-  rightWingTipGeo.translate(0, 0.5, -15);
+  rightWingTipGeo.translate(0, 0.5, -14);
   wingGeometries.push(rightWingTipGeo);
 
-  // Tail horizontal stabilizer - split to avoid overlap with vertical stabilizer
-  const leftTailGeometry = new THREE.BoxGeometry(3, 0.2, 4.5);
-  leftTailGeometry.translate(-9, 0, 2.5);
+  // Tail horizontal stabilizer - positioned at z=±2.35 to close gap with vertical stabilizer
+  // Vertical stabilizer is 0.3 thick at z=0, so edges are at z=±0.15
+  // Tail segments with depth 4.7 at z=±2.35 extend from z=0 to z=4.7
+  const leftTailGeometry = new THREE.BoxGeometry(3, 0.2, 4.7);
+  leftTailGeometry.translate(-9, 0, 2.35);
   wingGeometries.push(leftTailGeometry);
 
-  const rightTailGeometry = new THREE.BoxGeometry(3, 0.2, 4.5);
-  rightTailGeometry.translate(-9, 0, -2.5);
+  const rightTailGeometry = new THREE.BoxGeometry(3, 0.2, 4.7);
+  rightTailGeometry.translate(-9, 0, -2.35);
   wingGeometries.push(rightTailGeometry);
 
   // Vertical stabilizer
@@ -450,15 +462,32 @@ function createFallbackPlane(): THREE.Group {
   fuselageGeometries.push(rightEngineGeo);
 
   // Merge geometries into single meshes to eliminate z-fighting
-  const mergedFuselageGeometry = BufferGeometryUtils.mergeGeometries(fuselageGeometries);
-  const fuselage = new THREE.Mesh(mergedFuselageGeometry, fuselageMaterial);
-  fuselage.name = 'fuselage';
-  group.add(fuselage);
+  try {
+    const mergedFuselageGeometry = BufferGeometryUtils.mergeGeometries(fuselageGeometries, false);
+    if (mergedFuselageGeometry) {
+      const fuselage = new THREE.Mesh(mergedFuselageGeometry, fuselageMaterial);
+      fuselage.name = 'fuselage';
+      group.add(fuselage);
+    }
 
-  const mergedWingGeometry = BufferGeometryUtils.mergeGeometries(wingGeometries);
-  const wings = new THREE.Mesh(mergedWingGeometry, wingMaterial);
-  wings.name = 'wings';
-  group.add(wings);
+    const mergedWingGeometry = BufferGeometryUtils.mergeGeometries(wingGeometries, false);
+    if (mergedWingGeometry) {
+      const wings = new THREE.Mesh(mergedWingGeometry, wingMaterial);
+      wings.name = 'wings';
+      group.add(wings);
+    }
+
+    // Dispose individual geometries to free GPU memory
+    fuselageGeometries.forEach(geo => geo.dispose());
+    wingGeometries.forEach(geo => geo.dispose());
+  } catch (error) {
+    console.error('Failed to merge plane geometries:', error);
+    // Fallback: create simple box if merge fails
+    const fallbackGeo = new THREE.BoxGeometry(20, 2, 28);
+    const fallbackMesh = new THREE.Mesh(fallbackGeo, fuselageMaterial);
+    fallbackMesh.name = 'fuselage';
+    group.add(fallbackMesh);
+  }
 
   return group;
 }
