@@ -436,7 +436,9 @@ export async function createBaseLayerForTile(
         try {
           const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
           if (merged) {
-            const line = new THREE.Line(merged, getLineMaterial(color));
+            // Use LineSegments instead of Line to render discrete segments
+            // This prevents merged geometries from drawing connecting lines between features
+            const line = new THREE.LineSegments(merged, getLineMaterial(color));
             line.position.y = LAYER_DEPTHS.water;
             line.name = 'water-lines';
             group.add(line);
@@ -444,7 +446,7 @@ export async function createBaseLayerForTile(
         } catch {
           // Fallback: add individually
           for (const geom of geometries) {
-            const line = new THREE.Line(geom, getLineMaterial(color));
+            const line = new THREE.LineSegments(geom, getLineMaterial(color));
             line.position.y = LAYER_DEPTHS.water;
             group.add(line);
           }
@@ -463,20 +465,31 @@ export async function createBaseLayerForTile(
 }
 
 /**
- * Create line geometry for water features (rivers, streams)
+ * Create line segment geometry for water features (rivers, streams)
+ * Uses segment pairs (v0-v1, v1-v2, v2-v3) instead of polyline (v0-v1-v2-v3)
+ * This allows merging geometries without creating connecting lines between features
  */
 function createWaterLineGeometry(coordinates: number[][]): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length < 2) return null;
 
-  const points: THREE.Vector3[] = [];
+  // Convert coordinates to world positions
+  const worldPoints: THREE.Vector3[] = [];
   for (const coord of coordinates) {
     const world = geoToWorld(coord[0], coord[1], 0);
-    points.push(new THREE.Vector3(world.x, 0, world.z));
+    worldPoints.push(new THREE.Vector3(world.x, 0, world.z));
   }
 
-  if (points.length < 2) return null;
+  if (worldPoints.length < 2) return null;
 
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  // Create segment pairs: for polyline v0-v1-v2-v3, we need pairs [v0,v1], [v1,v2], [v2,v3]
+  // This is for use with THREE.LineSegments which draws each pair as a separate line
+  const segmentPoints: THREE.Vector3[] = [];
+  for (let i = 0; i < worldPoints.length - 1; i++) {
+    segmentPoints.push(worldPoints[i]);
+    segmentPoints.push(worldPoints[i + 1]);
+  }
+
+  const geometry = new THREE.BufferGeometry().setFromPoints(segmentPoints);
   return geometry;
 }
 
