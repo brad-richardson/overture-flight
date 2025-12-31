@@ -3,7 +3,8 @@ import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPla
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection, Connection, WelcomeMessage } from './network.js';
 import { checkCollision } from './collision.js';
-import { updateHUD, updatePlayerList, showCrashMessage, initLocationPicker } from './ui.js';
+import { updateHUD, updatePlayerList, showCrashMessage } from './ui.js';
+import { initMinimap, updateMinimap } from './minimap.js';
 import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile } from './tile-manager.js';
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
@@ -142,6 +143,9 @@ function gameLoop(time: number): void {
 
   // Update HUD
   updateHUD(planeState);
+
+  // Update minimap
+  updateMinimap(planeState);
 
   // Send position to server
   if (connection) {
@@ -359,9 +363,9 @@ async function init(): Promise<void> {
     initMobileControls();
     console.log('Mobile controls initialized');
 
-    // Initialize UI
-    initLocationPicker(handleTeleport);
-    console.log('UI initialized');
+    // Initialize minimap
+    initMinimap(handleTeleport);
+    console.log('Minimap initialized');
 
     // Generate local ID and color immediately so plane renders without network
     localId = generateLocalId();
