@@ -351,12 +351,18 @@ export async function createBaseLayerForTile(
         }
         featuresByColorAndLayer.get(key)!.features.push(feature);
       } else if (feature.type === 'LineString' || feature.type === 'MultiLineString') {
-        // Process line features for water (rivers, streams)
+        // Process line features for water - only rivers, streams, and canals
+        // Skip coastlines and shorelines which create artifacts around islands
         if (layer === 'water') {
-          if (!lineFeaturesByColor.has(color)) {
-            lineFeaturesByColor.set(color, []);
+          const subtype = ((feature.properties?.subtype || feature.properties?.class || '') as string).toLowerCase();
+          // Only render actual linear water features, not coastline boundaries
+          const linearWaterTypes = ['river', 'stream', 'canal', 'drain', 'ditch', 'waterway'];
+          if (linearWaterTypes.includes(subtype)) {
+            if (!lineFeaturesByColor.has(color)) {
+              lineFeaturesByColor.set(color, []);
+            }
+            lineFeaturesByColor.get(color)!.push(feature);
           }
-          lineFeaturesByColor.get(color)!.push(feature);
         }
       }
     }
