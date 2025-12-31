@@ -66,18 +66,31 @@ const COLORS: Record<string, number> = {
 };
 
 // Layer depth configuration to prevent z-fighting
-// Layers are separated by Y position - sufficient gaps prevent depth conflicts
-// Note: land_cover and land_use now use terrain-following elevation, so their
+// Layers are separated by Y position with moderate gaps
+// Z-fighting prevention relies on combination of Y separation + polygon offset + render order
+// Note: land_cover and land_use use terrain-following elevation, so their
 // base offset is relative to terrain surface (added on top of terrain height)
 const LAYER_DEPTHS: Record<string, number> = {
-  terrain: -3.0,      // Reference depth for terrain-following calculations
-  land: -3.0,         // Base land at bottom (below land_cover/land_use)
+  terrain: -5.0,      // Terrain mesh at lowest position
+  bathymetry: -4.0,   // Bathymetry above terrain but below land
+  land: -3.0,         // Base land above bathymetry
+  water: -1.0,        // Water polygons above land layer (inland water only)
+  water_lines: -0.5,  // Water lines (rivers) slightly above water polygons
   land_cover: 0.3,    // Land cover offset ABOVE terrain surface (terrain-following)
-  land_use: 0.5,      // Land use offset ABOVE terrain surface (terrain-following)
-  bathymetry: -2.2,   // Bathymetry slightly below land to prevent coastal z-fighting
-  water: -0.5,        // Water polygons above bathymetry
-  water_lines: -0.3,  // Water lines (rivers) slightly above water polygons
+  land_use: 0.8,      // Land use 0.5m above land_cover
   default: 0.3
+};
+
+// Render order for proper layering (higher = rendered later = on top)
+const RENDER_ORDER: Record<string, number> = {
+  terrain: 0,
+  bathymetry: 1,
+  land: 2,
+  water: 3,
+  water_lines: 4,
+  land_cover: 5,
+  land_use: 6,
+  default: 5
 };
 
 // Layers that should follow terrain elevation
@@ -134,32 +147,56 @@ function getBathymetryColor(depth: number): number {
   return (r << 16) | (g << 8) | b;
 }
 
-// Materials cache
-const materials = new Map<number, THREE.MeshStandardMaterial>();
+// Materials cache - keyed by "color-layer" for layer-specific material settings
+const materials = new Map<string, THREE.MeshStandardMaterial>();
 
 // Line materials cache for water lines (rivers)
 const lineMaterials = new Map<number, THREE.LineBasicMaterial>();
+
+// Polygon offset values per layer to prevent z-fighting
+// Higher factor/units = pushed further back in depth buffer
+const POLYGON_OFFSET: Record<string, { factor: number; units: number }> = {
+  terrain: { factor: 4, units: 4 },
+  bathymetry: { factor: 3, units: 3 },
+  land: { factor: 2, units: 2 },
+  water: { factor: 1, units: 1 },
+  water_lines: { factor: 0, units: 0 },
+  land_cover: { factor: 2, units: 2 },  // Push back to avoid fighting with land_use
+  land_use: { factor: 0, units: 0 },    // Land_use renders on top
+  default: { factor: 1, units: 1 }
+};
 
 // Linear water feature types to render as lines (rivers, streams, etc.)
 // Coastlines and shorelines are excluded to prevent artifacts around islands
 const LINEAR_WATER_TYPES = ['river', 'stream', 'canal', 'drain', 'ditch', 'waterway'];
 
+// Ocean/sea water types that should NOT be rendered from water layer
+// These are already covered by bathymetry layer - rendering both causes z-fighting
+// All other water types (including unknown subtypes) are rendered to ensure inland water is visible
+const OCEAN_WATER_TYPES = ['ocean', 'sea', 'bay', 'strait', 'gulf', 'sound'];
+
 // Track logged land_cover subtypes to avoid console spam
 const landCoverSubtypesLogged = new Set<string>();
 
 /**
- * Get or create material for a color
+ * Get or create material for a color and layer
+ * Each layer gets its own material with appropriate polygon offset for z-fighting prevention
  */
-function getMaterial(color: number): THREE.MeshStandardMaterial {
-  if (!materials.has(color)) {
-    materials.set(color, new THREE.MeshStandardMaterial({
+function getMaterial(color: number, layer: string = 'default'): THREE.MeshStandardMaterial {
+  const key = `${color}-${layer}`;
+  if (!materials.has(key)) {
+    const offset = POLYGON_OFFSET[layer] ?? POLYGON_OFFSET.default;
+    materials.set(key, new THREE.MeshStandardMaterial({
       color: color,
       roughness: 0.9,
       metalness: 0.0,
-      side: THREE.DoubleSide
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: offset.factor,
+      polygonOffsetUnits: offset.units,
     }));
   }
-  return materials.get(color)!;
+  return materials.get(key)!;
 }
 
 /**
@@ -282,6 +319,22 @@ export async function createBaseLayerForTile(
       const color = getColorForFeature(layer, feature.properties);
 
       if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
+        // Skip ocean-type water features - bathymetry layer already covers these areas
+        // Also skip river/stream polygons - we render these as lines instead to avoid double-render
+        // Keep all other water types (including unknown subtypes) to ensure inland water renders
+        if (layer === 'water') {
+          const subtype = String(feature.properties?.subtype || feature.properties?.class || '').toLowerCase();
+          // Skip only explicitly ocean types (covered by bathymetry)
+          if (OCEAN_WATER_TYPES.includes(subtype)) {
+            continue;
+          }
+          // Skip river/stream polygons - these are rendered as lines (LINEAR_WATER_TYPES)
+          if (LINEAR_WATER_TYPES.includes(subtype)) {
+            continue;
+          }
+          // All other water types (lakes, ponds, unknown subtypes, untyped) are kept
+        }
+
         const key = `${color}-${layer}`;
         if (!featuresByColorAndLayer.has(key)) {
           featuresByColorAndLayer.set(key, { color, layer, features: [] });
@@ -303,8 +356,9 @@ export async function createBaseLayerForTile(
     }
 
     // Layers that should NOT be merged (render individually to prevent z-fighting artifacts)
-    // Overlapping polygons cause flickering when merged into single geometry
-    const NO_MERGE_LAYERS = ['water', 'bathymetry', 'land', 'land_cover', 'land_use'];
+    // Only water and bathymetry need individual rendering (overlapping ocean polygons)
+    // land_cover and land_use can be merged for better performance since they don't overlap within themselves
+    const NO_MERGE_LAYERS = ['water', 'bathymetry'];
 
     // Create geometry for each color+layer combination (polygons)
     for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
@@ -334,7 +388,8 @@ export async function createBaseLayerForTile(
         // For terrain-following layers, Y is already set in geometry vertices
         // For other layers, use mesh position.y to set layer height
         const yPosition = isTerrainFollowing ? 0 : yOffset;
-        const material = getMaterial(color);
+        const material = getMaterial(color, layer);
+        const renderOrder = RENDER_ORDER[layer] ?? RENDER_ORDER.default;
 
         if (shouldMerge) {
           // Merge geometries for land layers (better performance)
@@ -344,6 +399,7 @@ export async function createBaseLayerForTile(
               const mesh = new THREE.Mesh(merged, material);
               mesh.receiveShadow = true;
               mesh.position.y = yPosition;
+              mesh.renderOrder = renderOrder;
               mesh.name = `features-${layer}`;
               group.add(mesh);
             }
@@ -353,6 +409,7 @@ export async function createBaseLayerForTile(
               const mesh = new THREE.Mesh(geom, material);
               mesh.receiveShadow = true;
               mesh.position.y = yPosition;
+              mesh.renderOrder = renderOrder;
               group.add(mesh);
             }
           }
@@ -367,6 +424,7 @@ export async function createBaseLayerForTile(
             const mesh = new THREE.Mesh(geom, material);
             mesh.receiveShadow = true;
             mesh.position.y = yPosition;
+            mesh.renderOrder = renderOrder;
             mesh.name = `${layer}-polygon`;
             group.add(mesh);
           }
@@ -396,6 +454,7 @@ export async function createBaseLayerForTile(
       }
 
       if (geometries.length > 0) {
+        const waterLineRenderOrder = RENDER_ORDER.water_lines;
         try {
           const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
           if (merged) {
@@ -403,6 +462,7 @@ export async function createBaseLayerForTile(
             // This prevents merged geometries from drawing connecting lines between features
             // Note: Y position is computed per-vertex in geometry for terrain-following
             const line = new THREE.LineSegments(merged, getLineMaterial(color));
+            line.renderOrder = waterLineRenderOrder;
             line.name = 'water-lines';
             group.add(line);
           }
@@ -411,6 +471,7 @@ export async function createBaseLayerForTile(
           // Note: Y position is computed per-vertex in geometry for terrain-following
           for (const geom of geometries) {
             const line = new THREE.LineSegments(geom, getLineMaterial(color));
+            line.renderOrder = waterLineRenderOrder;
             group.add(line);
           }
         }
