@@ -166,7 +166,6 @@ interface QueuedRequest {
   resolve: (value: TreeData[]) => void;
   reject: (error: Error) => void;
   bounds: TileBounds;
-  key: string;
 }
 
 const requestQueue: QueuedRequest[] = [];
@@ -181,48 +180,70 @@ let lastRequestTime = 0;
  * Process the request queue with rate limiting
  */
 async function processRequestQueue(): Promise<void> {
-  if (isProcessingQueue || requestQueue.length === 0) {
+  if (isProcessingQueue) {
     return;
   }
 
   isProcessingQueue = true;
 
-  while (requestQueue.length > 0) {
-    const request = requestQueue.shift()!;
+  try {
+    while (requestQueue.length > 0) {
+      const request = requestQueue.shift()!;
 
-    // Enforce minimum delay between requests
-    const now = Date.now();
-    const timeSinceLastRequest = now - lastRequestTime;
-    if (timeSinceLastRequest < MIN_REQUEST_DELAY) {
-      await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_DELAY - timeSinceLastRequest));
-    }
+      // Enforce minimum delay between requests
+      const now = Date.now();
+      const timeSinceLastRequest = now - lastRequestTime;
+      if (timeSinceLastRequest < MIN_REQUEST_DELAY) {
+        await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_DELAY - timeSinceLastRequest));
+      }
 
-    try {
+      // Update timestamp before making request to prevent race conditions
       lastRequestTime = Date.now();
-      const trees = await fetchTreesFromOverpass(request.bounds);
-      request.resolve(trees);
-    } catch (error) {
-      request.reject(error as Error);
+
+      try {
+        const trees = await fetchTreesFromOverpass(request.bounds);
+        request.resolve(trees);
+      } catch (error) {
+        request.reject(error as Error);
+      }
+    }
+  } finally {
+    isProcessingQueue = false;
+    // Check if new requests were added while we were processing
+    if (requestQueue.length > 0) {
+      processRequestQueue();
     }
   }
-
-  isProcessingQueue = false;
 }
 
 /**
  * Queue a request to the Overpass API with rate limiting
  */
-function queueOverpassRequest(bounds: TileBounds, key: string): Promise<TreeData[]> {
+function queueOverpassRequest(bounds: TileBounds): Promise<TreeData[]> {
   return new Promise((resolve, reject) => {
-    requestQueue.push({ resolve, reject, bounds, key });
+    requestQueue.push({ resolve, reject, bounds });
     processRequestQueue();
   });
 }
 
 /**
  * Convert detail tile coordinates to regional tile coordinates
+ * Returns the regional tile that contains the given detail tile
  */
 function detailToRegionalTile(tileX: number, tileY: number, tileZ: number): { rx: number; ry: number; rz: number } {
+  // If zoom is at or below regional zoom, use the tile coordinates directly
+  if (tileZ <= REGIONAL_ZOOM) {
+    // Scale up to regional zoom level
+    const zoomDiff = REGIONAL_ZOOM - tileZ;
+    const scale = Math.pow(2, zoomDiff);
+    return {
+      rx: Math.floor(tileX * scale),
+      ry: Math.floor(tileY * scale),
+      rz: REGIONAL_ZOOM,
+    };
+  }
+
+  // Normal case: zoom is higher than regional zoom, scale down
   const zoomDiff = tileZ - REGIONAL_ZOOM;
   const scale = Math.pow(2, zoomDiff);
   return {
@@ -279,7 +300,7 @@ async function loadTreesForRegion(rx: number, ry: number): Promise<TreeData[]> {
   const loadPromise = (async (): Promise<TreeData[]> => {
     try {
       const bounds = getRegionalTileBounds(rx, ry);
-      const trees = await queueOverpassRequest(bounds, key);
+      const trees = await queueOverpassRequest(bounds);
 
       console.log(`Loaded ${trees.length} trees for regional tile ${key}`);
 
@@ -479,28 +500,30 @@ function saveToLocalStorage(key: string, trees: TreeData[]): void {
 }
 
 /**
- * Fetch trees from Overpass API with retry logic and exponential backoff
+ * Fetch trees from Overpass API with retry logic
+ * Immediately tries next endpoint on failure (no delay between different endpoints)
+ * Only applies backoff delay when retrying after rate limiting (429) or server error (503)
  */
 async function fetchTreesFromOverpass(bounds: TileBounds): Promise<TreeData[]> {
   const query = buildOverpassQuery(bounds);
   let lastError: Error | undefined;
+  let rateLimitBackoff = 0; // Backoff only for rate limiting
 
-  // Try each endpoint with exponential backoff between retries
+  // Try each endpoint
   for (let attempt = 0; attempt < OVERPASS_ENDPOINTS.length; attempt++) {
     const endpoint = getNextEndpoint();
 
-    // Add exponential backoff delay between retries (not on first attempt)
-    if (attempt > 0) {
-      const backoffDelay = Math.min(1000 * Math.pow(2, attempt - 1), 8000); // 1s, 2s, 4s, max 8s
-      console.log(`Waiting ${backoffDelay}ms before retry ${attempt + 1}...`);
-      await new Promise(resolve => setTimeout(resolve, backoffDelay));
+    // Apply backoff only if we hit rate limiting on previous attempt
+    if (rateLimitBackoff > 0) {
+      console.log(`Rate limited, waiting ${rateLimitBackoff}ms before retry...`);
+      await new Promise(resolve => setTimeout(resolve, rateLimitBackoff));
+      rateLimitBackoff = 0; // Reset after waiting
     }
 
-    try {
-      // Add timeout to prevent hanging requests
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
+    try {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -510,9 +533,11 @@ async function fetchTreesFromOverpass(bounds: TileBounds): Promise<TreeData[]> {
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
+        // Set backoff for rate limiting or server errors
+        if (response.status === 429 || response.status === 503) {
+          rateLimitBackoff = Math.min(1000 * Math.pow(2, attempt), 8000);
+        }
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
@@ -545,7 +570,9 @@ async function fetchTreesFromOverpass(bounds: TileBounds): Promise<TreeData[]> {
         ? 'Request timed out'
         : (error as Error).message;
       console.warn(`Overpass endpoint ${endpoint} failed:`, errorMessage);
-      // Try next endpoint
+      // Try next endpoint immediately (no delay for switching endpoints)
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -1178,11 +1205,13 @@ export function clearTreeCache(key: string): void {
 }
 
 /**
- * Clear entire tree cache (including regional cache)
+ * Clear entire tree cache (including regional cache and pending loads)
  */
 export function clearAllTreeCache(): void {
   treeCache.clear();
   regionalTreeCache.clear();
+  pendingLoads.clear();
+  pendingRegionalLoads.clear();
   try {
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith(CACHE_PREFIX)) {
