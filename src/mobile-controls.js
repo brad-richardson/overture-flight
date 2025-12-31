@@ -10,10 +10,6 @@ let joystickCurrentX = 0;
 let joystickCurrentY = 0;
 let joystickTouchId = null;
 
-// Throttle button state
-let throttleUpActive = false;
-let throttleDownActive = false;
-
 // Joystick output (-1 to 1 for each axis)
 const joystickOutput = {
   x: 0, // Left/Right (roll)
@@ -196,19 +192,16 @@ function createThrottleButtons() {
   upBtn.addEventListener('touchstart', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    throttleUpActive = true;
     throttleOutput.up = true;
     upBtn.classList.add('active');
   }, { passive: false });
 
-  upBtn.addEventListener('touchend', (e) => {
-    throttleUpActive = false;
+  upBtn.addEventListener('touchend', () => {
     throttleOutput.up = false;
     upBtn.classList.remove('active');
   }, { passive: true });
 
   upBtn.addEventListener('touchcancel', () => {
-    throttleUpActive = false;
     throttleOutput.up = false;
     upBtn.classList.remove('active');
   }, { passive: true });
@@ -217,19 +210,16 @@ function createThrottleButtons() {
   downBtn.addEventListener('touchstart', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    throttleDownActive = true;
     throttleOutput.down = true;
     downBtn.classList.add('active');
   }, { passive: false });
 
   downBtn.addEventListener('touchend', () => {
-    throttleDownActive = false;
     throttleOutput.down = false;
     downBtn.classList.remove('active');
   }, { passive: true });
 
   downBtn.addEventListener('touchcancel', () => {
-    throttleDownActive = false;
     throttleOutput.down = false;
     downBtn.classList.remove('active');
   }, { passive: true });

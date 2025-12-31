@@ -55,18 +55,29 @@ export function initCameraControls() {
     document.getElementById('map').style.cursor = 'grab';
   });
 
-  // Touch controls for camera orbit (single finger on the map area, not on joystick)
+  // Touch controls for camera orbit (single finger on the map area, not on controls)
   container.addEventListener('touchstart', (e) => {
     // Only handle single-finger touches for camera
     if (e.touches.length === 1) {
-      // Check if touch is on the joystick area - if so, let joystick handle it
       const touch = e.touches[0];
+
+      // Check if touch is on the joystick area - if so, let joystick handle it
       const joystick = document.getElementById('joystick-container');
       if (joystick) {
         const rect = joystick.getBoundingClientRect();
         if (touch.clientX >= rect.left && touch.clientX <= rect.right &&
             touch.clientY >= rect.top && touch.clientY <= rect.bottom) {
           return; // Let joystick handle this touch
+        }
+      }
+
+      // Check if touch is on the throttle area - if so, let throttle handle it
+      const throttle = document.getElementById('throttle-container');
+      if (throttle) {
+        const rect = throttle.getBoundingClientRect();
+        if (touch.clientX >= rect.left && touch.clientX <= rect.right &&
+            touch.clientY >= rect.top && touch.clientY <= rect.bottom) {
+          return; // Let throttle handle this touch
         }
       }
 
