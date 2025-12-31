@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
-import { loadBuildingTile } from './tile-manager.js';
+import { loadBuildingTile, tileToWorldBounds } from './tile-manager.js';
 import {
   getBuildingColor,
   groupFeaturesByCategory,
@@ -10,6 +10,71 @@ import {
 
 // Default building height when not specified
 const DEFAULT_BUILDING_HEIGHT = 10;
+
+// LOD (Level of Detail) settings
+const LOD_NEAR_DISTANCE = 500; // meters - full detail
+const LOD_MEDIUM_DISTANCE = 2000; // meters - reduced detail
+const MIN_BUILDING_AREA_FAR = 100; // m² - skip small buildings at far distances
+
+// LOD levels
+export enum LODLevel {
+  HIGH = 0,   // Full detail
+  MEDIUM = 1, // Reduced precision
+  LOW = 2     // Minimal precision
+}
+
+/**
+ * Calculate distance from origin (player) to tile center
+ */
+function getTileDistanceFromOrigin(tileX: number, tileY: number, tileZ: number): number {
+  const bounds = tileToWorldBounds(tileX, tileY, tileZ);
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+  // Origin is at 0,0 in world coordinates
+  return Math.sqrt(centerX * centerX + centerZ * centerZ);
+}
+
+/**
+ * Determine LOD level based on distance from player
+ */
+function getLODLevel(distance: number): LODLevel {
+  if (distance < LOD_NEAR_DISTANCE) {
+    return LODLevel.HIGH;
+  } else if (distance < LOD_MEDIUM_DISTANCE) {
+    return LODLevel.MEDIUM;
+  } else {
+    return LODLevel.LOW;
+  }
+}
+
+/**
+ * Simplify polygon coordinates by reducing vertex count
+ * Uses Douglas-Peucker-like simplification
+ */
+function simplifyPolygon(points: THREE.Vector2[], tolerance: number): THREE.Vector2[] {
+  if (points.length <= 4) return points; // Can't simplify further
+
+  const simplified: THREE.Vector2[] = [points[0]];
+  let prevPoint = points[0];
+
+  for (let i = 1; i < points.length; i++) {
+    const point = points[i];
+    const distance = prevPoint.distanceTo(point);
+
+    // Keep point if it's far enough from the previous point
+    if (distance >= tolerance || i === points.length - 1) {
+      simplified.push(point);
+      prevPoint = point;
+    }
+  }
+
+  // Ensure minimum 3 points for valid polygon
+  if (simplified.length < 3) {
+    return points.slice(0, 4); // Return first 4 points
+  }
+
+  return simplified;
+}
 
 // Material cache by category for performance
 const materialCache = new Map<string, THREE.MeshStandardMaterial>();
@@ -34,7 +99,7 @@ const vertexColorMaterial = new THREE.MeshStandardMaterial({
 });
 
 /**
- * Create building meshes from tile features with realistic textures
+ * Create building meshes from tile features with LOD-based detail reduction
  */
 export async function createBuildingsForTile(
   tileX: number,
@@ -53,12 +118,19 @@ export async function createBuildingsForTile(
     return null;
   }
 
+  // Calculate LOD level based on distance from player
+  const tileDistance = getTileDistanceFromOrigin(tileX, tileY, tileZ);
+  const lodLevel = getLODLevel(tileDistance);
+
   const group = new THREE.Group();
   group.name = `buildings-${tileZ}/${tileX}/${tileY}`;
+  // Store tile info for LOD updates
+  group.userData = { tileX, tileY, tileZ, lodLevel, tileDistance };
 
   // Group features by category for better material batching
   const categoryGroups = groupFeaturesByCategory(features as BuildingFeature[]);
   let totalGeometries = 0;
+  let skippedSmall = 0;
 
   // Process each category separately
   for (const [category, categoryFeatures] of Object.entries(categoryGroups)) {
@@ -82,13 +154,22 @@ export async function createBuildingsForTile(
           const geom = createBuildingGeometry(
             feature.coordinates as number[][][],
             height,
-            buildingColor
+            buildingColor,
+            lodLevel
           );
-          if (geom) geometries.push(geom);
+          if (geom) {
+            geometries.push(geom);
+          } else if (lodLevel === LODLevel.LOW) {
+            skippedSmall++;
+          }
         } else if (feature.type === 'MultiPolygon') {
           for (const polygon of feature.coordinates as number[][][][]) {
-            const geom = createBuildingGeometry(polygon, height, buildingColor);
-            if (geom) geometries.push(geom);
+            const geom = createBuildingGeometry(polygon, height, buildingColor, lodLevel);
+            if (geom) {
+              geometries.push(geom);
+            } else if (lodLevel === LODLevel.LOW) {
+              skippedSmall++;
+            }
           }
         }
       } catch {
@@ -132,7 +213,8 @@ export async function createBuildingsForTile(
     }
   }
 
-  console.log(`Buildings ${tileZ}/${tileX}/${tileY}: ${totalGeometries} geometries in ${Object.keys(categoryGroups).length} categories`);
+  const lodLabel = ['HIGH', 'MEDIUM', 'LOW'][lodLevel];
+  console.log(`Buildings ${tileZ}/${tileX}/${tileY}: ${totalGeometries} geometries, LOD=${lodLabel}, dist=${Math.round(tileDistance)}m${skippedSmall > 0 ? `, skipped ${skippedSmall} small` : ''}`);
 
   if (group.children.length === 0) {
     return null;
@@ -144,12 +226,13 @@ export async function createBuildingsForTile(
 }
 
 /**
- * Create extruded geometry for a building polygon with vertex colors
+ * Create extruded geometry for a building polygon with vertex colors and LOD support
  */
 function createBuildingGeometry(
   coordinates: number[][][],
   height: number,
-  color: number = 0x888899
+  color: number = 0x888899,
+  lodLevel: LODLevel = LODLevel.HIGH
 ): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length === 0) return null;
 
@@ -157,7 +240,7 @@ function createBuildingGeometry(
   if (!outerRing || outerRing.length < 3) return null;
 
   // Convert outer ring to Three.js points
-  const points: THREE.Vector2[] = [];
+  let points: THREE.Vector2[] = [];
   for (const coord of outerRing) {
     const world = geoToWorld(coord[0], coord[1], 0);
     points.push(new THREE.Vector2(world.x, world.z));
@@ -178,41 +261,65 @@ function createBuildingGeometry(
   const area = calculatePolygonArea(points);
   if (Math.abs(area) < 1) return null; // Skip tiny buildings
 
+  // Skip small buildings at far distances
+  if (lodLevel === LODLevel.LOW && Math.abs(area) < MIN_BUILDING_AREA_FAR) {
+    return null;
+  }
+
+  // Apply polygon simplification based on LOD level
+  if (lodLevel === LODLevel.MEDIUM) {
+    // Medium LOD: reduce vertices by ~50%
+    points = simplifyPolygon(points, 2);
+  } else if (lodLevel === LODLevel.LOW) {
+    // Low LOD: aggressive simplification
+    points = simplifyPolygon(points, 5);
+  }
+
+  if (points.length < 3) return null;
+
   // Ensure counter-clockwise winding for Three.js
-  if (area > 0) {
+  const finalArea = calculatePolygonArea(points);
+  if (finalArea > 0) {
     points.reverse();
   }
 
   try {
     const shape = new THREE.Shape(points);
 
-    // Add holes
-    for (let i = 1; i < coordinates.length; i++) {
-      const holeRing = coordinates[i];
-      if (!holeRing || holeRing.length < 3) continue;
+    // Add holes (skip for low LOD to reduce complexity)
+    if (lodLevel !== LODLevel.LOW) {
+      for (let i = 1; i < coordinates.length; i++) {
+        const holeRing = coordinates[i];
+        if (!holeRing || holeRing.length < 3) continue;
 
-      const holePoints: THREE.Vector2[] = [];
-      for (const coord of holeRing) {
-        const world = geoToWorld(coord[0], coord[1], 0);
-        holePoints.push(new THREE.Vector2(world.x, world.z));
-      }
-
-      // Remove duplicate last point
-      if (holePoints.length > 1) {
-        const first = holePoints[0];
-        const last = holePoints[holePoints.length - 1];
-        if (Math.abs(first.x - last.x) < 0.01 && Math.abs(first.y - last.y) < 0.01) {
-          holePoints.pop();
+        let holePoints: THREE.Vector2[] = [];
+        for (const coord of holeRing) {
+          const world = geoToWorld(coord[0], coord[1], 0);
+          holePoints.push(new THREE.Vector2(world.x, world.z));
         }
-      }
 
-      if (holePoints.length >= 3) {
-        // Holes need clockwise winding (opposite of outer ring)
-        const holeArea = calculatePolygonArea(holePoints);
-        if (holeArea < 0) {
-          holePoints.reverse();
+        // Remove duplicate last point
+        if (holePoints.length > 1) {
+          const first = holePoints[0];
+          const last = holePoints[holePoints.length - 1];
+          if (Math.abs(first.x - last.x) < 0.01 && Math.abs(first.y - last.y) < 0.01) {
+            holePoints.pop();
+          }
         }
-        shape.holes.push(new THREE.Path(holePoints));
+
+        // Simplify holes for medium LOD
+        if (lodLevel === LODLevel.MEDIUM && holePoints.length > 4) {
+          holePoints = simplifyPolygon(holePoints, 2);
+        }
+
+        if (holePoints.length >= 3) {
+          // Holes need clockwise winding (opposite of outer ring)
+          const holeArea = calculatePolygonArea(holePoints);
+          if (holeArea < 0) {
+            holePoints.reverse();
+          }
+          shape.holes.push(new THREE.Path(holePoints));
+        }
       }
     }
 
@@ -224,14 +331,41 @@ function createBuildingGeometry(
     // Rotate so extrusion goes up (Y) instead of out (Z)
     geometry.rotateX(-Math.PI / 2);
 
-    // Add vertex colors for individual building variation
-    addVertexColors(geometry, color, height);
+    // Add vertex colors for individual building variation (skip for low LOD for performance)
+    if (lodLevel !== LODLevel.LOW) {
+      addVertexColors(geometry, color, height);
+    } else {
+      // Simple flat color for low LOD
+      addFlatVertexColors(geometry, color);
+    }
 
     return geometry;
   } catch {
     // Shape creation can fail for invalid polygons
     return null;
   }
+}
+
+/**
+ * Add flat vertex colors (no variation) for low LOD buildings
+ */
+function addFlatVertexColors(geometry: THREE.BufferGeometry, hexColor: number): void {
+  const positions = geometry.attributes.position;
+  const count = positions.count;
+  const colors = new Float32Array(count * 3);
+
+  // Extract RGB from hex
+  const r = ((hexColor >> 16) & 0xFF) / 255;
+  const g = ((hexColor >> 8) & 0xFF) / 255;
+  const b = (hexColor & 0xFF) / 255;
+
+  for (let i = 0; i < count; i++) {
+    colors[i * 3] = r;
+    colors[i * 3 + 1] = g;
+    colors[i * 3 + 2] = b;
+  }
+
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 }
 
 /**
@@ -290,7 +424,7 @@ function calculatePolygonArea(points: THREE.Vector2[]): number {
 }
 
 /**
- * Remove building meshes for a tile
+ * Remove building meshes for a tile and properly dispose all GPU resources
  */
 export function removeBuildingsGroup(group: THREE.Group): void {
   if (!group) return;
@@ -300,17 +434,41 @@ export function removeBuildingsGroup(group: THREE.Group): void {
     scene.remove(group);
   }
 
+  let disposedGeometries = 0;
+  let disposedMaterials = 0;
+
   // Dispose of geometries and materials
   group.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const mesh = child as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
-      // Always dispose cloned materials (they're not in the cache)
+
+      // Dispose geometry and all its attributes
+      if (mesh.geometry) {
+        mesh.geometry.dispose();
+        disposedGeometries++;
+      }
+
+      // Dispose materials (handle array of materials)
       if (mesh.material) {
-        (mesh.material as THREE.Material).dispose();
+        if (Array.isArray(mesh.material)) {
+          for (const mat of mesh.material) {
+            mat.dispose();
+            disposedMaterials++;
+          }
+        } else {
+          (mesh.material as THREE.Material).dispose();
+          disposedMaterials++;
+        }
       }
     }
   });
+
+  // Clear the group's children array
+  group.clear();
+
+  if (disposedGeometries > 0 || disposedMaterials > 0) {
+    console.log(`Disposed buildings group ${group.name}: ${disposedGeometries} geometries, ${disposedMaterials} materials`);
+  }
 }
 
 /**

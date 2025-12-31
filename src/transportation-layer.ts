@@ -242,7 +242,7 @@ function createLineGeometry(
 }
 
 /**
- * Remove transportation layer meshes for a tile
+ * Remove transportation layer meshes for a tile and properly dispose all GPU resources
  */
 export function removeTransportationGroup(group: THREE.Group): void {
   if (!group) return;
@@ -252,11 +252,39 @@ export function removeTransportationGroup(group: THREE.Group): void {
     scene.remove(group);
   }
 
-  // Dispose of geometries
+  let disposedGeometries = 0;
+  let disposedMaterials = 0;
+
+  // Dispose of geometries and materials
   group.traverse((child) => {
     if ((child as THREE.LineSegments).isLineSegments) {
       const line = child as THREE.LineSegments;
-      if (line.geometry) line.geometry.dispose();
+
+      // Dispose geometry
+      if (line.geometry) {
+        line.geometry.dispose();
+        disposedGeometries++;
+      }
+
+      // Dispose materials
+      if (line.material) {
+        if (Array.isArray(line.material)) {
+          for (const mat of line.material) {
+            mat.dispose();
+            disposedMaterials++;
+          }
+        } else {
+          (line.material as THREE.Material).dispose();
+          disposedMaterials++;
+        }
+      }
     }
   });
+
+  // Clear the group's children array
+  group.clear();
+
+  if (disposedGeometries > 0 || disposedMaterials > 0) {
+    console.log(`Disposed transportation group ${group.name}: ${disposedGeometries} geometries, ${disposedMaterials} materials`);
+  }
 }

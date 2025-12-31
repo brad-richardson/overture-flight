@@ -585,7 +585,7 @@ function calculatePolygonArea(points: THREE.Vector2[]): number {
 }
 
 /**
- * Remove base layer meshes for a tile
+ * Remove base layer meshes for a tile and properly dispose all GPU resources
  */
 export function removeBaseLayerGroup(group: THREE.Group): void {
   if (!group) return;
@@ -595,11 +595,39 @@ export function removeBaseLayerGroup(group: THREE.Group): void {
     scene.remove(group);
   }
 
-  // Dispose of geometries
+  let disposedGeometries = 0;
+  let disposedMaterials = 0;
+
+  // Dispose of geometries and materials
   group.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const mesh = child as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
+
+      // Dispose geometry
+      if (mesh.geometry) {
+        mesh.geometry.dispose();
+        disposedGeometries++;
+      }
+
+      // Dispose materials (handle array of materials)
+      if (mesh.material) {
+        if (Array.isArray(mesh.material)) {
+          for (const mat of mesh.material) {
+            mat.dispose();
+            disposedMaterials++;
+          }
+        } else {
+          (mesh.material as THREE.Material).dispose();
+          disposedMaterials++;
+        }
+      }
     }
   });
+
+  // Clear the group's children array
+  group.clear();
+
+  if (disposedGeometries > 0 || disposedMaterials > 0) {
+    console.log(`Disposed base layer group ${group.name}: ${disposedGeometries} geometries, ${disposedMaterials} materials`);
+  }
 }
