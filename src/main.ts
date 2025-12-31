@@ -9,6 +9,7 @@ import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile } from '.
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
+import { createTreesForTile, removeTreesGroup } from './tree-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
 import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT } from './constants.js';
 import { initMobileControls, getJoystickState, getThrottleState, isMobileDevice } from './mobile-controls.js';
@@ -19,6 +20,7 @@ interface TileMeshes {
   buildings: THREE.Group | null;
   base: THREE.Group | null;
   transportation: THREE.Group | null;
+  trees: THREE.Group | null;
 }
 
 // Game state
@@ -63,16 +65,28 @@ async function updateTiles(
     loadingTiles.add(tile.key);
     console.log('Loading tile:', tile.key);
 
-    // Load base layer, buildings, and transportation in parallel
+    // Load base layer, buildings, transportation, and trees in parallel
+    // Wrap tree creation to isolate failures - trees are optional, other layers are critical
+    const safeCreateTrees = async () => {
+      try {
+        return await createTreesForTile(tile.x, tile.y, tile.z);
+      } catch (e) {
+        console.warn(`Tree creation failed for tile ${tile.key}:`, e);
+        return null;
+      }
+    };
+
     Promise.all([
       createBaseLayerForTile(tile.x, tile.y, tile.z),
       createBuildingsForTile(tile.x, tile.y, tile.z),
-      createTransportationForTile(tile.x, tile.y, tile.z)
-    ]).then(([baseGroup, buildingsGroup, transportationGroup]) => {
+      createTransportationForTile(tile.x, tile.y, tile.z),
+      safeCreateTrees()
+    ]).then(([baseGroup, buildingsGroup, transportationGroup, treesGroup]) => {
       tileMeshes.set(tile.key, {
         base: baseGroup,
         buildings: buildingsGroup,
-        transportation: transportationGroup
+        transportation: transportationGroup,
+        trees: treesGroup
       });
       loadingTiles.delete(tile.key);
       console.log('Tile loaded:', tile.key);
@@ -90,6 +104,7 @@ async function updateTiles(
       if (meshes.base) removeBaseLayerGroup(meshes.base);
       if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
       if (meshes.transportation) removeTransportationGroup(meshes.transportation);
+      if (meshes.trees) removeTreesGroup(meshes.trees);
       tileMeshes.delete(key);
     }
     removeTile(key);
@@ -234,6 +249,7 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
     if (meshes.base) removeBaseLayerGroup(meshes.base);
     if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
     if (meshes.transportation) removeTransportationGroup(meshes.transportation);
+    if (meshes.trees) removeTreesGroup(meshes.trees);
     removeTile(key);
   }
   tileMeshes.clear();
