@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
 
+# Permissions required for this workflow:
+# - contents: write - Required by rossjrw/pr-preview-action to push preview builds
+#   to the gh-pages branch. Ensure branch protection rules are enabled on main.
+# - pull-requests: write - Required to post preview URL comments on PRs.
 permissions:
   contents: write
   pull-requests: write
@@ -34,9 +38,10 @@ jobs:
         if: github.event.action != 'closed'
         run: npm run build
         env:
-          VITE_BASE_PATH: /overture-flight/pr-preview/pr-${{ github.event.number }}/
+          VITE_BASE_PATH: /${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.number }}/
 
       - name: Deploy PR Preview
+        if: github.event.action == 'closed' || success()
         uses: rossjrw/pr-preview-action@v1
         with:
           source-dir: ./dist
