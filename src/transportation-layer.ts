@@ -69,7 +69,7 @@ function getMaterial(color: number): THREE.MeshBasicMaterial {
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.9,
-      depthWrite: true
+      depthWrite: false // Must be false for transparent materials to render correctly
     }));
   }
   return materials.get(color)!;
@@ -224,17 +224,20 @@ function createRoadRibbonGeometry(
   if (!coordinates || coordinates.length < 2) return null;
 
   // Scale width based on road classification (width is in relative units, scale to meters)
-  // Base scale factor - motorway width 3.0 becomes ~15m road
+  // Example: a motorway style width of 3.0 becomes ~15m of road when scaled
   const scaledWidth = width * 5;
 
   // Convert coordinates to world positions with terrain elevation
-  const points: Array<{ x: number; y: number; z: number; lng: number; lat: number }> = [];
+  const points: Array<{ x: number; y: number; z: number }> = [];
   for (const coord of coordinates) {
     const lng = coord[0];
     const lat = coord[1];
     const world = geoToWorld(lng, lat, 0);
 
     // Get terrain height at this position
+    // Note: getTerrainHeight returns 0 if elevation tile isn't loaded yet.
+    // Roads created before terrain data arrives will be flat, but this is
+    // acceptable since tiles are recreated as the player moves around.
     let terrainHeight = 0;
     if (ELEVATION.TERRAIN_ENABLED) {
       terrainHeight = getTerrainHeight(lng, lat) * ELEVATION.VERTICAL_EXAGGERATION;
@@ -243,14 +246,14 @@ function createRoadRibbonGeometry(
     // Position road above terrain
     const y = terrainHeight + ROAD_TERRAIN_OFFSET;
 
-    points.push({ x: world.x, y, z: world.z, lng, lat });
+    points.push({ x: world.x, y, z: world.z });
   }
 
   if (points.length < 2) return null;
 
-  // Build ribbon geometry: for each segment, create a quad
+  // Build ribbon geometry: for each point, create left and right vertices
   const vertices: number[] = [];
-  const indices: number[] = [];
+  const validPointIndices: number[] = []; // Track which points have valid vertices
 
   for (let i = 0; i < points.length; i++) {
     const curr = points[i];
@@ -278,7 +281,10 @@ function createRoadRibbonGeometry(
 
     // Normalize direction
     const len = Math.sqrt(dx * dx + dz * dz);
-    if (len < 0.001) continue; // Skip degenerate segments
+    if (len < 0.001) {
+      // Skip degenerate segments - don't add vertices
+      continue;
+    }
 
     dx /= len;
     dz /= len;
@@ -289,6 +295,9 @@ function createRoadRibbonGeometry(
 
     // Create left and right vertices at half-width distance
     const halfWidth = scaledWidth / 2;
+
+    // Track that we added vertices for this point
+    validPointIndices.push(vertices.length / 6); // Current vertex pair index
 
     // Left vertex
     vertices.push(
@@ -305,10 +314,13 @@ function createRoadRibbonGeometry(
     );
   }
 
+  // Need at least 2 valid points to form a quad
+  if (validPointIndices.length < 2) return null;
+
   // Create triangle indices for the quad strip
-  // Each segment between points creates 2 triangles (a quad)
-  const numPoints = vertices.length / 6; // 2 vertices per point, 3 components per vertex
-  for (let i = 0; i < numPoints - 1; i++) {
+  // Each pair of consecutive valid points creates 2 triangles (a quad)
+  const indices: number[] = [];
+  for (let i = 0; i < validPointIndices.length - 1; i++) {
     const baseIdx = i * 2;
 
     // First triangle (top-left, bottom-left, top-right)
@@ -330,6 +342,7 @@ function createRoadRibbonGeometry(
 
 /**
  * Remove transportation layer meshes for a tile and properly dispose all GPU resources
+ * Note: Materials are cached globally and reused across tiles, so we only dispose geometries
  */
 export function removeTransportationGroup(group: THREE.Group): void {
   if (!group) return;
@@ -340,9 +353,8 @@ export function removeTransportationGroup(group: THREE.Group): void {
   }
 
   let disposedGeometries = 0;
-  let disposedMaterials = 0;
 
-  // Dispose of geometries and materials
+  // Dispose of geometries only - materials are cached and shared across tiles
   group.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const mesh = child as THREE.Mesh;
@@ -353,25 +365,15 @@ export function removeTransportationGroup(group: THREE.Group): void {
         disposedGeometries++;
       }
 
-      // Dispose materials
-      if (mesh.material) {
-        if (Array.isArray(mesh.material)) {
-          for (const mat of mesh.material) {
-            mat.dispose();
-            disposedMaterials++;
-          }
-        } else {
-          (mesh.material as THREE.Material).dispose();
-          disposedMaterials++;
-        }
-      }
+      // Don't dispose materials - they are cached in the materials Map
+      // and shared across multiple road meshes/tiles
     }
   });
 
   // Clear the group's children array
   group.clear();
 
-  if (disposedGeometries > 0 || disposedMaterials > 0) {
-    console.log(`Disposed transportation group ${group.name}: ${disposedGeometries} geometries, ${disposedMaterials} materials`);
+  if (disposedGeometries > 0) {
+    console.log(`Disposed transportation group ${group.name}: ${disposedGeometries} geometries`);
   }
 }
