@@ -1,4 +1,4 @@
-import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin } from './scene.js';
+import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin, updateSkySystem } from './scene.js';
 import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane, setMobileInput, setPlaneAltitude, PlaneState } from './plane.js';
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection, Connection, WelcomeMessage } from './network.js';
@@ -169,6 +169,9 @@ function gameLoop(time: number): void {
 
   // Update tiles based on plane position, heading, and speed (predictive loading)
   updateTiles(planeState.lng, planeState.lat, planeState.heading, planeState.speed);
+
+  // Update sky system (clouds, atmospheric effects)
+  updateSkySystem(cappedDelta);
 
   // Render the scene
   render();
