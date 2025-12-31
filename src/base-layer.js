@@ -46,11 +46,11 @@ const COLORS = {
 // Layers are separated by Y position - sufficient gaps prevent depth conflicts
 const LAYER_DEPTHS = {
   terrain: -3.0,      // Terrain mesh at lowest position
-  water: -2.0,        // Water above terrain
-  land: -1.0,         // Base land above water
-  land_cover: -0.5,   // Land cover (forests, etc.) above base land
-  land_use: -0.25,    // Land use (parks, etc.) at highest ground level
-  default: -0.5
+  land: -2.0,         // Base land above terrain
+  land_cover: -1.5,   // Land cover (forests, etc.) above base land
+  land_use: -1.0,     // Land use (parks, etc.) above land cover
+  water: -0.5,        // Water above everything to be visible
+  default: -1.5
 };
 
 // Materials cache
