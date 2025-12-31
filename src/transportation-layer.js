@@ -58,6 +58,11 @@ function getMaterial(color) {
  * @returns {{color: number, width: number}}
  */
 function getRoadStyle(properties) {
+  // Null safety check for properties
+  if (!properties) {
+    return ROAD_STYLES.default;
+  }
+
   // Overture uses 'class' for road type
   const roadClass = properties.class || properties.subtype || '';
   const type = roadClass.toLowerCase();
@@ -129,7 +134,7 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
   }
 
   // Create line geometries for each style
-  for (const [key, { style, features: styleFeatures }] of featuresByStyle) {
+  for (const { style, features: styleFeatures } of featuresByStyle.values()) {
     const geometries = [];
 
     for (const feature of styleFeatures) {
@@ -150,6 +155,7 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
     }
 
     if (geometries.length > 0) {
+      let mergeSucceeded = false;
       try {
         const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
         if (merged) {
@@ -157,9 +163,10 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
           // Roads sit just above the ground to avoid z-fighting with base layer
           mesh.position.y = 0.1;
           group.add(mesh);
+          mergeSucceeded = true;
         }
       } catch (e) {
-        // Fallback: add individually
+        // Fallback: add individually (geometries are still in use, don't dispose)
         for (const geom of geometries) {
           const mesh = new THREE.Line(geom, getMaterial(style.color));
           mesh.position.y = 0.1;
@@ -167,9 +174,12 @@ export async function createTransportationForTile(tileX, tileY, tileZ) {
         }
       }
 
-      // Clean up individual geometries
-      for (const geom of geometries) {
-        geom.dispose();
+      // Only dispose individual geometries if merge succeeded
+      // (mergeGeometries creates a new geometry, so originals can be disposed)
+      if (mergeSucceeded) {
+        for (const geom of geometries) {
+          geom.dispose();
+        }
       }
     }
   }
