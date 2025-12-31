@@ -37,7 +37,7 @@ let planeState: PlaneState = {
   lat: DEFAULT_LOCATION.lat,
   lng: DEFAULT_LOCATION.lng,
   altitude: FLIGHT.SPAWN_ALTITUDE,
-  heading: 30, // NE direction
+  heading: 0, // North direction
   pitch: 0,
   roll: 0,
   speed: FLIGHT.DEFAULT_SPEED,
