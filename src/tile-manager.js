@@ -1,12 +1,13 @@
 import { PMTiles } from 'pmtiles';
 import { VectorTile } from '@mapbox/vector-tile';
 import Pbf from 'pbf';
-import { OVERTURE_BUILDINGS_PMTILES, OVERTURE_BASE_PMTILES } from './constants.js';
+import { OVERTURE_BUILDINGS_PMTILES, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from './constants.js';
 import { getOrigin } from './scene.js';
 
 // PMTiles sources
 let buildingsPMTiles = null;
 let basePMTiles = null;
+let transportationPMTiles = null;
 
 // Loaded tiles cache
 const loadedTiles = new Map(); // "z/x/y" -> { meshes: [], loading: boolean }
@@ -25,6 +26,7 @@ const metersPerDegreeLng = (lat) => 111320 * Math.cos(lat * Math.PI / 180);
 export async function initTileManager() {
   buildingsPMTiles = new PMTiles(OVERTURE_BUILDINGS_PMTILES);
   basePMTiles = new PMTiles(OVERTURE_BASE_PMTILES);
+  transportationPMTiles = new PMTiles(OVERTURE_TRANSPORTATION_PMTILES);
 
   // Get metadata to verify sources are working
   try {
@@ -39,6 +41,13 @@ export async function initTileManager() {
     console.log('Base PMTiles initialized:', baseHeader);
   } catch (e) {
     console.error('Failed to init base PMTiles:', e);
+  }
+
+  try {
+    const transportationHeader = await transportationPMTiles.getHeader();
+    console.log('Transportation PMTiles initialized:', transportationHeader);
+  } catch (e) {
+    console.error('Failed to init transportation PMTiles:', e);
   }
 }
 
@@ -197,6 +206,28 @@ export async function loadBaseTile(x, y, zoom = TILE_ZOOM) {
 }
 
 /**
+ * Load transportation features for a tile (roads, paths, railways)
+ * @param {number} x
+ * @param {number} y
+ * @param {number} zoom
+ * @returns {Promise<Array<Object>>}
+ */
+export async function loadTransportationTile(x, y, zoom = TILE_ZOOM) {
+  if (!transportationPMTiles) {
+    console.warn('Transportation PMTiles not initialized');
+    return [];
+  }
+
+  const data = await getTileData(transportationPMTiles, zoom, x, y);
+  if (!data) {
+    return [];
+  }
+
+  // Transportation PMTiles has layers: segment, connector
+  return parseMVT(data, x, y, zoom);
+}
+
+/**
  * Get which tiles should be loaded based on plane position
  * @param {number} lng
  * @param {number} lat
@@ -296,7 +327,7 @@ export function removeTile(key) {
  * Get the PMTiles sources
  */
 export function getPMTilesSources() {
-  return { buildingsPMTiles, basePMTiles };
+  return { buildingsPMTiles, basePMTiles, transportationPMTiles };
 }
 
 /**
