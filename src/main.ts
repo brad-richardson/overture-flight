@@ -42,10 +42,15 @@ const tileMeshes = new Map<string, TileMeshes>(); // key -> { buildings: Group, 
 const loadingTiles = new Set<string>(); // Track tiles currently being loaded
 
 /**
- * Load tiles around the current position
+ * Load tiles around the current position with predictive loading
  */
-async function updateTiles(lng: number, lat: number): Promise<void> {
-  const tilesToLoad = getTilesToLoad(lng, lat);
+async function updateTiles(
+  lng: number,
+  lat: number,
+  heading: number = 0,
+  speed: number = 0
+): Promise<void> {
+  const tilesToLoad = getTilesToLoad(lng, lat, heading, speed);
 
   // Load new tiles
   for (const tile of tilesToLoad) {
@@ -143,8 +148,8 @@ function gameLoop(time: number): void {
     connection.sendPosition(planeState);
   }
 
-  // Update tiles based on plane position
-  updateTiles(planeState.lng, planeState.lat);
+  // Update tiles based on plane position, heading, and speed (predictive loading)
+  updateTiles(planeState.lng, planeState.lat, planeState.heading, planeState.speed);
 
   // Render the scene
   render();

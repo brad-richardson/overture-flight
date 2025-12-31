@@ -90,6 +90,11 @@ const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loa
 // Tile loading settings
 const TILE_ZOOM = 14; // Zoom level for tile loading
 const TILE_RADIUS = 2; // Load tiles within this radius of center
+const PREDICTIVE_TILES = 3; // Max tiles ahead to load based on heading
+const SPEED_THRESHOLD = 30; // m/s - only predictive load above this speed
+// Speed divisor to calculate tiles ahead: tilesAhead = speed / SPEED_TO_TILES_DIVISOR
+// At 50 m/s = 1 tile ahead, 100 m/s = 2 tiles, 150 m/s = 3 tiles (capped at PREDICTIVE_TILES)
+const SPEED_TO_TILES_DIVISOR = 50;
 
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
@@ -338,11 +343,18 @@ export async function loadTransportationTile(
 }
 
 /**
- * Get which tiles should be loaded based on plane position
+ * Get which tiles should be loaded based on plane position, heading, and speed
+ * Implements predictive loading to fetch tiles ahead of the plane's direction of travel
  */
-export function getTilesToLoad(lng: number, lat: number): TileInfo[] {
+export function getTilesToLoad(
+  lng: number,
+  lat: number,
+  heading: number = 0,
+  speed: number = 0
+): TileInfo[] {
   const [centerX, centerY] = lngLatToTile(lng, lat, TILE_ZOOM);
   const tiles: TileInfo[] = [];
+  const addedTiles = new Set<string>();
 
   // Debug: Log tile calculation (only occasionally to avoid spam)
   if (Math.random() < 0.01) {
@@ -351,12 +363,51 @@ export function getTilesToLoad(lng: number, lat: number): TileInfo[] {
     console.log(`Center tile bounds: W=${bounds.west.toFixed(4)}, E=${bounds.east.toFixed(4)}, N=${bounds.north.toFixed(4)}, S=${bounds.south.toFixed(4)}`);
   }
 
+  // Helper to add tile if not already added
+  const addTile = (x: number, y: number) => {
+    const key = `${TILE_ZOOM}/${x}/${y}`;
+    if (!addedTiles.has(key)) {
+      addedTiles.add(key);
+      tiles.push({ x, y, z: TILE_ZOOM, key });
+    }
+  };
+
+  // Load tiles in radius around current position
   for (let dx = -TILE_RADIUS; dx <= TILE_RADIUS; dx++) {
     for (let dy = -TILE_RADIUS; dy <= TILE_RADIUS; dy++) {
-      const x = centerX + dx;
-      const y = centerY + dy;
-      const key = `${TILE_ZOOM}/${x}/${y}`;
-      tiles.push({ x, y, z: TILE_ZOOM, key });
+      addTile(centerX + dx, centerY + dy);
+    }
+  }
+
+  // Predictive loading: load tiles ahead based on heading and speed
+  if (speed > SPEED_THRESHOLD) {
+    const headingRad = (heading * Math.PI) / 180;
+
+    // Calculate tile offset direction from heading
+    // Heading 0 = North = -Y in tile coords (lower Y = further north)
+    // Heading 90 = East = +X in tile coords
+    const dx = Math.sin(headingRad);
+    const dy = -Math.cos(headingRad); // Negative because tile Y increases southward
+
+    // Load tiles ahead based on speed (faster = more tiles ahead)
+    const tilesAhead = Math.min(PREDICTIVE_TILES, Math.ceil(speed / SPEED_TO_TILES_DIVISOR));
+
+    for (let i = 1; i <= tilesAhead; i++) {
+      // Extend in the direction of travel
+      const aheadX = centerX + Math.round(dx * (TILE_RADIUS + i));
+      const aheadY = centerY + Math.round(dy * (TILE_RADIUS + i));
+
+      // Add a small cone of tiles in the direction of travel
+      addTile(aheadX, aheadY);
+
+      // Add adjacent tiles for a wider cone as we go further
+      if (i >= 2) {
+        // Perpendicular direction for cone spread
+        const perpX = Math.cos(headingRad);
+        const perpY = Math.sin(headingRad);
+        addTile(aheadX + Math.round(perpX), aheadY + Math.round(perpY));
+        addTile(aheadX - Math.round(perpX), aheadY - Math.round(perpY));
+      }
     }
   }
 
