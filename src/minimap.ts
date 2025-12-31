@@ -1,6 +1,66 @@
 import maplibregl from 'maplibre-gl';
-import { LOCATIONS } from './constants.js';
+import { Protocol } from 'pmtiles';
+import { LOCATIONS, OVERTURE_BASE_PMTILES, OVERTURE_BUILDINGS_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from './constants.js';
 import type { PlaneState } from './plane.js';
+
+// Register PMTiles protocol for MapLibre
+let protocolRegistered = false;
+
+function ensurePMTilesProtocol(): void {
+  if (!protocolRegistered) {
+    const protocol = new Protocol();
+    maplibregl.addProtocol('pmtiles', protocol.tile);
+    protocolRegistered = true;
+    console.log('PMTiles protocol registered for minimap');
+  }
+}
+
+/**
+ * Cartographic color palette for the minimap.
+ * Uses a light, natural color scheme inspired by traditional cartography.
+ */
+const CARTO_COLORS = {
+  // Background and water
+  background: '#e8e4d8',    // Warm off-white
+  water: '#a3c7df',         // Soft blue
+  waterDark: '#7db0d0',     // Slightly deeper blue for contrast
+
+  // Land and vegetation
+  land: '#f5f3ed',          // Light cream
+  landcover: '#d8e4c8',     // Soft green for vegetation
+  forest: '#c2d6a8',        // Slightly deeper green for forests
+  park: '#c8dfb0',          // Park green
+  grass: '#d8e8c0',         // Light grass green
+
+  // Urban areas
+  urban: '#e8e0d4',         // Warm urban gray
+  residential: '#ebe6dc',   // Light residential
+  commercial: '#e5ddd0',    // Commercial/retail
+  industrial: '#ddd8cc',    // Industrial gray
+
+  // Buildings
+  building: '#d4ccc0',      // Building fill
+  buildingOutline: '#b8a898', // Building stroke
+
+  // Roads
+  motorway: '#e8a87c',      // Orange for highways
+  motorwayOutline: '#d08050',
+  primary: '#f8d898',       // Yellow for primary roads
+  primaryOutline: '#e0b860',
+  secondary: '#ffffff',     // White for secondary
+  secondaryOutline: '#c8c0b0',
+  tertiary: '#ffffff',      // White for tertiary
+  tertiaryOutline: '#d0c8b8',
+  road: '#ffffff',          // Default road
+  roadOutline: '#d8d0c4',
+
+  // Rail
+  rail: '#888888',
+
+  // Text
+  text: '#444444',
+  textHalo: '#ffffff',
+};
 
 // Minimap state
 let map: maplibregl.Map | null = null;
@@ -356,30 +416,255 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
     return;
   }
 
-  // Initialize MapLibre GL map
+  // Ensure PMTiles protocol is registered
+  ensurePMTilesProtocol();
+
+  // Initialize MapLibre GL map with Overture PMTiles and cartographic styling
   map = new maplibregl.Map({
     container: mapContainer,
     style: {
       version: 8,
       sources: {
-        'osm': {
-          type: 'raster',
-          tiles: [
-            'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png'
-          ],
-          tileSize: 256,
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        'overture-base': {
+          type: 'vector',
+          url: `pmtiles://${OVERTURE_BASE_PMTILES}`,
+          attribution: '&copy; <a href="https://overturemaps.org">Overture Maps Foundation</a>'
+        },
+        'overture-buildings': {
+          type: 'vector',
+          url: `pmtiles://${OVERTURE_BUILDINGS_PMTILES}`
+        },
+        'overture-transportation': {
+          type: 'vector',
+          url: `pmtiles://${OVERTURE_TRANSPORTATION_PMTILES}`
         }
       },
       layers: [
+        // Background layer (ocean/default)
         {
-          id: 'osm-tiles',
-          type: 'raster',
-          source: 'osm',
-          minzoom: 0,
-          maxzoom: 19
+          id: 'background',
+          type: 'background',
+          paint: {
+            'background-color': CARTO_COLORS.water
+          }
+        },
+
+        // Land areas
+        {
+          id: 'land',
+          type: 'fill',
+          source: 'overture-base',
+          'source-layer': 'land',
+          paint: {
+            'fill-color': CARTO_COLORS.land
+          }
+        },
+
+        // Land cover (vegetation, forests, etc.)
+        {
+          id: 'landcover',
+          type: 'fill',
+          source: 'overture-base',
+          'source-layer': 'land_cover',
+          paint: {
+            'fill-color': [
+              'match',
+              ['get', 'subtype'],
+              'forest', CARTO_COLORS.forest,
+              'grass', CARTO_COLORS.grass,
+              'shrub', CARTO_COLORS.landcover,
+              'wetland', '#b8d4c4',
+              'moss', '#c8dcc0',
+              'bare', CARTO_COLORS.urban,
+              'snow', '#f8f8f8',
+              'crop', '#e8e4b8',
+              CARTO_COLORS.landcover
+            ],
+            'fill-opacity': 0.7
+          }
+        },
+
+        // Land use (urban areas, parks, etc.)
+        {
+          id: 'landuse',
+          type: 'fill',
+          source: 'overture-base',
+          'source-layer': 'land_use',
+          paint: {
+            'fill-color': [
+              'match',
+              ['get', 'subtype'],
+              'residential', CARTO_COLORS.residential,
+              'commercial', CARTO_COLORS.commercial,
+              'industrial', CARTO_COLORS.industrial,
+              'park', CARTO_COLORS.park,
+              'cemetery', '#d4dcc8',
+              'golf', '#c8e0b8',
+              'airport', '#e0dcd4',
+              'education', '#e8e0dc',
+              'hospital', '#f0e8e8',
+              CARTO_COLORS.urban
+            ],
+            'fill-opacity': 0.6
+          }
+        },
+
+        // Water bodies
+        {
+          id: 'water',
+          type: 'fill',
+          source: 'overture-base',
+          'source-layer': 'water',
+          paint: {
+            'fill-color': CARTO_COLORS.water
+          }
+        },
+
+        // Infrastructure (bridges, piers, etc.)
+        {
+          id: 'infrastructure',
+          type: 'fill',
+          source: 'overture-base',
+          'source-layer': 'infrastructure',
+          paint: {
+            'fill-color': '#d8d4c8',
+            'fill-opacity': 0.8
+          }
+        },
+
+        // Roads - outline layer (drawn first, wider)
+        {
+          id: 'roads-outline',
+          type: 'line',
+          source: 'overture-transportation',
+          'source-layer': 'segment',
+          filter: ['==', ['geometry-type'], 'LineString'],
+          layout: {
+            'line-cap': 'round',
+            'line-join': 'round'
+          },
+          paint: {
+            'line-color': [
+              'match',
+              ['get', 'class'],
+              'motorway', CARTO_COLORS.motorwayOutline,
+              'primary', CARTO_COLORS.primaryOutline,
+              'secondary', CARTO_COLORS.secondaryOutline,
+              'tertiary', CARTO_COLORS.tertiaryOutline,
+              'residential', CARTO_COLORS.roadOutline,
+              'service', CARTO_COLORS.roadOutline,
+              CARTO_COLORS.roadOutline
+            ],
+            'line-width': [
+              'interpolate', ['linear'], ['zoom'],
+              8, ['match', ['get', 'class'],
+                'motorway', 3,
+                'primary', 2,
+                'secondary', 1.5,
+                0.5
+              ],
+              14, ['match', ['get', 'class'],
+                'motorway', 10,
+                'primary', 7,
+                'secondary', 5,
+                'tertiary', 4,
+                3
+              ]
+            ]
+          }
+        },
+
+        // Roads - fill layer (drawn on top, narrower)
+        {
+          id: 'roads-fill',
+          type: 'line',
+          source: 'overture-transportation',
+          'source-layer': 'segment',
+          filter: ['==', ['geometry-type'], 'LineString'],
+          layout: {
+            'line-cap': 'round',
+            'line-join': 'round'
+          },
+          paint: {
+            'line-color': [
+              'match',
+              ['get', 'class'],
+              'motorway', CARTO_COLORS.motorway,
+              'primary', CARTO_COLORS.primary,
+              'secondary', CARTO_COLORS.secondary,
+              'tertiary', CARTO_COLORS.tertiary,
+              'residential', CARTO_COLORS.road,
+              'service', CARTO_COLORS.road,
+              CARTO_COLORS.road
+            ],
+            'line-width': [
+              'interpolate', ['linear'], ['zoom'],
+              8, ['match', ['get', 'class'],
+                'motorway', 2,
+                'primary', 1.2,
+                'secondary', 0.8,
+                0.3
+              ],
+              14, ['match', ['get', 'class'],
+                'motorway', 7,
+                'primary', 5,
+                'secondary', 3.5,
+                'tertiary', 2.5,
+                2
+              ]
+            ]
+          }
+        },
+
+        // Railways
+        {
+          id: 'railways',
+          type: 'line',
+          source: 'overture-transportation',
+          'source-layer': 'segment',
+          filter: ['all',
+            ['==', ['geometry-type'], 'LineString'],
+            ['==', ['get', 'subtype'], 'rail']
+          ],
+          paint: {
+            'line-color': CARTO_COLORS.rail,
+            'line-width': [
+              'interpolate', ['linear'], ['zoom'],
+              8, 0.5,
+              14, 2
+            ],
+            'line-dasharray': [2, 2]
+          }
+        },
+
+        // Buildings
+        {
+          id: 'buildings',
+          type: 'fill',
+          source: 'overture-buildings',
+          'source-layer': 'building',
+          minzoom: 13,
+          paint: {
+            'fill-color': CARTO_COLORS.building,
+            'fill-opacity': [
+              'interpolate', ['linear'], ['zoom'],
+              13, 0.3,
+              16, 0.7
+            ]
+          }
+        },
+
+        // Building outlines
+        {
+          id: 'buildings-outline',
+          type: 'line',
+          source: 'overture-buildings',
+          'source-layer': 'building',
+          minzoom: 14,
+          paint: {
+            'line-color': CARTO_COLORS.buildingOutline,
+            'line-width': 0.5
+          }
         }
       ]
     },
