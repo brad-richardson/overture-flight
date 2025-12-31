@@ -295,7 +295,8 @@ function seededRandom(seed) {
 }
 
 /**
- * Generate a seed from feature properties for consistent random selection
+ * Generate a deterministic seed from feature properties
+ * Uses coordinates as fallback to ensure consistent results
  */
 function generateSeed(feature) {
   // Use feature ID if available, otherwise hash coordinates
@@ -309,15 +310,18 @@ function generateSeed(feature) {
     return Math.abs(hash);
   }
 
-  // Fallback: use first coordinate as seed
+  // Fallback: use first coordinate as seed (deterministic)
   if (feature.coordinates) {
     const coords = feature.type === 'MultiPolygon'
       ? feature.coordinates[0][0][0]
       : feature.coordinates[0][0];
-    return Math.abs(Math.floor((coords[0] * 1000000) + (coords[1] * 1000)));
+    if (coords && coords.length >= 2) {
+      return Math.abs(Math.floor((coords[0] * 1000000) + (coords[1] * 1000)));
+    }
   }
 
-  return Date.now();
+  // Final fallback: use a fixed seed for consistency
+  return 42;
 }
 
 // ============================================================================
@@ -344,96 +348,6 @@ function getBuildingCategory(feature) {
   }
 
   return 'default';
-}
-
-/**
- * Determine if building is "tall" based on height/floors
- */
-function isTallBuilding(feature) {
-  const props = feature.properties || {};
-  const height = props.height || (props.num_floors ? props.num_floors * 3 : 0);
-  return height > 25 || (props.num_floors && props.num_floors > 7);
-}
-
-/**
- * Predict and create a Three.js material for a building
- * @param {Object} feature - GeoJSON feature with properties
- * @returns {Object} Material configuration with wall, accent, and roof materials
- */
-export function predictBuildingMaterial(feature) {
-  const category = getBuildingCategory(feature);
-  const palette = BUILDING_PALETTES[category] || BUILDING_PALETTES.default;
-  const tall = isTallBuilding(feature);
-
-  // Use seeded random for consistent results per building
-  const seed = generateSeed(feature);
-  const rand = seededRandom(seed);
-
-  // Select wall color - tall buildings tend toward grayer/more modern colors
-  let wallColors = palette.walls;
-  if (tall && category === 'residential') {
-    // Tall residential = more like commercial
-    wallColors = BUILDING_PALETTES.commercial.walls;
-  }
-
-  const wallColorIndex = Math.floor(rand() * wallColors.length);
-  const wallColor = wallColors[wallColorIndex];
-
-  // Select accent color for variation
-  const accentColorIndex = Math.floor(rand() * palette.accents.length);
-  const accentColor = palette.accents[accentColorIndex];
-
-  // Select roof color
-  const roofColorIndex = Math.floor(rand() * palette.roofs.length);
-  const roofColor = palette.roofs[roofColorIndex];
-
-  // Determine material properties based on building type
-  let roughness = 0.7 + (rand() * 0.2); // 0.7-0.9
-  let metalness = 0.05 + (rand() * 0.1); // 0.05-0.15
-
-  // Commercial/glass buildings are more reflective
-  if (category === 'commercial' && rand() > 0.4) {
-    roughness = 0.2 + (rand() * 0.3); // 0.2-0.5 (glossier)
-    metalness = 0.3 + (rand() * 0.3); // 0.3-0.6 (more metallic)
-  }
-
-  // Industrial can be more metallic
-  if (category === 'industrial' && rand() > 0.5) {
-    roughness = 0.5 + (rand() * 0.3);
-    metalness = 0.2 + (rand() * 0.4);
-  }
-
-  // Create materials
-  const wallMaterial = new THREE.MeshStandardMaterial({
-    color: wallColor,
-    roughness: roughness,
-    metalness: metalness,
-    flatShading: rand() > 0.7, // Some buildings with flat shading for variety
-  });
-
-  const accentMaterial = new THREE.MeshStandardMaterial({
-    color: accentColor,
-    roughness: 0.6,
-    metalness: 0.1,
-  });
-
-  const roofMaterial = new THREE.MeshStandardMaterial({
-    color: roofColor,
-    roughness: 0.8,
-    metalness: 0.05,
-  });
-
-  return {
-    wall: wallMaterial,
-    accent: accentMaterial,
-    roof: roofMaterial,
-    category,
-    isTall: tall,
-    // Pattern hints for future window generation
-    useVerticalWindows: tall && rand() > 0.3,
-    useAccentLines: rand() > 0.75,
-    windowDensity: tall ? 0.6 : 0.3,
-  };
 }
 
 /**
@@ -481,59 +395,8 @@ export function getBuildingColor(feature) {
   const palette = BUILDING_PALETTES[category] || BUILDING_PALETTES.default;
 
   const seed = generateSeed(feature);
-  const rand = seededRandom(seed);
+  const rng = seededRandom(seed);
 
-  const wallColorIndex = Math.floor(rand() * palette.walls.length);
+  const wallColorIndex = Math.floor(rng() * palette.walls.length);
   return palette.walls[wallColorIndex];
 }
-
-/**
- * Get roof color for a feature
- */
-export function getRoofColor(feature) {
-  const category = getBuildingCategory(feature);
-  const palette = BUILDING_PALETTES[category] || BUILDING_PALETTES.default;
-
-  const seed = generateSeed(feature);
-  const rand = seededRandom(seed);
-
-  const roofColorIndex = Math.floor(rand() * palette.roofs.length);
-  return palette.roofs[roofColorIndex];
-}
-
-// ============================================================================
-// Height-Based Color Tinting
-// ============================================================================
-
-/**
- * Apply height-based color variation (taller buildings slightly darker at base)
- * @param {number} baseColor - Hex color
- * @param {number} height - Building height
- * @param {number} currentHeight - Current Y position
- * @returns {number} Modified hex color
- */
-export function applyHeightGradient(baseColor, height, currentHeight) {
-  if (height < 30) return baseColor;
-
-  // Extract RGB
-  const r = (baseColor >> 16) & 0xFF;
-  const g = (baseColor >> 8) & 0xFF;
-  const b = baseColor & 0xFF;
-
-  // Calculate darkening factor (0-0.15 based on position)
-  const progress = currentHeight / height;
-  const darken = 1 - ((1 - progress) * 0.15);
-
-  // Apply darkening
-  const newR = Math.floor(r * darken);
-  const newG = Math.floor(g * darken);
-  const newB = Math.floor(b * darken);
-
-  return (newR << 16) | (newG << 8) | newB;
-}
-
-// ============================================================================
-// Exports for convenience
-// ============================================================================
-
-export { BUILDING_PALETTES, CLASS_TO_CATEGORY };

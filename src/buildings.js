@@ -1,12 +1,10 @@
 import * as THREE from 'three';
 import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
-import { loadBuildingTile, tileToWorldBounds } from './tile-manager.js';
+import { loadBuildingTile } from './tile-manager.js';
 import {
   getBuildingColor,
-  getRoofColor,
   groupFeaturesByCategory,
   createCategoryMaterial,
-  BUILDING_PALETTES
 } from './building-materials.js';
 
 // Default building height when not specified
@@ -273,37 +271,6 @@ function addVertexColors(geometry, hexColor, height) {
 }
 
 /**
- * Add window-like patterns to building facades (experimental)
- * This modifies vertex colors to create lighter rectangular patterns
- */
-function addWindowPattern(colors, positions, count, height, baseR, baseG, baseB) {
-  const windowColor = { r: 0.7, g: 0.8, b: 0.9 }; // Light blue-ish for windows
-  const floorHeight = 3; // meters per floor
-  const windowSpacing = 4; // meters between windows
-
-  for (let i = 0; i < count; i++) {
-    const x = positions.getX(i);
-    const y = positions.getY(i);
-    const z = positions.getZ(i);
-
-    // Determine if this vertex should be a "window"
-    const floorLevel = y % floorHeight;
-    const isWindowLevel = floorLevel > 0.5 && floorLevel < 2.5;
-
-    const horizontalPos = (x + z) % windowSpacing;
-    const isWindowColumn = horizontalPos > 0.5 && horizontalPos < 2.5;
-
-    if (isWindowLevel && isWindowColumn && y > 2) {
-      // Apply window color (blend with base)
-      const blend = 0.4;
-      colors[i * 3] = baseR * (1 - blend) + windowColor.r * blend;
-      colors[i * 3 + 1] = baseG * (1 - blend) + windowColor.g * blend;
-      colors[i * 3 + 2] = baseB * (1 - blend) + windowColor.b * blend;
-    }
-  }
-}
-
-/**
  * Calculate signed area of a 2D polygon
  * Positive = clockwise, Negative = counter-clockwise
  */
@@ -331,11 +298,9 @@ export function removeBuildingsGroup(group) {
   group.traverse((child) => {
     if (child.isMesh) {
       if (child.geometry) child.geometry.dispose();
+      // Always dispose cloned materials (they're not in the cache)
       if (child.material) {
-        // Dispose material if it's unique to this mesh
-        if (!materialCache.has(child.material)) {
-          child.material.dispose();
-        }
+        child.material.dispose();
       }
     }
   });
