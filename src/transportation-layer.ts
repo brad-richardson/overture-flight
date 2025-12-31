@@ -178,7 +178,9 @@ export async function createTransportationForTile(
       try {
         const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
         if (merged) {
-          const mesh = new THREE.Line(merged, getMaterial(style.color));
+          // Use LineSegments instead of Line to render discrete segments
+          // This prevents merged geometries from drawing connecting lines between roads
+          const mesh = new THREE.LineSegments(merged, getMaterial(style.color));
           // Roads sit just above the ground to avoid z-fighting with base layer
           mesh.position.y = 0.1;
           group.add(mesh);
@@ -187,7 +189,7 @@ export async function createTransportationForTile(
       } catch {
         // Fallback: add individually (geometries are still in use, don't dispose)
         for (const geom of geometries) {
-          const mesh = new THREE.Line(geom, getMaterial(style.color));
+          const mesh = new THREE.LineSegments(geom, getMaterial(style.color));
           mesh.position.y = 0.1;
           group.add(mesh);
         }
@@ -208,7 +210,9 @@ export async function createTransportationForTile(
 }
 
 /**
- * Create line geometry from coordinates
+ * Create line segment geometry from coordinates
+ * Uses segment pairs (v0-v1, v1-v2, v2-v3) instead of polyline (v0-v1-v2-v3)
+ * This allows merging geometries without creating connecting lines between roads
  */
 function createLineGeometry(
   coordinates: number[][],
@@ -216,15 +220,24 @@ function createLineGeometry(
 ): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length < 2) return null;
 
-  const points: THREE.Vector3[] = [];
+  // Convert coordinates to world positions
+  const worldPoints: THREE.Vector3[] = [];
   for (const coord of coordinates) {
     const world = geoToWorld(coord[0], coord[1], 0);
-    points.push(new THREE.Vector3(world.x, 0, world.z));
+    worldPoints.push(new THREE.Vector3(world.x, 0, world.z));
   }
 
-  if (points.length < 2) return null;
+  if (worldPoints.length < 2) return null;
 
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  // Create segment pairs: for polyline v0-v1-v2-v3, we need pairs [v0,v1], [v1,v2], [v2,v3]
+  // This is for use with THREE.LineSegments which draws each pair as a separate line
+  const segmentPoints: THREE.Vector3[] = [];
+  for (let i = 0; i < worldPoints.length - 1; i++) {
+    segmentPoints.push(worldPoints[i]);
+    segmentPoints.push(worldPoints[i + 1]);
+  }
+
+  const geometry = new THREE.BufferGeometry().setFromPoints(segmentPoints);
   return geometry;
 }
 
@@ -241,8 +254,8 @@ export function removeTransportationGroup(group: THREE.Group): void {
 
   // Dispose of geometries
   group.traverse((child) => {
-    if ((child as THREE.Line).isLine) {
-      const line = child as THREE.Line;
+    if ((child as THREE.LineSegments).isLineSegments) {
+      const line = child as THREE.LineSegments;
       if (line.geometry) line.geometry.dispose();
     }
   });
