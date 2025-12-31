@@ -212,7 +212,10 @@ function getColorForFeature(layer: string, properties: Record<string, unknown>):
   }
 
   if (layer === 'land_cover') {
-    // Land cover should use subtype, but fallback to grass if unknown
+    // Debug: log unknown land_cover subtypes to help diagnose missing styles
+    if (type && type !== 'grass') {
+      console.log(`land_cover subtype not in COLORS: "${type}" (properties:`, properties, ')');
+    }
     // Overture subtypes: barren, crop, forest, grass, mangrove, moss, shrub, snow, urban, wetland
     return COLORS.grass;
   }
@@ -448,10 +451,15 @@ export async function createBaseLayerForTile(
       }
     }
 
-    // Create merged geometry for each color+layer combination (polygons)
+    // Layers that should NOT be merged (render individually to prevent z-fighting artifacts)
+    // Water and bathymetry polygons often overlap and cause flickering when merged
+    const NO_MERGE_LAYERS = ['water', 'bathymetry'];
+
+    // Create geometry for each color+layer combination (polygons)
     for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
       const geometries: THREE.BufferGeometry[] = [];
       const isTerrainFollowing = TERRAIN_FOLLOWING_LAYERS.includes(layer);
+      const shouldMerge = !NO_MERGE_LAYERS.includes(layer);
       const yOffset = LAYER_DEPTHS[layer] ?? LAYER_DEPTHS.default;
 
       for (const feature of layerFeatures) {
@@ -475,29 +483,43 @@ export async function createBaseLayerForTile(
         // For terrain-following layers, Y is already set in geometry vertices
         // For other layers, use mesh position.y to set layer height
         const yPosition = isTerrainFollowing ? 0 : yOffset;
+        const material = getMaterial(color);
 
-        try {
-          const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
-          if (merged) {
-            const mesh = new THREE.Mesh(merged, getMaterial(color));
-            mesh.receiveShadow = true;
-            mesh.position.y = yPosition;
-            mesh.name = `features-${layer}`;
-            group.add(mesh);
+        if (shouldMerge) {
+          // Merge geometries for land layers (better performance)
+          try {
+            const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
+            if (merged) {
+              const mesh = new THREE.Mesh(merged, material);
+              mesh.receiveShadow = true;
+              mesh.position.y = yPosition;
+              mesh.name = `features-${layer}`;
+              group.add(mesh);
+            }
+          } catch {
+            // Fallback: add individually
+            for (const geom of geometries) {
+              const mesh = new THREE.Mesh(geom, material);
+              mesh.receiveShadow = true;
+              mesh.position.y = yPosition;
+              group.add(mesh);
+            }
           }
-        } catch {
-          // Fallback: add individually
+          // Clean up individual geometries (merged created new geometry)
           for (const geom of geometries) {
-            const mesh = new THREE.Mesh(geom, getMaterial(color));
+            geom.dispose();
+          }
+        } else {
+          // Don't merge water/bathymetry - render individually to prevent z-fighting
+          // Each polygon gets its own mesh to avoid overlapping merged geometry artifacts
+          for (const geom of geometries) {
+            const mesh = new THREE.Mesh(geom, material);
             mesh.receiveShadow = true;
             mesh.position.y = yPosition;
+            mesh.name = `${layer}-polygon`;
             group.add(mesh);
           }
-        }
-
-        // Clean up individual geometries
-        for (const geom of geometries) {
-          geom.dispose();
+          // Don't dispose - geometries are in use by meshes
         }
       }
     }
