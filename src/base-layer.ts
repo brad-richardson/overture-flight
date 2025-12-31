@@ -31,6 +31,9 @@ const COLORS: Record<string, number> = {
   canal: 0x2a7ab0,
   water: 0x1e5f8a,
 
+  // Bathymetry - depth-based colors (set via getBathymetryColor function)
+  bathymetry: 0x1e5f8a,
+
   // Land cover types from Overture schema - distinct colors for each
   // https://docs.overturemaps.org/schema/reference/base/land_cover/
   forest: 0x1a4d2e,     // Deep forest green
@@ -69,9 +72,57 @@ const LAYER_DEPTHS: Record<string, number> = {
   land: -2.0,         // Base land above terrain
   land_cover: -1.5,   // Land cover (forests, etc.) above base land
   land_use: -1.0,     // Land use (parks, etc.) above land cover
+  bathymetry: -0.6,   // Bathymetry just below water surface
   water: -0.5,        // Water above everything to be visible
   default: -1.5
 };
+
+// Bathymetry depth color stops (depth in meters -> color)
+// Lighter colors for shallow waters, darker for deep
+// Note: Overture Maps bathymetry uses positive depth values representing
+// magnitude below sea level (e.g., 2000 = 2000m deep), not negative elevations
+const BATHYMETRY_COLORS = [
+  { depth: 0, color: { r: 0x4a, g: 0xb0, b: 0xd0 } },      // Very shallow: light cyan-blue
+  { depth: 200, color: { r: 0x3a, g: 0x9a, b: 0xc0 } },    // Shallow: cyan-blue
+  { depth: 1000, color: { r: 0x2a, g: 0x80, b: 0xb0 } },   // Medium: ocean blue
+  { depth: 2000, color: { r: 0x1e, g: 0x5f, b: 0x8a } },   // Deep: standard ocean
+  { depth: 4000, color: { r: 0x15, g: 0x45, b: 0x70 } },   // Very deep: dark blue
+  { depth: 6000, color: { r: 0x0d, g: 0x30, b: 0x55 } },   // Abyssal: very dark blue
+  { depth: 10000, color: { r: 0x08, g: 0x20, b: 0x40 } },  // Hadal: near-black blue
+];
+
+/**
+ * Get color for bathymetry feature based on depth
+ * Uses linear interpolation between color stops
+ * @param depth - Positive depth value in meters below sea level (0-10000)
+ */
+function getBathymetryColor(depth: number): number {
+  // Clamp depth to our range
+  const clampedDepth = Math.max(0, Math.min(depth, 10000));
+
+  // Find the two color stops to interpolate between
+  let lowerStop = BATHYMETRY_COLORS[0];
+  let upperStop = BATHYMETRY_COLORS[BATHYMETRY_COLORS.length - 1];
+
+  for (let i = 0; i < BATHYMETRY_COLORS.length - 1; i++) {
+    if (clampedDepth >= BATHYMETRY_COLORS[i].depth && clampedDepth <= BATHYMETRY_COLORS[i + 1].depth) {
+      lowerStop = BATHYMETRY_COLORS[i];
+      upperStop = BATHYMETRY_COLORS[i + 1];
+      break;
+    }
+  }
+
+  // Calculate interpolation factor
+  const range = upperStop.depth - lowerStop.depth;
+  const t = range > 0 ? (clampedDepth - lowerStop.depth) / range : 0;
+
+  // Linearly interpolate each color component
+  const r = Math.round(lowerStop.color.r + t * (upperStop.color.r - lowerStop.color.r));
+  const g = Math.round(lowerStop.color.g + t * (upperStop.color.g - lowerStop.color.g));
+  const b = Math.round(lowerStop.color.b + t * (upperStop.color.b - lowerStop.color.b));
+
+  return (r << 16) | (g << 8) | b;
+}
 
 // Materials cache
 const materials = new Map<number, THREE.MeshStandardMaterial>();
@@ -137,6 +188,12 @@ function getLineMaterial(color: number): THREE.LineBasicMaterial {
 function getColorForFeature(layer: string, properties: Record<string, unknown>): number {
   const subtype = (properties.subtype || properties.class || '') as string;
   const type = subtype.toLowerCase();
+
+  // Handle bathymetry layer with depth-based coloring
+  if (layer === 'bathymetry') {
+    const depth = typeof properties.depth === 'number' ? properties.depth : 0;
+    return getBathymetryColor(depth);
+  }
 
   // Check for specific subtype first (works for all layers)
   if (COLORS[type]) {
