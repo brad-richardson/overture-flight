@@ -24,7 +24,21 @@ export async function initMap() {
     bearing: 0,
     antialias: true,
     maxPitch: 85,
+    attributionControl: false, // We'll add custom attribution
   });
+
+  // Add attribution control with data sources
+  map.addControl(
+    new maplibregl.AttributionControl({
+      compact: true,
+      customAttribution: [
+        '© <a href="https://overturemaps.org" target="_blank">Overture Maps</a>',
+        '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>',
+        '© <a href="https://carto.com/attributions" target="_blank">CARTO</a>',
+      ],
+    }),
+    'bottom-right'
+  );
 
   // Wait for map to load
   await new Promise((resolve) => {

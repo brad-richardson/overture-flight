@@ -20,7 +20,7 @@ Critical issues found in existing code that need addressing before continuing.
 - [x] **network.js**: Add reconnection logic for dropped connections
 - [ ] **main.js**: Add error handling for network connection failures
 - [x] **other-planes.js**: Implement position interpolation for smooth motion
-- [ ] **ui.js**: Add proper User-Agent header for Nominatim API compliance
+- [x] **ui.js**: Add proper User-Agent header for Nominatim API compliance
 - [ ] **ui.js**: Add rate limiting on geocoding search requests
 
 ### Minor (Nice to Have)

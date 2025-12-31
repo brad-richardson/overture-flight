@@ -113,8 +113,14 @@ export function initLocationPicker(onTeleport) {
 
     try {
       // Use Nominatim for geocoding (free, rate-limited)
+      // User-Agent required per Nominatim usage policy
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`,
+        {
+          headers: {
+            'User-Agent': 'FlightSimulator/1.0 (https://github.com/overture-flight)',
+          },
+        }
       );
       const results = await response.json();
 
