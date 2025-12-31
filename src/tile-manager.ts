@@ -90,11 +90,11 @@ const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loa
 // Tile loading settings
 const TILE_ZOOM = 14; // Zoom level for tile loading
 const TILE_RADIUS = 2; // Load tiles within this radius of center
-const PREDICTIVE_TILES = 3; // Max tiles ahead to load based on heading
-const SPEED_THRESHOLD = 30; // m/s - only predictive load above this speed
+const PREDICTIVE_TILES = 4; // Max tiles ahead to load based on heading (increased for better coverage)
+const SPEED_THRESHOLD = 10; // m/s (~22 mph) - lowered to trigger predictive loading at slower speeds
 // Speed divisor to calculate tiles ahead: tilesAhead = speed / SPEED_TO_TILES_DIVISOR
-// At 50 m/s = 1 tile ahead, 100 m/s = 2 tiles, 150 m/s = 3 tiles (capped at PREDICTIVE_TILES)
-const SPEED_TO_TILES_DIVISOR = 50;
+// At 25 m/s = 1 tile ahead, 50 m/s = 2 tiles, 75 m/s = 3 tiles, 100 m/s = 4 tiles
+const SPEED_TO_TILES_DIVISOR = 25;
 const MIN_FALLBACK_ZOOM = 6; // Minimum zoom level for base tile fallback
 
 // Constants for geo conversion
