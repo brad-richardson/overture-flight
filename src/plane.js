@@ -28,7 +28,7 @@ let planeState = {
   name: '',
 };
 
-// Input state
+// Keyboard input state
 const input = {
   pitchUp: false,
   pitchDown: false,
@@ -37,6 +37,27 @@ const input = {
   throttleUp: false,
   throttleDown: false,
 };
+
+// Mobile joystick input (analog -1 to 1)
+const mobileInput = {
+  pitch: 0,   // -1 = nose down, 1 = nose up
+  roll: 0,    // -1 = roll left, 1 = roll right
+  throttleUp: false,
+  throttleDown: false,
+};
+
+/**
+ * Set mobile joystick input
+ * @param {{x: number, y: number}} joystick - Joystick values (-1 to 1)
+ * @param {{up: boolean, down: boolean}} throttle - Throttle button state
+ */
+export function setMobileInput(joystick, throttle) {
+  // X = roll (left/right), Y = pitch (up/down but inverted - push forward = dive)
+  mobileInput.roll = joystick.x;
+  mobileInput.pitch = -joystick.y; // Invert: pushing joystick up = nose down
+  mobileInput.throttleUp = throttle.up;
+  mobileInput.throttleDown = throttle.down;
+}
 
 /**
  * Initialize keyboard controls
@@ -90,39 +111,48 @@ function handleKeyChange(code, pressed) {
  * @param {number} deltaTime - Time since last frame in seconds
  */
 export function updatePlane(deltaTime) {
-  // Handle pitch input
-  if (input.pitchUp) {
-    planeState.pitch = Math.min(45, planeState.pitch + FLIGHT.PITCH_RATE * deltaTime);
-  }
-  if (input.pitchDown) {
-    planeState.pitch = Math.max(-45, planeState.pitch - FLIGHT.PITCH_RATE * deltaTime);
+  // Combine keyboard and mobile input
+  // Keyboard uses boolean, mobile uses analog (-1 to 1)
+  const pitchInput = (input.pitchUp ? 1 : 0) - (input.pitchDown ? 1 : 0) + mobileInput.pitch;
+  const rollInput = (input.rollRight ? 1 : 0) - (input.rollLeft ? 1 : 0) + mobileInput.roll;
+  const throttleUp = input.throttleUp || mobileInput.throttleUp;
+  const throttleDown = input.throttleDown || mobileInput.throttleDown;
+
+  // Clamp combined input to -1 to 1 range
+  const clampedPitch = Math.max(-1, Math.min(1, pitchInput));
+  const clampedRoll = Math.max(-1, Math.min(1, rollInput));
+
+  // Handle pitch input (analog)
+  if (clampedPitch !== 0) {
+    planeState.pitch += clampedPitch * FLIGHT.PITCH_RATE * deltaTime;
+    planeState.pitch = Math.max(-45, Math.min(45, planeState.pitch));
   }
 
-  // Handle roll input
-  if (input.rollLeft) {
-    planeState.roll = Math.max(-60, planeState.roll - FLIGHT.ROLL_RATE * deltaTime);
-  }
-  if (input.rollRight) {
-    planeState.roll = Math.min(60, planeState.roll + FLIGHT.ROLL_RATE * deltaTime);
+  // Handle roll input (analog)
+  if (clampedRoll !== 0) {
+    planeState.roll += clampedRoll * FLIGHT.ROLL_RATE * deltaTime;
+    planeState.roll = Math.max(-60, Math.min(60, planeState.roll));
   }
 
   // Auto-level roll when no input
-  if (!input.rollLeft && !input.rollRight) {
+  const hasRollInput = input.rollLeft || input.rollRight || Math.abs(mobileInput.roll) > 0.1;
+  if (!hasRollInput) {
     planeState.roll *= 0.95;
     if (Math.abs(planeState.roll) < 0.5) planeState.roll = 0;
   }
 
   // Auto-level pitch when no input
-  if (!input.pitchUp && !input.pitchDown) {
+  const hasPitchInput = input.pitchUp || input.pitchDown || Math.abs(mobileInput.pitch) > 0.1;
+  if (!hasPitchInput) {
     planeState.pitch *= 0.98;
     if (Math.abs(planeState.pitch) < 0.5) planeState.pitch = 0;
   }
 
   // Handle throttle
-  if (input.throttleUp) {
+  if (throttleUp) {
     planeState.speed = Math.min(FLIGHT.MAX_SPEED, planeState.speed + FLIGHT.THROTTLE_RATE * deltaTime);
   }
-  if (input.throttleDown) {
+  if (throttleDown) {
     planeState.speed = Math.max(FLIGHT.MIN_SPEED, planeState.speed - FLIGHT.THROTTLE_RATE * deltaTime);
   }
 

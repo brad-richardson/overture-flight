@@ -9,6 +9,41 @@ let buildingsPMTiles = null;
 let basePMTiles = null;
 let transportationPMTiles = null;
 
+// Track initialization errors for user feedback
+let initErrors = [];
+
+/**
+ * Retry a fetch operation with exponential backoff
+ * @param {Function} operation - Async function to retry
+ * @param {number} maxRetries - Maximum number of retries (default 3)
+ * @param {number} baseDelay - Initial delay in ms (default 1000)
+ * @returns {Promise<any>}
+ */
+async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Get any initialization errors that occurred
+ * @returns {Array<string>}
+ */
+export function getInitErrors() {
+  return [...initErrors];
+}
+
 // Loaded tiles cache
 const loadedTiles = new Map(); // "z/x/y" -> { meshes: [], loading: boolean }
 
@@ -21,34 +56,65 @@ const METERS_PER_DEGREE_LAT = 111320;
 const metersPerDegreeLng = (lat) => 111320 * Math.cos(lat * Math.PI / 180);
 
 /**
- * Initialize PMTiles sources
+ * Initialize PMTiles sources with retry logic
  */
 export async function initTileManager() {
+  initErrors = [];
+
   buildingsPMTiles = new PMTiles(OVERTURE_BUILDINGS_PMTILES);
   basePMTiles = new PMTiles(OVERTURE_BASE_PMTILES);
   transportationPMTiles = new PMTiles(OVERTURE_TRANSPORTATION_PMTILES);
 
-  // Get metadata to verify sources are working
+  // Get metadata to verify sources are working with retry
   try {
-    const buildingsHeader = await buildingsPMTiles.getHeader();
+    const buildingsHeader = await retryWithBackoff(
+      () => buildingsPMTiles.getHeader(),
+      3,
+      1000
+    );
     console.log('Buildings PMTiles initialized:', buildingsHeader);
   } catch (e) {
-    console.error('Failed to init buildings PMTiles:', e);
+    const msg = `Failed to load buildings data: ${e.message || 'Network error'}`;
+    console.error(msg, e);
+    initErrors.push(msg);
+    buildingsPMTiles = null;
   }
 
   try {
-    const baseHeader = await basePMTiles.getHeader();
+    const baseHeader = await retryWithBackoff(
+      () => basePMTiles.getHeader(),
+      3,
+      1000
+    );
     console.log('Base PMTiles initialized:', baseHeader);
   } catch (e) {
-    console.error('Failed to init base PMTiles:', e);
+    const msg = `Failed to load terrain data: ${e.message || 'Network error'}`;
+    console.error(msg, e);
+    initErrors.push(msg);
+    basePMTiles = null;
   }
 
   try {
-    const transportationHeader = await transportationPMTiles.getHeader();
+    const transportationHeader = await retryWithBackoff(
+      () => transportationPMTiles.getHeader(),
+      3,
+      1000
+    );
     console.log('Transportation PMTiles initialized:', transportationHeader);
   } catch (e) {
-    console.error('Failed to init transportation PMTiles:', e);
+    const msg = `Failed to load transportation data: ${e.message || 'Network error'}`;
+    console.error(msg, e);
+    initErrors.push(msg);
+    transportationPMTiles = null;
   }
+
+  // Return status for caller to handle
+  return {
+    buildings: buildingsPMTiles !== null,
+    base: basePMTiles !== null,
+    transportation: transportationPMTiles !== null,
+    errors: initErrors
+  };
 }
 
 /**
@@ -138,7 +204,7 @@ export function parseMVT(data, tileX, tileY, zoom, layerName = null) {
 }
 
 /**
- * Get tile data from PMTiles source
+ * Get tile data from PMTiles source with retry logic
  * @param {PMTiles} pmtiles - PMTiles source
  * @param {number} z - Zoom level
  * @param {number} x - Tile X
@@ -146,15 +212,25 @@ export function parseMVT(data, tileX, tileY, zoom, layerName = null) {
  * @returns {Promise<ArrayBuffer|null>}
  */
 async function getTileData(pmtiles, z, x, y) {
+  if (!pmtiles) {
+    return null;
+  }
+
   try {
-    const result = await pmtiles.getZxy(z, x, y);
-    console.log(`PMTiles getZxy(${z},${x},${y}):`, result ? `${result.data?.byteLength || 0} bytes` : 'null');
+    const result = await retryWithBackoff(
+      () => pmtiles.getZxy(z, x, y),
+      2, // fewer retries for individual tiles
+      500
+    );
     if (result && result.data) {
       return result.data;
     }
     return null;
   } catch (e) {
-    console.error(`PMTiles error at ${z}/${x}/${y}:`, e);
+    // Only log occasionally to avoid spam
+    if (Math.random() < 0.1) {
+      console.warn(`PMTiles tile ${z}/${x}/${y} failed after retries:`, e.message);
+    }
     return null;
   }
 }
