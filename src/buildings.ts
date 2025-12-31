@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
 import { loadBuildingTile, tileToWorldBounds } from './tile-manager.js';
+import { getTerrainHeight } from './elevation.js';
+import { ELEVATION } from './constants.js';
 import {
   getBuildingColor,
   getBuildingHeight,
@@ -12,6 +14,10 @@ import {
 
 // Default building height when not specified
 const DEFAULT_BUILDING_HEIGHT = 10;
+
+// Height offset above terrain to prevent z-fighting with roads (in meters)
+// Buildings should be slightly above roads (which use 1.0m offset)
+const BUILDING_TERRAIN_OFFSET = 0.5;
 
 // LOD (Level of Detail) settings
 const LOD_NEAR_DISTANCE = 500; // meters - full detail
@@ -241,6 +247,7 @@ export async function createBuildingsForTile(
 
 /**
  * Create extruded geometry for a building polygon with vertex colors and LOD support
+ * Buildings follow terrain elevation using the average height of their footprint
  */
 function createBuildingGeometry(
   coordinates: number[][][],
@@ -252,6 +259,28 @@ function createBuildingGeometry(
 
   const outerRing = coordinates[0];
   if (!outerRing || outerRing.length < 3) return null;
+
+  // Calculate terrain height for the building footprint
+  // Use the average terrain height across all footprint vertices for stability
+  let terrainHeightSum = 0;
+  let validHeightCount = 0;
+
+  if (ELEVATION.TERRAIN_ENABLED) {
+    for (const coord of outerRing) {
+      const lng = coord[0];
+      const lat = coord[1];
+      const terrainHeight = getTerrainHeight(lng, lat);
+      if (!Number.isNaN(terrainHeight)) {
+        terrainHeightSum += terrainHeight;
+        validHeightCount++;
+      }
+    }
+  }
+
+  // Calculate average terrain height (0 if no valid samples)
+  const avgTerrainHeight = validHeightCount > 0
+    ? (terrainHeightSum / validHeightCount) * ELEVATION.VERTICAL_EXAGGERATION
+    : 0;
 
   // Convert outer ring to Three.js points
   // Note: We negate world.z because rotateX(-PI/2) will negate it again,
@@ -349,6 +378,13 @@ function createBuildingGeometry(
 
     // Rotate so extrusion goes up (Y) instead of out (Z)
     geometry.rotateX(-Math.PI / 2);
+
+    // Apply terrain-following elevation
+    // Translate the building up to sit on the terrain surface
+    const yOffset = avgTerrainHeight + BUILDING_TERRAIN_OFFSET;
+    if (yOffset !== 0) {
+      geometry.translate(0, yOffset, 0);
+    }
 
     // Add vertex colors for individual building variation (skip for low LOD for performance)
     if (lodLevel !== LODLevel.LOW) {

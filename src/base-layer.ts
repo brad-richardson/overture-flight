@@ -81,7 +81,8 @@ const LAYER_DEPTHS: Record<string, number> = {
 };
 
 // Layers that should follow terrain elevation
-const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use'];
+// Water bodies (lakes, ponds) and land should also follow terrain to appear at correct altitude
+const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use', 'water', 'land'];
 
 // Layers to skip rendering entirely
 const SKIP_LAYERS: string[] = [];
@@ -400,16 +401,16 @@ export async function createBaseLayerForTile(
           if (merged) {
             // Use LineSegments instead of Line to render discrete segments
             // This prevents merged geometries from drawing connecting lines between features
+            // Note: Y position is computed per-vertex in geometry for terrain-following
             const line = new THREE.LineSegments(merged, getLineMaterial(color));
-            line.position.y = LAYER_DEPTHS.water_lines;
             line.name = 'water-lines';
             group.add(line);
           }
         } catch {
           // Fallback: add individually
+          // Note: Y position is computed per-vertex in geometry for terrain-following
           for (const geom of geometries) {
             const line = new THREE.LineSegments(geom, getLineMaterial(color));
-            line.position.y = LAYER_DEPTHS.water_lines;
             group.add(line);
           }
         }
@@ -430,15 +431,33 @@ export async function createBaseLayerForTile(
  * Create line segment geometry for water features (rivers, streams)
  * Uses segment pairs (v0-v1, v1-v2, v2-v3) instead of polyline (v0-v1-v2-v3)
  * This allows merging geometries without creating connecting lines between features
+ * Rivers follow terrain elevation for correct positioning on hills/mountains
  */
 function createWaterLineGeometry(coordinates: number[][]): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length < 2) return null;
 
-  // Convert coordinates to world positions
+  // Water line offset relative to terrain (slightly below surface like rivers in valleys)
+  const waterLineTerrainOffset = LAYER_DEPTHS.water_lines;
+
+  // Convert coordinates to world positions with terrain elevation
   const worldPoints: THREE.Vector3[] = [];
   for (const coord of coordinates) {
-    const world = geoToWorld(coord[0], coord[1], 0);
-    worldPoints.push(new THREE.Vector3(world.x, 0, world.z));
+    const lng = coord[0];
+    const lat = coord[1];
+    const world = geoToWorld(lng, lat, 0);
+
+    // Get terrain height at this position for terrain-following
+    let y = waterLineTerrainOffset;
+    if (ELEVATION.TERRAIN_ENABLED) {
+      let terrainHeight = getTerrainHeight(lng, lat);
+      if (Number.isNaN(terrainHeight)) {
+        terrainHeight = 0;
+      }
+      terrainHeight *= ELEVATION.VERTICAL_EXAGGERATION;
+      y = LAYER_DEPTHS.terrain + terrainHeight + waterLineTerrainOffset;
+    }
+
+    worldPoints.push(new THREE.Vector3(world.x, y, world.z));
   }
 
   if (worldPoints.length < 2) return null;
