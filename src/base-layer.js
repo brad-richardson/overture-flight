@@ -37,6 +37,16 @@ const COLORS = {
   default: 0x4a6a4a
 };
 
+// Layer depth configuration to prevent z-fighting
+// Layers are separated by Y position - sufficient gaps prevent depth conflicts
+const LAYER_DEPTHS = {
+  water: -2.0,      // Water at lowest Y position
+  land: -1.0,       // Base land above water
+  land_cover: -0.5, // Land cover (forests, etc.) above base land
+  land_use: -0.25,  // Land use (parks, etc.) at highest ground level
+  default: -0.5
+};
+
 // Materials cache
 const materials = new Map();
 
@@ -119,8 +129,9 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
   const group = new THREE.Group();
   group.name = `base-${tileZ}/${tileX}/${tileY}`;
 
-  // Group features by color for batching
-  const featuresByColor = new Map();
+  // Group features by color AND layer for proper z-fighting prevention
+  // Key format: "color-layer" to separate water from land even if same color
+  const featuresByColorAndLayer = new Map();
 
   for (const feature of features) {
     if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') {
@@ -128,18 +139,20 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
     }
 
     const color = getColorForFeature(feature.layer, feature.properties);
+    const layer = feature.layer || 'default';
+    const key = `${color}-${layer}`;
 
-    if (!featuresByColor.has(color)) {
-      featuresByColor.set(color, []);
+    if (!featuresByColorAndLayer.has(key)) {
+      featuresByColorAndLayer.set(key, { color, layer, features: [] });
     }
-    featuresByColor.get(color).push(feature);
+    featuresByColorAndLayer.get(key).features.push(feature);
   }
 
-  // Create merged geometry for each color
-  for (const [color, colorFeatures] of featuresByColor) {
+  // Create merged geometry for each color+layer combination
+  for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
     const geometries = [];
 
-    for (const feature of colorFeatures) {
+    for (const feature of layerFeatures) {
       try {
         if (feature.type === 'Polygon') {
           const geom = createFlatPolygonGeometry(feature.coordinates);
@@ -157,12 +170,15 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
     }
 
     if (geometries.length > 0) {
+      // Y position separates layers to prevent z-fighting (0.25m+ gaps between layers)
+      const yPosition = LAYER_DEPTHS[layer] ?? LAYER_DEPTHS.default;
+
       try {
         const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
         if (merged) {
           const mesh = new THREE.Mesh(merged, getMaterial(color));
           mesh.receiveShadow = true;
-          mesh.position.y = -0.5; // Slightly below 0 to avoid z-fighting
+          mesh.position.y = yPosition;
           group.add(mesh);
         }
       } catch (e) {
@@ -170,7 +186,7 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
         for (const geom of geometries) {
           const mesh = new THREE.Mesh(geom, getMaterial(color));
           mesh.receiveShadow = true;
-          mesh.position.y = -0.5;
+          mesh.position.y = yPosition;
           group.add(mesh);
         }
       }
