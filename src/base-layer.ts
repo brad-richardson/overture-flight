@@ -37,11 +37,13 @@ const COLORS: Record<string, number> = {
   // Land cover types from Overture schema - distinct colors for each
   // https://docs.overturemaps.org/schema/reference/base/land_cover/
   forest: 0x1a4d2e,     // Deep forest green
+  wood: 0x1e5530,       // Dense woodland green (similar to forest)
   grass: 0x5a8f4a,      // Bright meadow green
-  shrub: 0x4a7045,      // Olive scrubland
+  shrub: 0x3a7a38,      // Green scrubland (brighter green)
   crop: 0x8fa858,       // Golden agricultural fields
   barren: 0xa08060,     // Sandy/rocky brown
-  wetland: 0x3a6868,    // Teal swampy color
+  wetland: 0x3a6848,    // Swampy green (more green, less teal)
+  swamp: 0x3a6848,      // Alias for wetland
   mangrove: 0x2a5040,   // Dark muddy green
   moss: 0x6a8a50,       // Yellow-green moss
   snow: 0xe8f0f8,       // Bright snow white
