@@ -677,65 +677,23 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           }
         },
 
-        // City/locality labels
+        // City/locality labels (trying without filter to debug)
         {
           id: 'city-labels',
           type: 'symbol',
           source: 'overture-divisions',
           'source-layer': 'division',
-          filter: ['==', ['get', 'subtype'], 'locality'],
+          // Temporarily remove filter to see if ANY features render
+          // filter: ['==', ['get', 'subtype'], 'locality'],
           layout: {
-            'text-field': ['coalesce',
-              ['get', 'name'],
-              ['get', 'primary_name'],
-              ''
-            ],
+            'text-field': ['to-string', ['get', 'subtype']],  // Show subtype to see what values exist
             'text-font': ['Noto Sans Bold'],
-            'text-size': [
-              'interpolate', ['linear'], ['zoom'],
-              4, 10,
-              8, 12,
-              12, 14
-            ],
-            'text-anchor': 'center',
-            'text-max-width': 8,
-            'symbol-sort-key': ['*', -1, ['coalesce', ['get', 'population'], 0]]
+            'text-size': 12,
+            'text-anchor': 'center'
           },
           paint: {
-            'text-color': CARTO_COLORS.cityLabel,
-            'text-halo-color': CARTO_COLORS.textHalo,
-            'text-halo-width': 1.5
-          }
-        },
-
-        // State/region labels (larger, less frequent)
-        {
-          id: 'state-labels',
-          type: 'symbol',
-          source: 'overture-divisions',
-          'source-layer': 'division',
-          filter: ['==', ['get', 'subtype'], 'region'],
-          maxzoom: 8,
-          layout: {
-            'text-field': ['coalesce',
-              ['get', 'name'],
-              ['get', 'primary_name'],
-              ''
-            ],
-            'text-font': ['Noto Sans Bold'],
-            'text-size': [
-              'interpolate', ['linear'], ['zoom'],
-              3, 10,
-              6, 14
-            ],
-            'text-transform': 'uppercase',
-            'text-letter-spacing': 0.1,
-            'text-anchor': 'center',
-            'text-max-width': 10
-          },
-          paint: {
-            'text-color': CARTO_COLORS.stateLabel,
-            'text-halo-color': CARTO_COLORS.textHalo,
+            'text-color': '#ff0000',  // Red to make it obvious
+            'text-halo-color': '#ffffff',
             'text-halo-width': 2
           }
         }
