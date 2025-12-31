@@ -71,3 +71,12 @@ export const PLAYER_COLORS = [
   '#8b5cf6', // purple
   '#ec4899', // pink
 ];
+
+// 3D model paths
+export const PLANE_MODEL_URL = '/models/plane.glb';
+
+// Plane rendering settings
+export const PLANE_RENDER = {
+  SCALE: 50,           // meters - plane size
+  LOCAL_VISIBLE: true, // show local player's plane
+};

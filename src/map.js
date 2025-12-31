@@ -1,9 +1,11 @@
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
+import { MapboxOverlay } from '@deck.gl/mapbox';
 import { OVERTURE_BUILDINGS_PMTILES, MAP_STYLE, DEFAULT_LOCATION } from './constants.js';
 
 let map = null;
 let terrainEnabled = false;
+let deckOverlay = null;
 
 /**
  * Initialize the MapLibre map with PMTiles support and 3D buildings
@@ -102,6 +104,13 @@ export async function initMap() {
     }
   }
 
+  // Initialize deck.gl overlay for 3D plane rendering
+  deckOverlay = new MapboxOverlay({
+    interleaved: true,
+    layers: [], // Layers will be set by plane-renderer
+  });
+  map.addControl(deckOverlay);
+
   return map;
 }
 
@@ -111,6 +120,14 @@ export async function initMap() {
  */
 export function getMap() {
   return map;
+}
+
+/**
+ * Get the deck.gl overlay for updating layers
+ * @returns {MapboxOverlay}
+ */
+export function getDeckOverlay() {
+  return deckOverlay;
 }
 
 /**

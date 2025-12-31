@@ -3,12 +3,13 @@ import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPla
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection } from './network.js';
 import { checkCollision } from './collision.js';
-import { updateOtherPlanes, removePlane } from './other-planes.js';
+import { updateOtherPlanes, updateLocalPlane, removePlane } from './other-planes.js';
 import { updateHUD, updatePlayerList, showCrashMessage, initLocationPicker } from './ui.js';
 
 // Game state
 let connection = null;
 let localId = '';
+let localColor = '#3b82f6';
 let lastTime = 0;
 let isRunning = false;
 
@@ -52,10 +53,11 @@ function gameLoop(time) {
     connection.sendPosition(planeState);
   }
 
-  // Update local player in players map
+  // Update local player in players map and render 3D plane
   if (localId) {
     players.set(localId, planeState);
     updatePlayerList(players, localId);
+    updateLocalPlane(planeState, localId, localColor);
   }
 
   // Continue loop
@@ -69,6 +71,7 @@ function gameLoop(time) {
 function handleWelcome(msg) {
   console.log('Welcome! ID:', msg.id, 'Color:', msg.color);
   localId = msg.id;
+  localColor = msg.color || '#3b82f6';
   setPlaneIdentity(msg.id, msg.color);
 
   // Add existing players

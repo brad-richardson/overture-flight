@@ -1,9 +1,6 @@
-import maplibregl from 'maplibre-gl';
 import { getMap } from './map.js';
 import { NETWORK } from './constants.js';
-
-/** @type {Map<string, maplibregl.Marker>} */
-const markers = new Map();
+import { updatePlaneLayer, clearPlaneLayer } from './plane-renderer.js';
 
 /** @type {Map<string, Object>} */
 const planeStates = new Map();
@@ -11,32 +8,12 @@ const planeStates = new Map();
 /** @type {Map<string, {prev: Object, next: Object, timestamp: number}>} */
 const interpolationData = new Map();
 
+/** @type {Map<string, Object>} Current interpolated states for rendering */
+const interpolatedStates = new Map();
+
 let animationFrameId = null;
 let localPlayerId = null;
-
-/**
- * Create a plane marker element
- * @param {string} color - Plane color
- * @returns {HTMLElement}
- */
-function createPlaneElement(color) {
-  const el = document.createElement('div');
-  el.className = 'other-plane-marker';
-  el.innerHTML = `
-    <svg width="32" height="32" viewBox="0 0 32 32" style="transform: rotate(-90deg);">
-      <polygon
-        points="16,0 24,28 16,22 8,28"
-        fill="${color}"
-        stroke="white"
-        stroke-width="1.5"
-      />
-    </svg>
-  `;
-  el.style.width = '32px';
-  el.style.height = '32px';
-  el.style.cursor = 'pointer';
-  return el;
-}
+let localPlaneState = null;
 
 /**
  * Linear interpolation
@@ -46,9 +23,9 @@ function lerp(a, b, t) {
 }
 
 /**
- * Interpolate heading (handles 360° wraparound)
+ * Interpolate angle (handles 360° wraparound)
  */
-function lerpHeading(a, b, t) {
+function lerpAngle(a, b, t) {
   let diff = b - a;
   if (diff > 180) diff -= 360;
   if (diff < -180) diff += 360;
@@ -56,7 +33,14 @@ function lerpHeading(a, b, t) {
 }
 
 /**
- * Animation loop for smooth interpolation
+ * Interpolate pitch/roll (no wraparound needed)
+ */
+function lerpPitchRoll(a, b, t) {
+  return lerp(a || 0, b || 0, t);
+}
+
+/**
+ * Animation loop for smooth interpolation - now updates deck.gl layer
  */
 function animateInterpolation() {
   const map = getMap();
@@ -67,22 +51,46 @@ function animateInterpolation() {
 
   const now = Date.now();
   const interpolationDuration = NETWORK.INTERPOLATION_DELAY || 100;
+  let hasUpdates = false;
 
   for (const [id, data] of interpolationData) {
-    const marker = markers.get(id);
-    if (!marker || !data.prev || !data.next) continue;
+    if (!data.prev || !data.next) continue;
 
     // Calculate interpolation progress (0 to 1)
     const elapsed = now - data.timestamp;
     const t = Math.min(1, elapsed / interpolationDuration);
 
-    // Interpolate position and heading
-    const lng = lerp(data.prev.lng, data.next.lng, t);
-    const lat = lerp(data.prev.lat, data.next.lat, t);
-    const heading = lerpHeading(data.prev.heading, data.next.heading, t);
+    // Interpolate all properties
+    const interpolated = {
+      id,
+      lng: lerp(data.prev.lng, data.next.lng, t),
+      lat: lerp(data.prev.lat, data.next.lat, t),
+      altitude: lerp(data.prev.altitude || 0, data.next.altitude || 0, t),
+      heading: lerpAngle(data.prev.heading || 0, data.next.heading || 0, t),
+      pitch: lerpPitchRoll(data.prev.pitch, data.next.pitch, t),
+      roll: lerpPitchRoll(data.prev.roll, data.next.roll, t),
+      speed: lerp(data.prev.speed || 0, data.next.speed || 0, t),
+      color: data.next.color,
+      name: data.next.name,
+    };
 
-    marker.setLngLat([lng, lat]);
-    marker.setRotation(heading);
+    interpolatedStates.set(id, interpolated);
+    hasUpdates = true;
+  }
+
+  // Update deck.gl layer with interpolated states
+  if (hasUpdates || localPlaneState) {
+    const allPlanes = Array.from(interpolatedStates.values());
+
+    // Add local plane if available
+    if (localPlaneState) {
+      allPlanes.push({
+        ...localPlaneState,
+        id: localPlayerId || 'local',
+      });
+    }
+
+    updatePlaneLayer(allPlanes, localPlayerId);
   }
 
   animationFrameId = requestAnimationFrame(animateInterpolation);
@@ -108,9 +116,26 @@ function stopAnimationLoop() {
 }
 
 /**
+ * Update local player's plane state for rendering
+ * @param {Object} planeState - Local plane state
+ * @param {string} id - Local player ID
+ * @param {string} color - Local player color
+ */
+export function updateLocalPlane(planeState, id, color) {
+  localPlayerId = id;
+  localPlaneState = {
+    ...planeState,
+    color: color || '#3b82f6',
+  };
+
+  // Ensure animation loop is running
+  startAnimationLoop();
+}
+
+/**
  * Update other players' planes on the map
  * @param {Object<string, Object>} planes - Map of plane states by ID
- * @param {string} localId - Local player's ID (to exclude)
+ * @param {string} localId - Local player's ID (to exclude from other planes)
  */
 export function updateOtherPlanes(planes, localId) {
   const map = getMap();
@@ -120,60 +145,62 @@ export function updateOtherPlanes(planes, localId) {
   const currentIds = new Set(Object.keys(planes));
   const now = Date.now();
 
-  // Remove markers for planes that left
-  for (const [id, marker] of markers) {
+  // Remove data for planes that left
+  for (const id of planeStates.keys()) {
     if (!currentIds.has(id) || id === localId) {
-      marker.remove();
-      markers.delete(id);
       planeStates.delete(id);
       interpolationData.delete(id);
+      interpolatedStates.delete(id);
     }
   }
 
-  // Update or create markers for other planes
+  // Update states for other planes
   for (const [id, plane] of Object.entries(planes)) {
     if (id === localId) continue;
 
     const prevState = planeStates.get(id);
     planeStates.set(id, plane);
 
-    // Store interpolation data
+    // Store interpolation data with full state
     if (prevState) {
       interpolationData.set(id, {
-        prev: { lng: prevState.lng, lat: prevState.lat, heading: prevState.heading },
-        next: { lng: plane.lng, lat: plane.lat, heading: plane.heading },
+        prev: {
+          lng: prevState.lng,
+          lat: prevState.lat,
+          altitude: prevState.altitude,
+          heading: prevState.heading,
+          pitch: prevState.pitch,
+          roll: prevState.roll,
+          speed: prevState.speed,
+          color: prevState.color,
+          name: prevState.name,
+        },
+        next: {
+          lng: plane.lng,
+          lat: plane.lat,
+          altitude: plane.altitude,
+          heading: plane.heading,
+          pitch: plane.pitch,
+          roll: plane.roll,
+          speed: plane.speed,
+          color: plane.color,
+          name: plane.name,
+        },
         timestamp: now,
       });
-    }
-
-    if (markers.has(id)) {
-      // Marker exists, interpolation loop will handle updates
-      // Only update immediately if no previous state (first update after join)
-      if (!prevState) {
-        const marker = markers.get(id);
-        marker.setLngLat([plane.lng, plane.lat]);
-        marker.setRotation(plane.heading);
-      }
     } else {
-      // Create new marker
-      const el = createPlaneElement(plane.color || '#888');
-      const marker = new maplibregl.Marker({
-        element: el,
-        rotation: plane.heading,
-        pitchAlignment: 'map',
-        rotationAlignment: 'map',
-      })
-        .setLngLat([plane.lng, plane.lat])
-        .addTo(map);
-
-      markers.set(id, marker);
+      // First time seeing this plane, set it directly
+      interpolatedStates.set(id, {
+        id,
+        ...plane,
+      });
     }
   }
 
-  // Start animation loop if there are other planes
-  if (markers.size > 0) {
+  // Start animation loop if there are planes to render
+  if (planeStates.size > 0 || localPlaneState) {
     startAnimationLoop();
-  } else {
+  } else if (!localPlaneState) {
     stopAnimationLoop();
   }
 }
@@ -187,33 +214,35 @@ export function getOtherPlanes() {
 }
 
 /**
- * Remove a specific plane marker
+ * Remove a specific plane
  * @param {string} id - Plane ID to remove
  */
 export function removePlane(id) {
-  const marker = markers.get(id);
-  if (marker) {
-    marker.remove();
-    markers.delete(id);
-    planeStates.delete(id);
-    interpolationData.delete(id);
+  planeStates.delete(id);
+  interpolationData.delete(id);
+  interpolatedStates.delete(id);
+
+  // Update the render
+  const allPlanes = Array.from(interpolatedStates.values());
+  if (localPlaneState) {
+    allPlanes.push({ ...localPlaneState, id: localPlayerId || 'local' });
   }
+  updatePlaneLayer(allPlanes, localPlayerId);
 
   // Stop animation loop if no more planes
-  if (markers.size === 0) {
+  if (planeStates.size === 0 && !localPlaneState) {
     stopAnimationLoop();
   }
 }
 
 /**
- * Clear all other plane markers
+ * Clear all plane rendering
  */
 export function clearAllPlanes() {
   stopAnimationLoop();
-  for (const marker of markers.values()) {
-    marker.remove();
-  }
-  markers.clear();
   planeStates.clear();
   interpolationData.clear();
+  interpolatedStates.clear();
+  localPlaneState = null;
+  clearPlaneLayer();
 }
