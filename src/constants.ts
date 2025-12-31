@@ -52,7 +52,7 @@ export const FLIGHT: FlightConfig = {
   GRAVITY: 15,          // m/s descent when stalled
   MIN_ALTITUDE: 0,      // meters
   MAX_ALTITUDE: 5000,   // meters
-  SPAWN_ALTITUDE: 230,  // meters - above most buildings
+  SPAWN_ALTITUDE: 400,  // meters - above most buildings
 };
 
 // Camera constants
@@ -92,7 +92,7 @@ export interface Location {
 
 // Starting locations with good building data
 export const LOCATIONS: Record<string, Location> = {
-  BOSTON: { lat: 42.3450, lng: -71.0550, name: 'Boston' },
+  BOSTON: { lat: 42.3541, lng: -71.0704, name: 'Boston' },
   NYC: { lat: 40.7580, lng: -73.9855, name: 'New York City (Midtown)' },
   SF: { lat: 37.7749, lng: -122.4194, name: 'San Francisco' },
   LONDON: { lat: 51.5074, lng: -0.1278, name: 'London' },
