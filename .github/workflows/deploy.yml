@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 # Permissions required for this workflow:
-# - contents: write - Required by rossjrw/pr-preview-action to push preview builds
-#   to the gh-pages branch. Ensure branch protection rules are enabled on main.
+# - contents: write - Required by peaceiris/actions-gh-pages and rossjrw/pr-preview-action
+#   to push builds to the gh-pages branch. Ensure branch protection rules are enabled on main.
 # - pull-requests: write - Required to post preview URL comments on PRs.
 permissions:
   contents: write
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   # Deploy main branch to root of gh-pages
   deploy-main:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -48,8 +48,8 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dist
           destination_dir: .
+          # keep_files preserves pr-preview directory across main deployments
           keep_files: true
-          exclude_assets: ''
 
   # Deploy PR previews to pr-preview subdirectory
   deploy-preview:
