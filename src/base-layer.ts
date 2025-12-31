@@ -57,12 +57,12 @@ const COLORS: Record<string, number> = {
   commercial: 0x787878,
   industrial: 0x606060,
 
-  // Default land - muted green
-  land: 0x4a7a4a,
-  default: 0x4a7a4a,
+  // Default land - neutral tan/beige (allows land_cover/land_use to show through)
+  land: 0xc8b8a0,
+  default: 0xc8b8a0,
 
-  // Terrain mesh base color - matches default land
-  terrain: 0x4a7a4a
+  // Terrain mesh base color - neutral tan/beige
+  terrain: 0xc8b8a0
 };
 
 // Layer depth configuration to prevent z-fighting
@@ -82,6 +82,10 @@ const LAYER_DEPTHS: Record<string, number> = {
 
 // Layers that should follow terrain elevation
 const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use'];
+
+// Layers to skip rendering entirely (redundant with terrain mesh)
+// The 'land' layer creates flat green polygons that obscure terrain-following land_cover/land_use
+const SKIP_LAYERS = ['land'];
 
 // Bathymetry depth color stops (depth in meters -> color)
 // Lighter colors for shallow waters, darker for deep
@@ -442,8 +446,14 @@ export async function createBaseLayerForTile(
     const lineFeaturesByColor = new Map<number, ParsedFeature[]>();
 
     for (const feature of features) {
-      const color = getColorForFeature(feature.layer, feature.properties);
       const layer = feature.layer || 'default';
+
+      // Skip layers that are redundant with terrain mesh
+      if (SKIP_LAYERS.includes(layer)) {
+        continue;
+      }
+
+      const color = getColorForFeature(layer, feature.properties);
 
       if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
         const key = `${color}-${layer}`;
