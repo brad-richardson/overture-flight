@@ -37,19 +37,13 @@ const COLORS = {
   default: 0x4a6a4a
 };
 
-// Set of water colors for z-fighting prevention
-const WATER_COLORS = new Set([
-  COLORS.ocean, COLORS.sea, COLORS.lake, COLORS.reservoir,
-  COLORS.pond, COLORS.river, COLORS.stream, COLORS.canal, COLORS.water
-]);
-
 // Layer depth configuration to prevent z-fighting
-// Water renders below land, land_use renders above land_cover
+// Layers are separated by Y position - sufficient gaps prevent depth conflicts
 const LAYER_DEPTHS = {
-  water: -2.0,      // Water at lowest level
-  land: -1.0,       // Base land
-  land_cover: -0.5, // Land cover (forests, etc.) slightly above land
-  land_use: -0.25,  // Land use (parks, etc.) above land_cover
+  water: -2.0,      // Water at lowest Y position
+  land: -1.0,       // Base land above water
+  land_cover: -0.5, // Land cover (forests, etc.) above base land
+  land_use: -0.25,  // Land use (parks, etc.) at highest ground level
   default: -0.5
 };
 
@@ -57,31 +51,20 @@ const LAYER_DEPTHS = {
 const materials = new Map();
 
 /**
- * Get or create material for a color and layer type
- * Uses polygonOffset to prevent z-fighting between overlapping layers
+ * Get or create material for a color
  * @param {number} color
- * @param {string} layer - Layer type for depth ordering
  * @returns {THREE.MeshStandardMaterial}
  */
-function getMaterial(color, layer = 'default') {
-  const key = `${color}-${layer}`;
-  if (!materials.has(key)) {
-    // Use polygonOffset to help prevent z-fighting
-    // Higher offsetFactor = renders further away (behind lower values)
-    const isWater = layer === 'water' || WATER_COLORS.has(color);
-    const offsetFactor = isWater ? 4 : (layer === 'land' ? 3 : (layer === 'land_cover' ? 2 : 1));
-
-    materials.set(key, new THREE.MeshStandardMaterial({
+function getMaterial(color) {
+  if (!materials.has(color)) {
+    materials.set(color, new THREE.MeshStandardMaterial({
       color: color,
       roughness: 0.9,
       metalness: 0.0,
-      side: THREE.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: offsetFactor,
-      polygonOffsetUnits: 1
+      side: THREE.DoubleSide
     }));
   }
-  return materials.get(key);
+  return materials.get(color);
 }
 
 /**
@@ -166,7 +149,7 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
   }
 
   // Create merged geometry for each color+layer combination
-  for (const [key, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
+  for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
     const geometries = [];
 
     for (const feature of layerFeatures) {
@@ -187,27 +170,23 @@ export async function createBaseLayerForTile(tileX, tileY, tileZ) {
     }
 
     if (geometries.length > 0) {
-      // Get layer-specific depth to prevent z-fighting
+      // Y position separates layers to prevent z-fighting (0.25m+ gaps between layers)
       const yPosition = LAYER_DEPTHS[layer] ?? LAYER_DEPTHS.default;
-      // Determine render order: water first (lowest), then land, then land_cover, then land_use
-      const renderOrder = layer === 'water' ? 0 : (layer === 'land' ? 1 : (layer === 'land_cover' ? 2 : 3));
 
       try {
         const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
         if (merged) {
-          const mesh = new THREE.Mesh(merged, getMaterial(color, layer));
+          const mesh = new THREE.Mesh(merged, getMaterial(color));
           mesh.receiveShadow = true;
           mesh.position.y = yPosition;
-          mesh.renderOrder = renderOrder;
           group.add(mesh);
         }
       } catch (e) {
         // Fallback: add individually
         for (const geom of geometries) {
-          const mesh = new THREE.Mesh(geom, getMaterial(color, layer));
+          const mesh = new THREE.Mesh(geom, getMaterial(color));
           mesh.receiveShadow = true;
           mesh.position.y = yPosition;
-          mesh.renderOrder = renderOrder;
           group.add(mesh);
         }
       }
