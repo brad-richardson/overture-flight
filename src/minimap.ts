@@ -685,8 +685,12 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           'source-layer': 'division',
           filter: ['==', ['get', 'subtype'], 'locality'],
           layout: {
-            'text-field': ['coalesce', ['get', 'primary_name'], ['get', 'name'], ''],
-            'text-font': ['Noto Sans Regular'],
+            'text-field': ['coalesce',
+              ['get', 'name'],
+              ['get', 'primary_name'],
+              ''
+            ],
+            'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
               4, 10,
@@ -713,8 +717,12 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           filter: ['==', ['get', 'subtype'], 'region'],
           maxzoom: 8,
           layout: {
-            'text-field': ['coalesce', ['get', 'primary_name'], ['get', 'name'], ''],
-            'text-font': ['Noto Sans Regular'],
+            'text-field': ['coalesce',
+              ['get', 'name'],
+              ['get', 'primary_name'],
+              ''
+            ],
+            'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
               3, 10,
@@ -740,6 +748,31 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
 
   // Add navigation controls
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
+
+  // Debug: log available source layers when map loads
+  map.on('load', () => {
+    console.log('Minimap loaded. Checking divisions source...');
+    const style = map?.getStyle();
+    if (style?.sources) {
+      Object.entries(style.sources).forEach(([name, source]) => {
+        console.log(`Source: ${name}`, source);
+      });
+    }
+  });
+
+  // Debug: log features on click to see what properties are available
+  map.on('click', (e) => {
+    const features = map?.queryRenderedFeatures(e.point, {
+      layers: ['city-labels', 'state-labels', 'state-boundaries']
+    });
+    if (features && features.length > 0) {
+      console.log('Clicked division features:', features.map(f => ({
+        layer: f.layer?.id,
+        sourceLayer: f.sourceLayer,
+        properties: f.properties
+      })));
+    }
+  });
 
   // Create plane marker
   planeMarker = new maplibregl.Marker({
