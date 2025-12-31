@@ -81,8 +81,8 @@ const LAYER_DEPTHS: Record<string, number> = {
 };
 
 // Layers that should follow terrain elevation
-// Water bodies (lakes, ponds) should also follow terrain to appear at correct altitude
-const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use', 'water'];
+// Water bodies (lakes, ponds) and land should also follow terrain to appear at correct altitude
+const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use', 'water', 'land'];
 
 // Layers to skip rendering entirely
 const SKIP_LAYERS: string[] = [];
