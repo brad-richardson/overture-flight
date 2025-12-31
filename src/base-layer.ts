@@ -468,7 +468,7 @@ export async function createBaseLayerForTile(
 
     // Layers that should NOT be merged (render individually to prevent z-fighting artifacts)
     // Overlapping polygons cause flickering when merged into single geometry
-    const NO_MERGE_LAYERS = ['water', 'bathymetry', 'land'];
+    const NO_MERGE_LAYERS = ['water', 'bathymetry', 'land', 'land_cover', 'land_use'];
 
     // Create geometry for each color+layer combination (polygons)
     for (const [, { color, layer, features: layerFeatures }] of featuresByColorAndLayer) {
