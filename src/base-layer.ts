@@ -73,6 +73,10 @@ const materials = new Map<number, THREE.MeshStandardMaterial>();
 // Line materials cache for water lines (rivers)
 const lineMaterials = new Map<number, THREE.LineBasicMaterial>();
 
+// Linear water feature types to render as lines (rivers, streams, etc.)
+// Coastlines and shorelines are excluded to prevent artifacts around islands
+const LINEAR_WATER_TYPES = ['river', 'stream', 'canal', 'drain', 'ditch', 'waterway'];
+
 // Terrain material with vertex colors
 let terrainMaterial: THREE.MeshStandardMaterial | null = null;
 
@@ -354,10 +358,8 @@ export async function createBaseLayerForTile(
         // Process line features for water - only rivers, streams, and canals
         // Skip coastlines and shorelines which create artifacts around islands
         if (layer === 'water') {
-          const subtype = ((feature.properties?.subtype || feature.properties?.class || '') as string).toLowerCase();
-          // Only render actual linear water features, not coastline boundaries
-          const linearWaterTypes = ['river', 'stream', 'canal', 'drain', 'ditch', 'waterway'];
-          if (linearWaterTypes.includes(subtype)) {
+          const subtype = String(feature.properties?.subtype || feature.properties?.class || '').toLowerCase();
+          if (LINEAR_WATER_TYPES.includes(subtype)) {
             if (!lineFeaturesByColor.has(color)) {
               lineFeaturesByColor.set(color, []);
             }
