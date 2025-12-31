@@ -140,6 +140,9 @@ const lineMaterials = new Map<number, THREE.LineBasicMaterial>();
 // Coastlines and shorelines are excluded to prevent artifacts around islands
 const LINEAR_WATER_TYPES = ['river', 'stream', 'canal', 'drain', 'ditch', 'waterway'];
 
+// Track logged land_cover subtypes to avoid console spam
+const landCoverSubtypesLogged = new Set<string>();
+
 // Terrain material with vertex colors
 let terrainMaterial: THREE.MeshStandardMaterial | null = null;
 
@@ -192,13 +195,34 @@ function getLineMaterial(color: number): THREE.LineBasicMaterial {
  * Uses Overture Maps schema properties for accurate styling
  */
 function getColorForFeature(layer: string, properties: Record<string, unknown>): number {
-  const subtype = (properties.subtype || properties.class || '') as string;
+  // Try multiple possible property names for subtype
+  const subtype = (
+    properties.subtype ||
+    properties.class ||
+    properties.type ||
+    properties.category ||
+    ''
+  ) as string;
   const type = subtype.toLowerCase();
 
   // Handle bathymetry layer with depth-based coloring
   if (layer === 'bathymetry') {
     const depth = typeof properties.depth === 'number' ? properties.depth : 0;
     return getBathymetryColor(depth);
+  }
+
+  // For land_cover, check the type against our colors
+  if (layer === 'land_cover') {
+    // Log once per subtype to debug
+    if (!landCoverSubtypesLogged.has(type)) {
+      landCoverSubtypesLogged.add(type);
+      console.log(`land_cover subtype: "${type}" (all props: ${JSON.stringify(properties)})`);
+    }
+    // Return color if we have it, otherwise fall back to grass
+    if (COLORS[type]) {
+      return COLORS[type];
+    }
+    return COLORS.grass;
   }
 
   // Check for specific subtype first (works for all layers)
@@ -209,13 +233,6 @@ function getColorForFeature(layer: string, properties: Record<string, unknown>):
   // Layer-specific handling
   if (layer === 'water') {
     return COLORS.water;
-  }
-
-  if (layer === 'land_cover') {
-    // Debug: log all land_cover properties to find the correct field name
-    console.log(`land_cover: type="${type}" properties=`, properties);
-    // Overture subtypes: barren, crop, forest, grass, mangrove, moss, shrub, snow, urban, wetland
-    return COLORS.grass;
   }
 
   if (layer === 'land') {
