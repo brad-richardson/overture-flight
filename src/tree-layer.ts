@@ -59,6 +59,14 @@ const LANDCOVER_TREE_CONFIG: Record<string, LandcoverTreeConfig> = {
     maxHeight: 30,
     heightVariation: 5,
   },
+  // Woodland - dense tree coverage similar to forest
+  wood: {
+    density: 14,          // Dense like forest
+    coniferRatio: 0.35,   // Slightly more deciduous
+    minHeight: 8,
+    maxHeight: 28,
+    heightVariation: 5,
+  },
   // Shrubland - smaller, sparser vegetation
   shrub: {
     density: 8,
@@ -77,6 +85,14 @@ const LANDCOVER_TREE_CONFIG: Record<string, LandcoverTreeConfig> = {
   },
   // Wetland - sparse, varied vegetation
   wetland: {
+    density: 2,
+    coniferRatio: 0.1,
+    minHeight: 4,
+    maxHeight: 15,
+    heightVariation: 4,
+  },
+  // Swamp - similar to wetland (alias)
+  swamp: {
     density: 2,
     coniferRatio: 0.1,
     minHeight: 4,
