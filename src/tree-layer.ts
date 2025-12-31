@@ -37,6 +37,7 @@ interface OverpassResponse {
 interface TreeCacheEntry {
   trees: TreeData[];
   timestamp: number;
+  isFailure?: boolean;  // True if this was a failed API request
 }
 
 // Landcover configuration for procedural tree generation
@@ -128,9 +129,10 @@ const MAX_PROCEDURAL_TREES_PER_TILE = 2000;
 // Cache for tree data - uses tile key as index
 const treeCache = new Map<string, TreeCacheEntry>();
 
-// LocalStorage key prefix for persistent caching
-const CACHE_PREFIX = 'overture-trees-';
+// LocalStorage key prefix for persistent caching (OSM trees from Overpass API)
+const CACHE_PREFIX = 'osm-trees-';
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days - trees don't change often
+const FAILURE_CACHE_TTL = 5 * 60 * 1000;   // 5 minutes - retry failures sooner
 
 // Overpass API endpoints (use multiple for redundancy)
 const OVERPASS_ENDPOINTS = [
@@ -174,12 +176,12 @@ const TREE_COLORS = {
 
 // Materials cache
 const materials = {
-  needleleafedCrown: new THREE.MeshStandardMaterial({
+  needleleavedCrown: new THREE.MeshStandardMaterial({
     color: TREE_COLORS.needleleaved.crown,
     roughness: 0.9,
     metalness: 0,
   }),
-  needleleafedTrunk: new THREE.MeshStandardMaterial({
+  needleleavedTrunk: new THREE.MeshStandardMaterial({
     color: TREE_COLORS.needleleaved.trunk,
     roughness: 0.95,
     metalness: 0,
@@ -361,17 +363,24 @@ export async function loadTreesForTile(
   // Check memory cache first
   if (treeCache.has(key)) {
     const entry = treeCache.get(key)!;
-    if (Date.now() - entry.timestamp < CACHE_TTL) {
+    const ttl = entry.isFailure ? FAILURE_CACHE_TTL : CACHE_TTL;
+    if (Date.now() - entry.timestamp < ttl) {
       return entry.trees;
     }
+    // Cache expired, remove it
+    treeCache.delete(key);
   }
 
   // Check localStorage cache
   const localEntry = loadFromLocalStorage(key);
   if (localEntry) {
-    // Update memory cache
-    treeCache.set(key, localEntry);
-    return localEntry.trees;
+    const ttl = localEntry.isFailure ? FAILURE_CACHE_TTL : CACHE_TTL;
+    if (Date.now() - localEntry.timestamp < ttl) {
+      // Update memory cache
+      treeCache.set(key, localEntry);
+      return localEntry.trees;
+    }
+    // Cache expired, don't use it
   }
 
   // Check if already loading
@@ -403,13 +412,14 @@ export async function loadTreesForTile(
       console.warn(`Failed to load trees for tile ${key}:`, (error as Error).message);
       pendingLoads.delete(key);
 
-      // Return empty array and cache it to avoid repeated failures
-      const emptyEntry: TreeCacheEntry = {
+      // Cache failure with short TTL to allow retry
+      const failureEntry: TreeCacheEntry = {
         trees: [],
         timestamp: Date.now(),
+        isFailure: true,
       };
-      treeCache.set(key, emptyEntry);
-      saveToLocalStorage(key, []);
+      treeCache.set(key, failureEntry);
+      // Don't persist failures to localStorage - only cache in memory
 
       return [];
     }
@@ -462,22 +472,30 @@ function pointInPolygon(x: number, y: number, polygon: number[][]): boolean {
 
 /**
  * Calculate the approximate area of a polygon in square meters
- * Uses spherical approximation
+ * Uses latitude-adjusted conversion for accuracy at different latitudes
  */
 function calculatePolygonAreaMeters(polygon: number[][]): number {
   if (polygon.length < 3) return 0;
 
-  // Shoelace formula for area, then convert from degrees² to meters²
+  // Calculate centroid latitude for conversion factor
+  let centroidLat = 0;
+  for (const [, lat] of polygon) {
+    centroidLat += lat;
+  }
+  centroidLat /= polygon.length;
+
+  // Shoelace formula for area in degrees²
   let area = 0;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
     area += (polygon[j][0] + polygon[i][0]) * (polygon[j][1] - polygon[i][1]);
   }
   area = Math.abs(area / 2);
 
-  // Convert from degrees² to m² (approximate at 45° latitude)
-  // 1 degree longitude ≈ 78846m, 1 degree latitude ≈ 111320m
+  // Convert from degrees² to m² using latitude-adjusted factors
+  // 1 degree latitude ≈ 111320m (constant)
+  // 1 degree longitude ≈ 111320 * cos(latitude) meters
   const metersPerDegreeLat = 111320;
-  const metersPerDegreeLng = 78846; // approximate for mid-latitudes
+  const metersPerDegreeLng = 111320 * Math.cos(centroidLat * Math.PI / 180);
   return area * metersPerDegreeLat * metersPerDegreeLng;
 }
 
@@ -551,6 +569,11 @@ function generateTreesInPolygon(
       height,
       leafType: isConifer ? 'needleleaved' : 'broadleaved',
     });
+  }
+
+  // Warn if we couldn't place enough trees (complex polygon with low fill ratio)
+  if (trees.length < treeCount * 0.5 && treeCount > 10) {
+    console.warn(`Rejection sampling placed only ${trees.length}/${treeCount} trees (${Math.round(trees.length / treeCount * 100)}%) - polygon may have low fill ratio`);
   }
 
   return trees;
@@ -688,12 +711,12 @@ function createConiferInstancedMesh(
   // Create instanced meshes
   const crownMesh = new THREE.InstancedMesh(
     crownGeometry,
-    materials.needleleafedCrown,
+    materials.needleleavedCrown,
     trees.length
   );
   const trunkMesh = new THREE.InstancedMesh(
     trunkGeometry,
-    materials.needleleafedTrunk,
+    materials.needleleavedTrunk,
     trees.length
   );
 
@@ -740,10 +763,12 @@ function createConiferInstancedMesh(
 
 /**
  * Create instanced mesh for deciduous trees (sphere/icosahedron-shaped crown)
+ * @param random - Seeded random function for consistent placement across sessions
  */
 function createDeciduousInstancedMesh(
   trees: TreeData[],
-  worldPositions: { x: number; y: number; z: number }[]
+  worldPositions: { x: number; y: number; z: number }[],
+  random: () => number
 ): THREE.Group {
   const group = new THREE.Group();
 
@@ -790,15 +815,15 @@ function createDeciduousInstancedMesh(
     const crownRadius = crownHeight * 0.5;
 
     // Crown - positioned at top of trunk, slight random offset for variety
-    const offsetX = (Math.random() - 0.5) * 0.3;
-    const offsetZ = (Math.random() - 0.5) * 0.3;
+    const offsetX = (random() - 0.5) * 0.3;
+    const offsetZ = (random() - 0.5) * 0.3;
     position.set(pos.x + offsetX, pos.y + trunkHeight + crownRadius * 0.8, pos.z + offsetZ);
 
     // Slight random rotation for variety
     quaternion.setFromEuler(new THREE.Euler(
-      (Math.random() - 0.5) * 0.1,
-      Math.random() * Math.PI * 2,
-      (Math.random() - 0.5) * 0.1
+      (random() - 0.5) * 0.1,
+      random() * Math.PI * 2,
+      (random() - 0.5) * 0.1
     ));
 
     scale.set(crownRadius, crownRadius * 0.9, crownRadius);
@@ -892,6 +917,9 @@ export async function createTreesForTile(
   group.name = `trees-${tileZ}/${tileX}/${tileY}`;
   group.userData = { tileX, tileY, tileZ, treeCount: trees.length };
 
+  // Create seeded random for deciduous mesh variation (different seed offset)
+  const meshRandom = seededRandom(seed + 54321);
+
   // Create instanced meshes for each type
   if (conifers.length > 0) {
     const coniferGroup = createConiferInstancedMesh(conifers, coniferPositions);
@@ -900,7 +928,7 @@ export async function createTreesForTile(
   }
 
   if (deciduous.length > 0) {
-    const deciduousGroup = createDeciduousInstancedMesh(deciduous, deciduousPositions);
+    const deciduousGroup = createDeciduousInstancedMesh(deciduous, deciduousPositions, meshRandom);
     deciduousGroup.name = 'deciduous';
     group.add(deciduousGroup);
   }

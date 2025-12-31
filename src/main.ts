@@ -66,11 +66,21 @@ async function updateTiles(
     console.log('Loading tile:', tile.key);
 
     // Load base layer, buildings, transportation, and trees in parallel
+    // Wrap tree creation to isolate failures - trees are optional, other layers are critical
+    const safeCreateTrees = async () => {
+      try {
+        return await createTreesForTile(tile.x, tile.y, tile.z);
+      } catch (e) {
+        console.warn(`Tree creation failed for tile ${tile.key}:`, e);
+        return null;
+      }
+    };
+
     Promise.all([
       createBaseLayerForTile(tile.x, tile.y, tile.z),
       createBuildingsForTile(tile.x, tile.y, tile.z),
       createTransportationForTile(tile.x, tile.y, tile.z),
-      createTreesForTile(tile.x, tile.y, tile.z)
+      safeCreateTrees()
     ]).then(([baseGroup, buildingsGroup, transportationGroup, treesGroup]) => {
       tileMeshes.set(tile.key, {
         base: baseGroup,
