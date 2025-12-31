@@ -3,8 +3,10 @@ import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
 import { loadBuildingTile, tileToWorldBounds } from './tile-manager.js';
 import {
   getBuildingColor,
+  getBuildingHeight,
   groupFeaturesByCategory,
   createCategoryMaterial,
+  isUndergroundBuilding,
   BuildingFeature,
 } from './building-materials.js';
 
@@ -150,12 +152,15 @@ export async function createBuildingsForTile(
         continue;
       }
 
-      const props = feature.properties || {};
-      const height = (props.height as number) ||
-                     (props.num_floors ? (props.num_floors as number) * 3 : 0) ||
-                     DEFAULT_BUILDING_HEIGHT;
+      // Skip underground buildings (Overture is_underground property)
+      if (isUndergroundBuilding(feature)) {
+        continue;
+      }
 
-      // Get building-specific color
+      // Get building height from Overture properties (height, num_floors)
+      const height = getBuildingHeight(feature, DEFAULT_BUILDING_HEIGHT);
+
+      // Get building-specific color based on Overture subtype/class
       const buildingColor = getBuildingColor(feature);
 
       try {
