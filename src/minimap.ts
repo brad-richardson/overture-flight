@@ -1,6 +1,6 @@
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
-import { LOCATIONS, OVERTURE_BASE_PMTILES, OVERTURE_BUILDINGS_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from './constants.js';
+import { LOCATIONS, OVERTURE_BASE_PMTILES, OVERTURE_BUILDINGS_PMTILES, OVERTURE_TRANSPORTATION_PMTILES, OVERTURE_DIVISIONS_PMTILES } from './constants.js';
 import type { PlaneState } from './plane.js';
 
 // Register PMTiles protocol for MapLibre
@@ -42,11 +42,11 @@ const CARTO_COLORS = {
   building: '#d4ccc0',      // Building fill
   buildingOutline: '#b8a898', // Building stroke
 
-  // Roads
-  motorway: '#e8a87c',      // Orange for highways
-  motorwayOutline: '#d08050',
-  primary: '#f8d898',       // Yellow for primary roads
-  primaryOutline: '#e0b860',
+  // Roads - muted, subtle colors
+  motorway: '#d4a0a0',      // Muted pink/mauve for highways
+  motorwayOutline: '#b88080',
+  primary: '#e8dcc0',       // Soft cream/tan for primary roads
+  primaryOutline: '#c8b898',
   secondary: '#ffffff',     // White for secondary
   secondaryOutline: '#c8c0b0',
   tertiary: '#ffffff',      // White for tertiary
@@ -54,12 +54,15 @@ const CARTO_COLORS = {
   road: '#ffffff',          // Default road
   roadOutline: '#d8d0c4',
 
-  // Rail
-  rail: '#888888',
+  // Boundaries
+  stateBoundary: '#9090a0', // Muted purple-gray for state lines
+  countryBoundary: '#707080', // Darker for country borders
 
-  // Text
+  // Text and labels
   text: '#444444',
   textHalo: '#ffffff',
+  cityLabel: '#404050',
+  stateLabel: '#606070',
 };
 
 // Minimap state
@@ -428,7 +431,7 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
         'overture-base': {
           type: 'vector',
           url: `pmtiles://${OVERTURE_BASE_PMTILES}`,
-          attribution: '&copy; <a href="https://overturemaps.org">Overture Maps Foundation</a>'
+          attribution: '&copy; <a href="https://overturemaps.org">Overture Maps Foundation</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         },
         'overture-buildings': {
           type: 'vector',
@@ -437,6 +440,10 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
         'overture-transportation': {
           type: 'vector',
           url: `pmtiles://${OVERTURE_TRANSPORTATION_PMTILES}`
+        },
+        'overture-divisions': {
+          type: 'vector',
+          url: `pmtiles://${OVERTURE_DIVISIONS_PMTILES}`
         }
       },
       layers: [
@@ -616,27 +623,6 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           }
         },
 
-        // Railways
-        {
-          id: 'railways',
-          type: 'line',
-          source: 'overture-transportation',
-          'source-layer': 'segment',
-          filter: ['all',
-            ['==', ['geometry-type'], 'LineString'],
-            ['==', ['get', 'subtype'], 'rail']
-          ],
-          paint: {
-            'line-color': CARTO_COLORS.rail,
-            'line-width': [
-              'interpolate', ['linear'], ['zoom'],
-              8, 0.5,
-              14, 2
-            ],
-            'line-dasharray': [2, 2]
-          }
-        },
-
         // Buildings
         {
           id: 'buildings',
@@ -664,6 +650,88 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           paint: {
             'line-color': CARTO_COLORS.buildingOutline,
             'line-width': 0.5
+          }
+        },
+
+        // State/region boundaries
+        {
+          id: 'state-boundaries',
+          type: 'line',
+          source: 'overture-divisions',
+          'source-layer': 'division_boundary',
+          filter: ['any',
+            ['==', ['get', 'subtype'], 'region'],
+            ['==', ['get', 'subtype'], 'country']
+          ],
+          paint: {
+            'line-color': [
+              'match',
+              ['get', 'subtype'],
+              'country', CARTO_COLORS.countryBoundary,
+              CARTO_COLORS.stateBoundary
+            ],
+            'line-width': [
+              'match',
+              ['get', 'subtype'],
+              'country', 1.5,
+              1
+            ],
+            'line-dasharray': [4, 2]
+          }
+        },
+
+        // City/locality labels
+        {
+          id: 'city-labels',
+          type: 'symbol',
+          source: 'overture-divisions',
+          'source-layer': 'division',
+          filter: ['==', ['get', 'subtype'], 'locality'],
+          layout: {
+            'text-field': ['coalesce', ['get', 'name'], ''],
+            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+            'text-size': [
+              'interpolate', ['linear'], ['zoom'],
+              4, 10,
+              8, 12,
+              12, 14
+            ],
+            'text-anchor': 'center',
+            'text-max-width': 8,
+            'symbol-sort-key': ['*', -1, ['coalesce', ['get', 'population'], 0]]
+          },
+          paint: {
+            'text-color': CARTO_COLORS.cityLabel,
+            'text-halo-color': CARTO_COLORS.textHalo,
+            'text-halo-width': 1.5
+          }
+        },
+
+        // State/region labels (larger, less frequent)
+        {
+          id: 'state-labels',
+          type: 'symbol',
+          source: 'overture-divisions',
+          'source-layer': 'division',
+          filter: ['==', ['get', 'subtype'], 'region'],
+          maxzoom: 8,
+          layout: {
+            'text-field': ['coalesce', ['get', 'name'], ''],
+            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+            'text-size': [
+              'interpolate', ['linear'], ['zoom'],
+              3, 10,
+              6, 14
+            ],
+            'text-transform': 'uppercase',
+            'text-letter-spacing': 0.1,
+            'text-anchor': 'center',
+            'text-max-width': 10
+          },
+          paint: {
+            'text-color': CARTO_COLORS.stateLabel,
+            'text-halo-color': CARTO_COLORS.textHalo,
+            'text-halo-width': 2
           }
         }
       ]
