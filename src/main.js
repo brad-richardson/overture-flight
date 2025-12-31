@@ -7,6 +7,7 @@ import { updateHUD, updatePlayerList, showCrashMessage, initLocationPicker } fro
 import { initTileManager, getTilesToLoad, getTilesToUnload, isTileLoaded, markTileLoading, markTileLoaded, removeTile, getTileMeshes } from './tile-manager.js';
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
+import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
 import { DEFAULT_LOCATION } from './constants.js';
 
 // Game state
@@ -20,7 +21,7 @@ let isRunning = false;
 const players = new Map();
 
 // Tile meshes tracking
-const tileMeshes = new Map(); // key -> { buildings: Group, base: Group }
+const tileMeshes = new Map(); // key -> { buildings: Group, base: Group, transportation: Group }
 const loadingTiles = new Set(); // Track tiles currently being loaded
 
 /**
@@ -41,14 +42,16 @@ async function updateTiles(lng, lat) {
     loadingTiles.add(tile.key);
     console.log('Loading tile:', tile.key);
 
-    // Load base layer and buildings in parallel
+    // Load base layer, buildings, and transportation in parallel
     Promise.all([
       createBaseLayerForTile(tile.x, tile.y, tile.z),
-      createBuildingsForTile(tile.x, tile.y, tile.z)
-    ]).then(([baseGroup, buildingsGroup]) => {
+      createBuildingsForTile(tile.x, tile.y, tile.z),
+      createTransportationForTile(tile.x, tile.y, tile.z)
+    ]).then(([baseGroup, buildingsGroup, transportationGroup]) => {
       tileMeshes.set(tile.key, {
         base: baseGroup,
-        buildings: buildingsGroup
+        buildings: buildingsGroup,
+        transportation: transportationGroup
       });
       loadingTiles.delete(tile.key);
       console.log('Tile loaded:', tile.key);
@@ -65,6 +68,7 @@ async function updateTiles(lng, lat) {
     if (meshes) {
       if (meshes.base) removeBaseLayerGroup(meshes.base);
       if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
+      if (meshes.transportation) removeTransportationGroup(meshes.transportation);
       tileMeshes.delete(key);
     }
     removeTile(key);
@@ -194,6 +198,7 @@ function handleTeleport(lat, lng) {
   for (const [key, meshes] of tileMeshes) {
     if (meshes.base) removeBaseLayerGroup(meshes.base);
     if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
+    if (meshes.transportation) removeTransportationGroup(meshes.transportation);
     removeTile(key);
   }
   tileMeshes.clear();

@@ -8,6 +8,10 @@ export const OVERTURE_BUILDINGS_PMTILES = import.meta.env.VITE_PMTILES_URL
 export const OVERTURE_BASE_PMTILES = import.meta.env.VITE_BASE_PMTILES_URL
   || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/base.pmtiles';
 
+// Overture transportation theme (roads, paths, railways)
+export const OVERTURE_TRANSPORTATION_PMTILES = import.meta.env.VITE_TRANSPORTATION_PMTILES_URL
+  || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/transportation.pmtiles';
+
 // MapTiler style (requires API key for production)
 // For development, using a free OSM-based style
 export const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
