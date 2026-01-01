@@ -19,7 +19,11 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "overture-geocoder": ["./node_modules/overture-geocoder/clients/js/dist/index.d.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts"],
   "exclude": ["node_modules", "dist"]

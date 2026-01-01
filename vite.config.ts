@@ -12,19 +12,12 @@ export default defineConfig(() => ({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
-    rollupOptions: {
-      // Externalize optional duckdb-wasm dependency (used for geometry fetching, not needed for search)
-      external: ['@duckdb/duckdb-wasm']
-    }
+    sourcemap: true
   },
   resolve: {
     alias: {
-      'overture-geocoder': path.resolve(__dirname, 'node_modules/overture-geocoder/clients/js/src/index.ts')
+      // Point to the JS client's dist folder within the monorepo
+      'overture-geocoder': path.resolve(__dirname, 'node_modules/overture-geocoder/clients/js/dist/index.mjs')
     }
-  },
-  optimizeDeps: {
-    include: ['overture-geocoder'],
-    exclude: ['@duckdb/duckdb-wasm']
   }
 }));
