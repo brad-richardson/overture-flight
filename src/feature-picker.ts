@@ -131,7 +131,72 @@ function pointInPolygon(lng: number, lat: number, ring: number[][]): boolean {
 }
 
 /**
- * Check if a point is inside a polygon (handling holes)
+ * Calculate minimum distance from a point to a polygon ring (boundary)
+ */
+function pointToRingDistance(lng: number, lat: number, ring: number[][]): number {
+  let minDist = Infinity;
+
+  for (let i = 0; i < ring.length; i++) {
+    const j = (i + 1) % ring.length;
+    const [x1, y1] = ring[i];
+    const [x2, y2] = ring[j];
+
+    // Calculate distance from point to line segment
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len2 = dx * dx + dy * dy;
+
+    let t = 0;
+    if (len2 > 0) {
+      t = Math.max(0, Math.min(1, ((lng - x1) * dx + (lat - y1) * dy) / len2));
+    }
+
+    const nearestX = x1 + t * dx;
+    const nearestY = y1 + t * dy;
+    const dist = Math.sqrt((lng - nearestX) ** 2 + (lat - nearestY) ** 2);
+
+    minDist = Math.min(minDist, dist);
+  }
+
+  return minDist;
+}
+
+/**
+ * Check if a point is inside or near the edge of a polygon (handling holes)
+ * This handles clicks on building walls where the intersection point
+ * is technically just outside the footprint polygon
+ */
+function pointInOrNearPolygon(lng: number, lat: number, coordinates: number[][][], tolerance: number): boolean {
+  const outerRing = coordinates[0];
+
+  // First check: is point inside the polygon?
+  if (pointInPolygon(lng, lat, outerRing)) {
+    // Must not be inside any hole
+    for (let i = 1; i < coordinates.length; i++) {
+      if (pointInPolygon(lng, lat, coordinates[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Second check: is point near the polygon boundary? (for wall clicks)
+  const distToEdge = pointToRingDistance(lng, lat, outerRing);
+  if (distToEdge <= tolerance) {
+    // Make sure we're not near a hole's boundary from inside
+    for (let i = 1; i < coordinates.length; i++) {
+      if (pointInPolygon(lng, lat, coordinates[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if a point is inside a polygon (handling holes) - strict version
  */
 function pointInPolygonWithHoles(lng: number, lat: number, coordinates: number[][][]): boolean {
   // Must be inside outer ring
@@ -216,13 +281,24 @@ export function findFeaturesAtLocation(
       }
 
       // Detailed geometry check
+      // Use edge-aware check for buildings (to catch wall clicks)
+      // Use strict check for background layers
+      const useEdgeTolerance = feature.layer === 'building';
+
       if (feature.type === 'Polygon') {
-        if (pointInPolygonWithHoles(lng, lat, feature.coordinates as number[][][])) {
+        const coords = feature.coordinates as number[][][];
+        const isMatch = useEdgeTolerance
+          ? pointInOrNearPolygon(lng, lat, coords, tolerance)
+          : pointInPolygonWithHoles(lng, lat, coords);
+        if (isMatch) {
           results.push(feature);
         }
       } else if (feature.type === 'MultiPolygon') {
         for (const polygon of feature.coordinates as number[][][][]) {
-          if (pointInPolygonWithHoles(lng, lat, polygon)) {
+          const isMatch = useEdgeTolerance
+            ? pointInOrNearPolygon(lng, lat, polygon, tolerance)
+            : pointInPolygonWithHoles(lng, lat, polygon);
+          if (isMatch) {
             results.push(feature);
             break;
           }
