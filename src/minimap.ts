@@ -668,10 +668,10 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           id: 'city-labels',
           type: 'symbol',
           source: 'overture-divisions',
-          'source-layer': 'division',
-          filter: ['==', ['get', 'subtype'], 'locality'],
+          'source-layer': 'placenames',
+          filter: ['in', ['get', 'locality_type'], ['literal', ['city', 'town', 'village', 'hamlet']]],
           layout: {
-            'text-field': ['coalesce', ['get', 'primary', ['get', 'names']], ['get', 'name'], ''],
+            'text-field': ['get', 'name'],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
@@ -694,11 +694,11 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           id: 'state-labels',
           type: 'symbol',
           source: 'overture-divisions',
-          'source-layer': 'division',
-          filter: ['==', ['get', 'subtype'], 'region'],
+          'source-layer': 'placenames',
+          filter: ['==', ['get', 'locality_type'], 'region'],
           maxzoom: 8,
           layout: {
-            'text-field': ['coalesce', ['get', 'primary', ['get', 'names']], ['get', 'name'], ''],
+            'text-field': ['get', 'name'],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
