@@ -1,7 +1,11 @@
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
+import { OvertureGeocoder } from 'overture-geocoder';
 import { LOCATIONS, OVERTURE_BASE_PMTILES, OVERTURE_BUILDINGS_PMTILES, OVERTURE_TRANSPORTATION_PMTILES, OVERTURE_DIVISIONS_PMTILES } from './constants.js';
 import type { PlaneState } from './plane.js';
+
+// Initialize the Overture Geocoder client
+const geocoder = new OvertureGeocoder();
 
 // PMTiles protocol instance - stored at module level for proper lifecycle management
 let pmtilesProtocol: Protocol | null = null;
@@ -78,10 +82,6 @@ let coordsDisplay: HTMLElement | null = null;
 // Event listener references for cleanup
 let escapeKeyHandler: ((e: KeyboardEvent) => void) | null = null;
 
-// Rate limiting for Nominatim API (max 1 request per second)
-let lastSearchTime = 0;
-const SEARCH_RATE_LIMIT_MS = 1000;
-
 // Focusable elements for focus trap
 let focusableElements: HTMLElement[] = [];
 let firstFocusable: HTMLElement | null = null;
@@ -155,57 +155,25 @@ function updateCoordsDisplay(lng: number, lat: number): void {
 }
 
 /**
- * Performs geocoding search using the Nominatim API.
+ * Performs geocoding search using the Overture Geocoder.
  *
- * Nominatim has a rate limit of 1 request per second. This function
- * implements client-side rate limiting to prevent API throttling.
+ * Uses the Overture Maps data via the overture-geocoder client library.
  *
  * @param query - The location search query string
  * @throws Displays user-friendly error messages for various failure modes
- *
- * @see https://nominatim.org/release-docs/latest/api/Search/
  */
 async function searchLocation(query: string): Promise<void> {
   if (!query.trim() || !map) return;
 
-  // Rate limiting check
-  const now = Date.now();
-  const timeSinceLastSearch = now - lastSearchTime;
-  if (timeSinceLastSearch < SEARCH_RATE_LIMIT_MS) {
-    const waitTime = Math.ceil((SEARCH_RATE_LIMIT_MS - timeSinceLastSearch) / 1000);
-    alert(`Please wait ${waitTime} second${waitTime > 1 ? 's' : ''} before searching again.`);
-    return;
-  }
-  lastSearchTime = now;
-
   try {
-    const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`,
-      {
-        headers: {
-          'User-Agent': 'FlightSimulator/1.0 (https://github.com/overture-flight)',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        alert('Too many requests. Please wait a moment before searching again.');
-        return;
-      }
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const results = await response.json() as Array<{ lat: string; lon: string }>;
+    const results = await geocoder.search(query, { limit: 1 });
 
     if (results.length > 0) {
       const { lat, lon } = results[0];
-      const latNum = parseFloat(lat);
-      const lngNum = parseFloat(lon);
 
       // Fly to location on minimap
       map.flyTo({
-        center: [lngNum, latNum],
+        center: [lon, lat],
         zoom: 14,
         duration: 1000
       });
@@ -215,10 +183,10 @@ async function searchLocation(query: string): Promise<void> {
       updateLockButton();
 
       // Show target marker
-      showTargetMarker(lngNum, latNum);
+      showTargetMarker(lon, lat);
 
       // Update coords
-      updateCoordsDisplay(lngNum, latNum);
+      updateCoordsDisplay(lon, lat);
     } else {
       alert(`No results found for "${query}". Try a different search term.`);
     }
@@ -227,7 +195,7 @@ async function searchLocation(query: string): Promise<void> {
     if (e instanceof TypeError && e.message.includes('fetch')) {
       alert('Network error. Please check your internet connection.');
     } else {
-      alert('Search failed due to a server error. Please try again later.');
+      alert('Search failed. Please try again later.');
     }
   }
 }

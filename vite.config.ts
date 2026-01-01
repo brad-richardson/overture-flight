@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import path from 'path';
 
 export default defineConfig(() => ({
   // Base path configuration:
@@ -11,6 +12,19 @@ export default defineConfig(() => ({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true
+    sourcemap: true,
+    rollupOptions: {
+      // Externalize optional duckdb-wasm dependency (used for geometry fetching, not needed for search)
+      external: ['@duckdb/duckdb-wasm']
+    }
+  },
+  resolve: {
+    alias: {
+      'overture-geocoder': path.resolve(__dirname, 'node_modules/overture-geocoder/clients/js/src/index.ts')
+    }
+  },
+  optimizeDeps: {
+    include: ['overture-geocoder'],
+    exclude: ['@duckdb/duckdb-wasm']
   }
 }));
