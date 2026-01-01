@@ -30,10 +30,12 @@ const OSM_S3_BUCKET = 's3://osm-pds';
 
 /**
  * Convert lat/lon to tile coordinates at given zoom level
+ * Web Mercator is only valid for ~±85.05°, clamp to avoid NaN at poles
  */
 function latLonToTile(lat, lon, zoom) {
+  const clampedLat = Math.max(-85.051129, Math.min(85.051129, lat));
   const x = Math.floor((lon + 180) / 360 * (1 << zoom));
-  const y = Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * (1 << zoom));
+  const y = Math.floor((1 - Math.log(Math.tan(clampedLat * Math.PI / 180) + 1 / Math.cos(clampedLat * Math.PI / 180)) / Math.PI) / 2 * (1 << zoom));
   return {
     x: Math.max(0, Math.min(x, (1 << zoom) - 1)),
     y: Math.max(0, Math.min(y, (1 << zoom) - 1))
@@ -152,10 +154,11 @@ async function main() {
 
     // Query for tree nodes, grouped by z11 tile
     // Using DuckDB's built-in functions for tile calculation
+    // Clamp latitude to ±85.051129 for valid Web Mercator projection
     const sql = `
       WITH tree_nodes AS (
         SELECT
-          lat / 10000000.0 as lat,
+          GREATEST(-85.051129, LEAST(85.051129, lat / 10000000.0)) as lat,
           lon / 10000000.0 as lon,
           tags['leaf_type'] as leaf_type,
           tags['genus'] as genus
@@ -172,7 +175,7 @@ async function main() {
           CASE
             WHEN leaf_type = 'needleleaved' THEN 1
             WHEN leaf_type = 'broadleaved' THEN 0
-            WHEN genus IN ('Pinus', 'Picea', 'Abies', 'Larix', 'Cedrus', 'Juniperus', 'Thuja', 'Cupressus') THEN 1
+            WHEN genus IN ('Pinus', 'Picea', 'Abies', 'Larix', 'Cedrus', 'Juniperus', 'Thuja', 'Cupressus', 'Sequoia', 'Taxus', 'Tsuga', 'Pseudotsuga', 'Cryptomeria', 'Araucaria', 'Metasequoia', 'Chamaecyparis') THEN 1
             ELSE NULL
           END as is_conifer
         FROM tree_nodes

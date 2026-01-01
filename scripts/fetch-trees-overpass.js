@@ -52,10 +52,12 @@ let endpointIndex = 0;
 
 /**
  * Convert lat/lon to tile coordinates
+ * Web Mercator is only valid for ~±85.05°, clamp to avoid NaN at poles
  */
 function latLonToTile(lat, lon, zoom) {
+  const clampedLat = Math.max(-85.051129, Math.min(85.051129, lat));
   const x = Math.floor((lon + 180) / 360 * (1 << zoom));
-  const y = Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * (1 << zoom));
+  const y = Math.floor((1 - Math.log(Math.tan(clampedLat * Math.PI / 180) + 1 / Math.cos(clampedLat * Math.PI / 180)) / Math.PI) / 2 * (1 << zoom));
   return {
     x: Math.max(0, Math.min(x, (1 << zoom) - 1)),
     y: Math.max(0, Math.min(y, (1 << zoom) - 1))
@@ -73,7 +75,11 @@ function isConifer(tags) {
   if (leafType === 'broadleaved') return false;
 
   const genus = (tags.genus || '').toLowerCase();
-  const coniferGenera = ['pinus', 'picea', 'abies', 'larix', 'cedrus', 'juniperus', 'thuja', 'cupressus'];
+  const coniferGenera = [
+    'pinus', 'picea', 'abies', 'larix', 'cedrus', 'juniperus',
+    'thuja', 'cupressus', 'sequoia', 'taxus', 'tsuga', 'pseudotsuga',
+    'cryptomeria', 'araucaria', 'metasequoia', 'chamaecyparis'
+  ];
   if (coniferGenera.some(g => genus.includes(g))) return true;
 
   return null;

@@ -29,8 +29,6 @@
 import { createReadStream } from 'fs';
 import { writeFile, stat } from 'fs/promises';
 import { createGunzip } from 'zlib';
-import { pipeline } from 'stream/promises';
-import { Transform } from 'stream';
 
 // Configuration
 const ZOOM_LEVEL = 11;
@@ -46,10 +44,13 @@ let processedNodes = 0;
 
 /**
  * Convert lat/lon to tile coordinates at given zoom level
+ * Web Mercator is only valid for ~±85.05°, clamp to avoid NaN from tan/cos at poles
  */
 function latLonToTile(lat, lon, zoom) {
+  // Clamp latitude to valid Web Mercator range
+  const clampedLat = Math.max(-85.051129, Math.min(85.051129, lat));
   const x = Math.floor((lon + 180) / 360 * (1 << zoom));
-  const y = Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * (1 << zoom));
+  const y = Math.floor((1 - Math.log(Math.tan(clampedLat * Math.PI / 180) + 1 / Math.cos(clampedLat * Math.PI / 180)) / Math.PI) / 2 * (1 << zoom));
   return {
     x: Math.max(0, Math.min(x, (1 << zoom) - 1)),
     y: Math.max(0, Math.min(y, (1 << zoom) - 1))
@@ -148,8 +149,13 @@ async function parsePBF(inputPath) {
 
   return new Promise((resolve, reject) => {
     const parser = osmpbf.default ? osmpbf.default() : osmpbf();
+    const source = createReadStream(inputPath);
 
-    createReadStream(inputPath)
+    // Handle errors from all streams in the pipeline
+    source.on('error', reject);
+    parser.on('error', reject);
+
+    source
       .pipe(parser)
       .pipe(through.obj(function(items, enc, next) {
         for (const item of items) {
@@ -199,9 +205,14 @@ async function parseXML(inputPath) {
     parser.on('end', resolve);
     parser.on('error', reject);
 
-    let stream = fs.createReadStream(inputPath);
+    const source = fs.createReadStream(inputPath);
+    source.on('error', reject);
+
+    let stream = source;
     if (inputPath.endsWith('.gz')) {
-      stream = stream.pipe(createGunzip());
+      const gunzip = createGunzip();
+      gunzip.on('error', reject);
+      stream = source.pipe(gunzip);
     }
     stream.pipe(parser);
   });

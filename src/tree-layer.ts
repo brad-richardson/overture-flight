@@ -138,8 +138,11 @@ const MAX_OSM_DENSITY_TREES_PER_TILE = 200;
 // OSM TREE DENSITY DATA (from tree-tiles.bin)
 // ============================================================================
 
-// Zoom level used in the pre-computed tile data
-const TILE_HINTS_ZOOM = 11;
+// Default zoom level for tile hints (can be overridden by file header)
+const DEFAULT_TILE_HINTS_ZOOM = 11;
+
+// Actual zoom level from the loaded file
+let tileHintsZoom = DEFAULT_TILE_HINTS_ZOOM;
 
 // Pre-loaded tile hints data: Map<"x,y" => TileHint>
 let tileHintsData: Map<string, TileHint> | null = null;
@@ -183,8 +186,10 @@ async function loadTreeHintsData(): Promise<void> {
       const version = data.getUint8(4);
       const zoom = data.getUint8(5);
 
-      if (zoom !== TILE_HINTS_ZOOM) {
-        console.warn(`Tree hints data is zoom ${zoom}, expected ${TILE_HINTS_ZOOM}`);
+      // Use the zoom level from the file
+      tileHintsZoom = zoom;
+      if (zoom !== DEFAULT_TILE_HINTS_ZOOM) {
+        console.log(`Tree hints data uses zoom ${zoom} (default is ${DEFAULT_TILE_HINTS_ZOOM})`);
       }
 
       let offset: number;
@@ -216,7 +221,9 @@ async function loadTreeHintsData(): Promise<void> {
     } catch (error) {
       tileHintsLoadError = error as Error;
       console.warn('Failed to load tree hints data:', (error as Error).message);
-      tileHintsData = new Map(); // Empty map as fallback
+      // Graceful degradation: use empty map so procedural trees from landcover still work.
+      // Check getTreeHintsStats().error to see if loading failed.
+      tileHintsData = new Map();
     }
   })();
 
@@ -237,8 +244,8 @@ function getTileHint(x: number, y: number): TileHint | null {
  * Convert detail tile coordinates to z11 tile coordinates
  */
 function detailToHintsTile(tileX: number, tileY: number, tileZ: number): { hx: number; hy: number } {
-  if (tileZ <= TILE_HINTS_ZOOM) {
-    const zoomDiff = TILE_HINTS_ZOOM - tileZ;
+  if (tileZ <= tileHintsZoom) {
+    const zoomDiff = tileHintsZoom - tileZ;
     const scale = Math.pow(2, zoomDiff);
     return {
       hx: Math.floor(tileX * scale),
@@ -246,7 +253,7 @@ function detailToHintsTile(tileX: number, tileY: number, tileZ: number): { hx: n
     };
   }
 
-  const zoomDiff = tileZ - TILE_HINTS_ZOOM;
+  const zoomDiff = tileZ - tileHintsZoom;
   const scale = Math.pow(2, zoomDiff);
   return {
     hx: Math.floor(tileX / scale),
@@ -444,7 +451,7 @@ function generateTreesInPolygon(
     // Generate height using normal distribution
     const u1 = random();
     const u2 = random();
-    const z = Math.sqrt(-2 * Math.log(Math.max(u1, 0.0001))) * Math.cos(2 * Math.PI * u2);
+    const z = Math.sqrt(-2 * Math.log(Math.max(u1, 1e-10))) * Math.cos(2 * Math.PI * u2);
     const meanHeight = (config.minHeight + config.maxHeight) / 2;
     let height = meanHeight + z * config.heightVariation;
     height = Math.max(config.minHeight, Math.min(config.maxHeight, height));
@@ -544,8 +551,8 @@ async function generateOSMDensityTrees(
   }
 
   // Calculate how many trees to generate for this detail tile
-  // A z11 tile contains 2^(tileZ - 11) x 2^(tileZ - 11) detail tiles
-  const zoomDiff = Math.max(0, tileZ - TILE_HINTS_ZOOM);
+  // A hints tile contains 2^(tileZ - hintsZoom) x 2^(tileZ - hintsZoom) detail tiles
+  const zoomDiff = Math.max(0, tileZ - tileHintsZoom);
   const tilesPerHintTile = Math.pow(2, zoomDiff * 2); // Total detail tiles in this z11 tile
   const treesPerDetailTile = Math.ceil(hint.count / tilesPerHintTile);
 
@@ -577,7 +584,7 @@ async function generateOSMDensityTrees(
     // Generate height with some variation
     const u1 = random();
     const u2 = random();
-    const z = Math.sqrt(-2 * Math.log(Math.max(u1, 0.0001))) * Math.cos(2 * Math.PI * u2);
+    const z = Math.sqrt(-2 * Math.log(Math.max(u1, 1e-10))) * Math.cos(2 * Math.PI * u2);
     const meanHeight = 10;
     const heightVariation = 4;
     let height = meanHeight + z * heightVariation;
