@@ -12,6 +12,10 @@ export const OVERTURE_BASE_PMTILES: string = import.meta.env.VITE_BASE_PMTILES_U
 export const OVERTURE_TRANSPORTATION_PMTILES: string = import.meta.env.VITE_TRANSPORTATION_PMTILES_URL
   || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/transportation.pmtiles';
 
+// Overture divisions theme (administrative boundaries, place names)
+export const OVERTURE_DIVISIONS_PMTILES: string = import.meta.env.VITE_DIVISIONS_PMTILES_URL
+  || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/divisions.pmtiles';
+
 // MapTiler style (requires API key for production)
 // For development, using a free OSM-based style
 export const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
