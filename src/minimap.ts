@@ -671,7 +671,7 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           'source-layer': 'division',
           filter: ['==', ['get', 'subtype'], 'locality'],
           layout: {
-            'text-field': '{names.primary}',  // Try dot notation in mustache
+            'text-field': ['coalesce', ['get', 'primary', ['get', 'names']], ['get', 'name'], ''],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
@@ -698,7 +698,7 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           filter: ['==', ['get', 'subtype'], 'region'],
           maxzoom: 8,
           layout: {
-            'text-field': '{names.primary}',  // Try dot notation in mustache
+            'text-field': ['coalesce', ['get', 'primary', ['get', 'names']], ['get', 'name'], ''],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
