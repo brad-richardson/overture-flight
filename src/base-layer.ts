@@ -76,10 +76,10 @@ const LAYER_DEPTHS: Record<string, number> = {
   terrain: -5.0,      // Terrain mesh at lowest position
   bathymetry: -4.0,   // Bathymetry above terrain but below land
   land: -3.0,         // Base land above bathymetry
-  water: -1.0,        // Water polygons above land layer (inland water only)
-  water_lines: -0.5,  // Water lines (rivers) slightly above water polygons
   land_cover: 0.3,    // Land cover offset ABOVE terrain surface (terrain-following)
   land_use: 0.8,      // Land use 0.5m above land_cover
+  water: 1.5,         // Water above land_cover/land_use
+  water_lines: 2.0,   // Water lines above water polygons
   default: 0.3
 };
 
