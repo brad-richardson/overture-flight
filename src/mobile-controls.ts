@@ -72,16 +72,6 @@ export function initMobileControls(): void {
 }
 
 /**
- * Hide the desktop keyboard controls help on mobile
- */
-function hideDesktopControlsHelp(): void {
-  const controlsHelp = document.getElementById('controls-help');
-  if (controlsHelp) {
-    controlsHelp.style.display = 'none';
-  }
-}
-
-/**
  * Create the joystick UI element
  */
 function createJoystickUI(): void {
