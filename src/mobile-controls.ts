@@ -42,25 +42,35 @@ export interface ThrottleState {
 }
 
 /**
+ * Check if device has touch capability (for hiding joystick on desktop)
+ */
+export function hasTouchCapability(): boolean {
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
+
+/**
  * Check if this is a mobile/touch device
  */
 export function isMobileDevice(): boolean {
-  return 'ontouchstart' in window ||
-         navigator.maxTouchPoints > 0 ||
-         window.innerWidth <= 768;
+  return hasTouchCapability() || window.innerWidth <= 768;
 }
 
 /**
  * Initialize mobile controls UI
  */
 export function initMobileControls(): void {
-  if (!isMobileDevice()) {
-    return; // Don't show on desktop
+  // Only show joystick on devices with actual touch capability
+  if (hasTouchCapability()) {
+    createJoystickUI();
   }
 
-  createJoystickUI();
+  // Always show throttle buttons (they work with both touch and mouse)
   createThrottleButtons();
-  hideDesktopControlsHelp();
+
+  // Hide desktop keyboard help on mobile
+  if (isMobileDevice()) {
+    hideDesktopControlsHelp();
+  }
 }
 
 /**
@@ -207,7 +217,7 @@ function createThrottleButtons(): void {
 
   if (!upBtn || !downBtn) return;
 
-  // Throttle up
+  // Throttle up - touch events
   upBtn.addEventListener('touchstart', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -225,7 +235,24 @@ function createThrottleButtons(): void {
     upBtn.classList.remove('active');
   }, { passive: true });
 
-  // Throttle down
+  // Throttle up - mouse events for desktop
+  upBtn.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    throttleOutput.up = true;
+    upBtn.classList.add('active');
+  });
+
+  upBtn.addEventListener('mouseup', () => {
+    throttleOutput.up = false;
+    upBtn.classList.remove('active');
+  });
+
+  upBtn.addEventListener('mouseleave', () => {
+    throttleOutput.up = false;
+    upBtn.classList.remove('active');
+  });
+
+  // Throttle down - touch events
   downBtn.addEventListener('touchstart', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -242,6 +269,23 @@ function createThrottleButtons(): void {
     throttleOutput.down = false;
     downBtn.classList.remove('active');
   }, { passive: true });
+
+  // Throttle down - mouse events for desktop
+  downBtn.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    throttleOutput.down = true;
+    downBtn.classList.add('active');
+  });
+
+  downBtn.addEventListener('mouseup', () => {
+    throttleOutput.down = false;
+    downBtn.classList.remove('active');
+  });
+
+  downBtn.addEventListener('mouseleave', () => {
+    throttleOutput.down = false;
+    downBtn.classList.remove('active');
+  });
 }
 
 /**
