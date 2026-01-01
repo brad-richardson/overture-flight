@@ -88,11 +88,11 @@ const RENDER_ORDER: Record<string, number> = {
   terrain: 0,
   bathymetry: 1,
   land: 2,
-  water: 3,
-  water_lines: 4,
-  land_cover: 5,
-  land_use: 6,
-  default: 5
+  land_cover: 3,
+  land_use: 4,
+  water: 5,
+  water_lines: 6,
+  default: 3
 };
 
 // Layers that should follow terrain elevation
