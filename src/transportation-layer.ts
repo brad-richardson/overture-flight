@@ -188,6 +188,7 @@ export async function createTransportationForTile(
           // Use Mesh with ribbon geometry for proper road widths
           const mesh = new THREE.Mesh(merged, getMaterial(style.color));
           mesh.name = `roads-${style.color.toString(16)}`;
+          mesh.renderOrder = 10; // Render after land layer (2), water (5), water_lines (6)
           group.add(mesh);
           mergeSucceeded = true;
         }
@@ -195,6 +196,7 @@ export async function createTransportationForTile(
         // Fallback: add individually (geometries are still in use, don't dispose)
         for (const geom of geometries) {
           const mesh = new THREE.Mesh(geom, getMaterial(style.color));
+          mesh.renderOrder = 10; // Render after land layer (2), water (5), water_lines (6)
           group.add(mesh);
         }
       }

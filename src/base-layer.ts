@@ -61,12 +61,12 @@ const COLORS: Record<string, number> = {
   commercial: 0x787878,
   industrial: 0x606060,
 
-  // Default land - neutral tan/beige (allows land_cover/land_use to show through)
-  land: 0xc8b8a0,
-  default: 0xc8b8a0,
+  // Default land - warm neutral gray (allows land_cover/land_use to show through)
+  land: 0xe5e3e0,
+  default: 0xe5e3e0,
 
-  // Terrain mesh base color - neutral tan/beige
-  terrain: 0xc8b8a0
+  // Terrain mesh base color - warm neutral gray
+  terrain: 0xe5e3e0
 };
 
 // Layer depth configuration to prevent z-fighting
@@ -77,11 +77,11 @@ const COLORS: Record<string, number> = {
 const LAYER_DEPTHS: Record<string, number> = {
   terrain: -5.0,      // Terrain mesh at lowest position
   bathymetry: -4.0,   // Bathymetry above terrain but below land
-  land: -3.0,         // Base land above bathymetry
+  land: -4.0,         // Base land - pushed down further from water (was -3.0)
   land_cover: 0.3,    // Land cover offset ABOVE terrain surface (terrain-following)
   land_use: 0.8,      // Land use 0.5m above land_cover
-  water: 1.5,         // Water above land_cover/land_use
-  water_lines: 2.0,   // Water lines above water polygons
+  water: 1.0,         // Water above land_cover/land_use (lowered to reduce flooding)
+  water_lines: 1.5,   // Water lines above water polygons
   default: 0.3
 };
 
@@ -160,14 +160,14 @@ const lineMaterials = new Map<number, THREE.LineBasicMaterial>();
 // Polygon offset values per layer to prevent z-fighting
 // Higher factor/units = pushed further back in depth buffer
 const POLYGON_OFFSET: Record<string, { factor: number; units: number }> = {
-  terrain: { factor: 4, units: 4 },
-  bathymetry: { factor: 3, units: 3 },
-  land: { factor: 2, units: 2 },
-  water: { factor: 1, units: 1 },
-  water_lines: { factor: 0, units: 0 },
-  land_cover: { factor: 2, units: 2 },  // Push back to avoid fighting with land_use
-  land_use: { factor: 0, units: 0 },    // Land_use renders on top
-  default: { factor: 1, units: 1 }
+  terrain: { factor: 6, units: 6 },
+  bathymetry: { factor: 5, units: 5 },
+  land: { factor: 4, units: 4 },        // Push further back (was 2, 2)
+  water: { factor: 0, units: 0 },       // Bring forward (was 1, 1)
+  water_lines: { factor: -1, units: -1 }, // Bring even more forward (was 0, 0)
+  land_cover: { factor: 3, units: 3 },  // Push back to avoid fighting with land_use
+  land_use: { factor: 1, units: 1 },    // Land_use renders on top (was 0, 0)
+  default: { factor: 2, units: 2 }
 };
 
 // Linear water feature types to render as lines (rivers, streams, etc.)
@@ -313,11 +313,15 @@ export async function createBaseLayerForTile(
     LINEAR_WATER_TYPES.includes(String(f.properties?.subtype || f.properties?.class || '').toLowerCase())
   );
 
+  // Track if we found covering water polygons - if so, we'll skip rendering river LineStrings
+  let hasLowerZoomWaterPolygons = false;
+
   if (hasWaterLines) {
     const lowerZoomWaterPolygons = await loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ);
     if (lowerZoomWaterPolygons.length > 0) {
       console.log(`Adding ${lowerZoomWaterPolygons.length} water polygons from lower zoom levels`);
       features.push(...lowerZoomWaterPolygons);
+      hasLowerZoomWaterPolygons = true;
     }
   }
 
@@ -381,7 +385,8 @@ export async function createBaseLayerForTile(
       } else if (feature.type === 'LineString' || feature.type === 'MultiLineString') {
         // Process line features for water - only rivers, streams, and canals
         // Skip coastlines and shorelines which create artifacts around islands
-        if (layer === 'water') {
+        // Also skip if we have covering water polygons from lower zoom levels
+        if (layer === 'water' && !hasLowerZoomWaterPolygons) {
           const subtype = String(feature.properties?.subtype || feature.properties?.class || '').toLowerCase();
           if (LINEAR_WATER_TYPES.includes(subtype)) {
             if (!lineFeaturesByColor.has(color)) {
