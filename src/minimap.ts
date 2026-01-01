@@ -7,6 +7,13 @@ import type { PlaneState } from './plane.js';
 // Initialize the Overture Geocoder client
 const geocoder = new OvertureGeocoder();
 
+// Clean up geocoder resources on page unload
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    geocoder.close();
+  });
+}
+
 // PMTiles protocol instance - stored at module level for proper lifecycle management
 let pmtilesProtocol: Protocol | null = null;
 
