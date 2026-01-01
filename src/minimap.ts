@@ -663,35 +663,56 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           }
         },
 
-        // DEBUG: Try circle markers to see if division points exist
-        {
-          id: 'division-points-debug',
-          type: 'circle',
-          source: 'overture-divisions',
-          'source-layer': 'division',
-          paint: {
-            'circle-radius': 5,
-            'circle-color': '#ff0000',
-            'circle-stroke-width': 1,
-            'circle-stroke-color': '#ffffff'
-          }
-        },
-
-        // City/locality labels - simplified
+        // City/locality labels
         {
           id: 'city-labels',
           type: 'symbol',
           source: 'overture-divisions',
           'source-layer': 'division',
+          filter: ['==', ['get', 'subtype'], 'locality'],
           layout: {
-            'text-field': '{subtype}',  // Simple mustache syntax
-            'text-size': 14,
-            'text-anchor': 'top',
-            'text-offset': [0, 0.5]
+            'text-field': '{names.primary}',  // Try dot notation in mustache
+            'text-font': ['Noto Sans Bold'],
+            'text-size': [
+              'interpolate', ['linear'], ['zoom'],
+              4, 10,
+              8, 12,
+              12, 14
+            ],
+            'text-anchor': 'center',
+            'text-max-width': 8
           },
           paint: {
-            'text-color': '#000000',
-            'text-halo-color': '#ffffff',
+            'text-color': CARTO_COLORS.cityLabel,
+            'text-halo-color': CARTO_COLORS.textHalo,
+            'text-halo-width': 1.5
+          }
+        },
+
+        // State/region labels
+        {
+          id: 'state-labels',
+          type: 'symbol',
+          source: 'overture-divisions',
+          'source-layer': 'division',
+          filter: ['==', ['get', 'subtype'], 'region'],
+          maxzoom: 8,
+          layout: {
+            'text-field': '{names.primary}',  // Try dot notation in mustache
+            'text-font': ['Noto Sans Bold'],
+            'text-size': [
+              'interpolate', ['linear'], ['zoom'],
+              3, 10,
+              6, 14
+            ],
+            'text-transform': 'uppercase',
+            'text-letter-spacing': 0.1,
+            'text-anchor': 'center',
+            'text-max-width': 10
+          },
+          paint: {
+            'text-color': CARTO_COLORS.stateLabel,
+            'text-halo-color': CARTO_COLORS.textHalo,
             'text-halo-width': 2
           }
         }
