@@ -671,7 +671,7 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           'source-layer': 'division',
           filter: ['==', ['geometry-type'], 'Point'],
           layout: {
-            'text-field': ['coalesce', ['get', 'name'], ['to-string', ['get', 'id']]],
+            'text-field': ['coalesce', ['get', 'primary_name'], ['get', 'name'], ['to-string', ['get', 'names']], ['to-string', ['get', 'id']]],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
@@ -701,16 +701,18 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
 
   // Debug: log available source layers when map loads
   map.on('load', () => {
-    console.log('Map loaded, checking sources...');
-    // Wait for tiles to load, then query
-    setTimeout(() => {
+    console.log('=== DIVISION DEBUG: Map loaded ===');
+  });
+
+  // Debug on sourcedata to catch when tiles actually load
+  map.on('sourcedata', (e) => {
+    if (e.sourceId === 'overture-divisions' && e.isSourceLoaded) {
       const divisionFeatures = map!.querySourceFeatures('overture-divisions', { sourceLayer: 'division' });
-      console.log('Division features count:', divisionFeatures.length);
       if (divisionFeatures.length > 0) {
-        console.log('Sample feature properties:', divisionFeatures[0].properties);
-        console.log('All property keys:', Object.keys(divisionFeatures[0].properties || {}));
+        console.log('=== DIVISION FEATURE FOUND ===');
+        console.log('Properties:', JSON.stringify(divisionFeatures[0].properties, null, 2));
       }
-    }, 2000);
+    }
   });
 
   // Create plane marker
