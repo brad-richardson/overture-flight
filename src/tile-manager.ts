@@ -96,6 +96,7 @@ const SPEED_THRESHOLD = 10; // m/s (~22 mph) - lowered to trigger predictive loa
 // At 25 m/s = 1 tile ahead, 50 m/s = 2 tiles
 const SPEED_TO_TILES_DIVISOR = 25;
 const MIN_FALLBACK_ZOOM = 6; // Minimum zoom level for base tile fallback
+const WATER_POLYGON_ZOOM_LEVELS = [10, 8, 6]; // Lower zoom levels to check for larger water polygons
 
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
@@ -327,6 +328,75 @@ export async function loadBaseTile(
 
   console.log(`Base tile ${zoom}/${x}/${y}: no data found at any zoom level`);
   return [];
+}
+
+/**
+ * Load water polygon features from lower zoom levels
+ * This helps find larger water bodies (like full river extents) that may only
+ * be represented as polygons at lower (zoomed out) zoom levels.
+ * At higher zooms, rivers often only exist as line features.
+ */
+export async function loadWaterPolygonsFromLowerZooms(
+  x: number,
+  y: number,
+  zoom: number = TILE_ZOOM
+): Promise<ParsedFeature[]> {
+  if (!basePMTiles) {
+    return [];
+  }
+
+  const waterPolygons: ParsedFeature[] = [];
+  const seenAreas = new Set<string>(); // Track polygons to avoid duplicates
+
+  for (const lowerZoom of WATER_POLYGON_ZOOM_LEVELS) {
+    if (lowerZoom >= zoom) continue; // Only check lower (zoomed out) levels
+
+    const scale = Math.pow(2, zoom - lowerZoom);
+    const lowerX = Math.floor(x / scale);
+    const lowerY = Math.floor(y / scale);
+
+    const data = await getTileData(basePMTiles, lowerZoom, lowerX, lowerY);
+    if (!data) continue;
+
+    const features = parseMVT(data, lowerX, lowerY, lowerZoom, 'water');
+
+    // Filter for polygon features only (the larger water bodies we're looking for)
+    for (const feature of features) {
+      if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') {
+        continue;
+      }
+
+      // Create a simple key based on first coordinate to dedupe
+      const coords = feature.coordinates as number[][][] | number[][][][];
+      const firstRing = feature.type === 'Polygon' ? coords[0] : (coords[0] as number[][][])[0];
+      if (!firstRing || firstRing.length < 3) continue;
+
+      const firstCoord = firstRing[0] as number[];
+      const areaKey = `${firstCoord[0].toFixed(4)},${firstCoord[1].toFixed(4)}`;
+
+      if (seenAreas.has(areaKey)) continue;
+      seenAreas.add(areaKey);
+
+      // Mark this feature as coming from a lower zoom level
+      // This helps the base layer know it's a large water polygon, not a centerline polygon
+      feature.properties = {
+        ...feature.properties,
+        _fromLowerZoom: true,
+        _sourceZoom: lowerZoom
+      };
+
+      waterPolygons.push(feature);
+    }
+
+    // If we found water polygons at this zoom level, we can stop
+    // (lower zooms have larger/more generalized features)
+    if (waterPolygons.length > 0) {
+      console.log(`Found ${waterPolygons.length} water polygons at zoom ${lowerZoom} for tile ${zoom}/${x}/${y}`);
+      break;
+    }
+  }
+
+  return waterPolygons;
 }
 
 /**
