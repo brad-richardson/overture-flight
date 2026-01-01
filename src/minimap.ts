@@ -702,17 +702,15 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
   // Debug: log available source layers when map loads
   map.on('load', () => {
     console.log('Map loaded, checking sources...');
-    const style = map!.getStyle();
-    if (style && style.sources) {
-      Object.entries(style.sources).forEach(([sourceName, source]) => {
-        console.log(`Source: ${sourceName}`, source);
-      });
-    }
-    // Try to query features from division source
-    const divisionFeatures = map!.querySourceFeatures('overture-divisions', { sourceLayer: 'division' });
-    console.log('Division features:', divisionFeatures.length, divisionFeatures.slice(0, 3));
-    const boundaryFeatures = map!.querySourceFeatures('overture-divisions', { sourceLayer: 'division_boundary' });
-    console.log('Boundary features:', boundaryFeatures.length);
+    // Wait for tiles to load, then query
+    setTimeout(() => {
+      const divisionFeatures = map!.querySourceFeatures('overture-divisions', { sourceLayer: 'division' });
+      console.log('Division features count:', divisionFeatures.length);
+      if (divisionFeatures.length > 0) {
+        console.log('Sample feature properties:', divisionFeatures[0].properties);
+        console.log('All property keys:', Object.keys(divisionFeatures[0].properties || {}));
+      }
+    }, 2000);
   });
 
   // Create plane marker
