@@ -262,10 +262,10 @@ export async function initScene(): Promise<{
   camera.position.set(0, 500, 500);
   camera.lookAt(0, 0, 0);
 
-  // Create renderer
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  // Create renderer (aggressive performance tuning: disabled antialiasing, lower pixel ratio)
+  renderer = new THREE.WebGLRenderer({ antialias: false });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -283,8 +283,8 @@ export async function initScene(): Promise<{
   const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
   sunLight.position.set(1000, 2000, 1000);
   sunLight.castShadow = true;
-  sunLight.shadow.mapSize.width = 2048;
-  sunLight.shadow.mapSize.height = 2048;
+  sunLight.shadow.mapSize.width = 1024;  // Reduced from 2048 for performance
+  sunLight.shadow.mapSize.height = 1024; // Reduced from 2048 for performance
   sunLight.shadow.camera.near = 100;
   sunLight.shadow.camera.far = 10000;
   sunLight.shadow.camera.left = -5000;
