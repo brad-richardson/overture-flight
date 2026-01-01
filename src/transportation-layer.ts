@@ -150,6 +150,13 @@ export async function createTransportationForTile(
       continue;
     }
 
+    // Skip underground/tunnel roads
+    if (feature.properties?.is_tunnel === true ||
+        feature.properties?.is_underground === true ||
+        (typeof feature.properties?.level === 'number' && feature.properties.level < 0)) {
+      continue;
+    }
+
     const style = getRoadStyle(feature.properties);
     const key = `${style.color}_${style.width}`;
 

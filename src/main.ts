@@ -12,7 +12,7 @@ import { createTransportationForTile, removeTransportationGroup } from './transp
 import { createTreesForTile, removeTreesGroup } from './tree-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
 import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT } from './constants.js';
-import { initMobileControls, getJoystickState, getThrottleState, isMobileDevice } from './mobile-controls.js';
+import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
 import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
 import { initFeatureModal, showFeatureModal } from './feature-modal.js';
 import * as THREE from 'three';
@@ -131,10 +131,10 @@ function gameLoop(time: number): void {
   // Cap delta time to avoid physics issues
   const cappedDelta = Math.min(deltaTime, 0.1);
 
-  // Update mobile input each frame (if on mobile)
-  if (isMobileDevice()) {
-    setMobileInput(getJoystickState(), getThrottleState());
-  }
+  // Update touch/button input each frame
+  // Always update throttle button state (works on desktop too)
+  // Joystick state will be 0 on desktop (no joystick created)
+  setMobileInput(getJoystickState(), getThrottleState());
 
   // Update plane physics
   updatePlane(cappedDelta);

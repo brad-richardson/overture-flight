@@ -67,10 +67,8 @@ export function initMobileControls(): void {
   // Always show throttle buttons (they work with both touch and mouse)
   createThrottleButtons();
 
-  // Hide desktop keyboard help on mobile
-  if (isMobileDevice()) {
-    hideDesktopControlsHelp();
-  }
+  // Note: Desktop keyboard help is hidden via CSS @media query for narrow screens
+  // We don't hide it via JS anymore because touch-capable laptops would incorrectly trigger it
 }
 
 /**
