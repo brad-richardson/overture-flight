@@ -177,8 +177,25 @@ function pointToLineDistance(lng: number, lat: number, line: number[][]): number
   return minDist;
 }
 
+// Layer priority for sorting results (higher = more specific, shown first)
+const LAYER_PRIORITY: Record<string, number> = {
+  'building': 100,
+  'transportation': 80,
+  'water': 40,
+  'land_use': 30,
+  'land_cover': 20,
+  'land': 10,
+  'bathymetry': 5,
+  'unknown': 0
+};
+
+// Background layers that should be filtered out when specific features are found
+const BACKGROUND_LAYERS = new Set(['bathymetry', 'land', 'land_cover', 'land_use']);
+
 /**
  * Find features at a geographic location
+ * Returns features sorted by priority (buildings first, background layers last)
+ * Filters out background layers when more specific features are found
  */
 export function findFeaturesAtLocation(
   lng: number,
@@ -225,6 +242,19 @@ export function findFeaturesAtLocation(
         }
       }
     }
+  }
+
+  // Sort by layer priority (buildings first, background layers last)
+  results.sort((a, b) => {
+    const priorityA = LAYER_PRIORITY[a.layer] ?? 0;
+    const priorityB = LAYER_PRIORITY[b.layer] ?? 0;
+    return priorityB - priorityA;
+  });
+
+  // If we found specific features (buildings, transportation), filter out background layers
+  const hasSpecificFeatures = results.some(f => !BACKGROUND_LAYERS.has(f.layer));
+  if (hasSpecificFeatures) {
+    return results.filter(f => !BACKGROUND_LAYERS.has(f.layer));
   }
 
   return results;
