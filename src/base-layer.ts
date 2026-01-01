@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { getScene, geoToWorld, worldToGeo, BufferGeometryUtils } from './scene.js';
-import { loadBaseTile } from './tile-manager.js';
+import { loadBaseTile, loadWaterPolygonsFromLowerZooms } from './tile-manager.js';
 import { getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
 import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
@@ -305,6 +305,22 @@ export async function createBaseLayerForTile(
   const features = await loadBaseTile(tileX, tileY, tileZ);
   console.log(`Base tile ${tileZ}/${tileX}/${tileY}: ${features.length} features`);
 
+  // Check if we have any water line features (rivers, streams) - if so, also fetch
+  // water polygons from lower zoom levels to get the full river extent
+  const hasWaterLines = features.some(f =>
+    (f.type === 'LineString' || f.type === 'MultiLineString') &&
+    f.layer === 'water' &&
+    LINEAR_WATER_TYPES.includes(String(f.properties?.subtype || f.properties?.class || '').toLowerCase())
+  );
+
+  if (hasWaterLines) {
+    const lowerZoomWaterPolygons = await loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ);
+    if (lowerZoomWaterPolygons.length > 0) {
+      console.log(`Adding ${lowerZoomWaterPolygons.length} water polygons from lower zoom levels`);
+      features.push(...lowerZoomWaterPolygons);
+    }
+  }
+
   // Store features for click picking
   const tileKey = `base-${tileZ}/${tileX}/${tileY}`;
   const storedFeatures: StoredFeature[] = features
@@ -346,11 +362,15 @@ export async function createBaseLayerForTile(
           if (OCEAN_WATER_TYPES.includes(subtype)) {
             continue;
           }
-          // Skip river/stream polygons - these are rendered as lines (LINEAR_WATER_TYPES)
-          if (LINEAR_WATER_TYPES.includes(subtype)) {
+          // Skip river/stream polygons UNLESS they come from lower zoom levels
+          // Lower zoom polygons represent the actual water body extent (bank to bank)
+          // while high-zoom river polygons are often just centerline buffers
+          const isFromLowerZoom = feature.properties?._fromLowerZoom === true;
+          if (LINEAR_WATER_TYPES.includes(subtype) && !isFromLowerZoom) {
             continue;
           }
           // All other water types (lakes, ponds, unknown subtypes, untyped) are kept
+          // as are river polygons from lower zoom levels (full water body extent)
         }
 
         const key = `${color}-${layer}`;
