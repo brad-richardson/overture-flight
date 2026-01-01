@@ -151,8 +151,8 @@ export const ELEVATION: ElevationConfig = {
   TERRARIUM_URL: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
   TERRARIUM_OFFSET: 32768.0,  // Offset for Terrarium height decoding
   TILE_SIZE: 256,             // Terrarium tiles are 256x256 pixels
-  ZOOM: 12,                   // Zoom level for elevation tiles (10-15 range, 12 is good balance)
-  TERRAIN_SEGMENTS: 64,       // Subdivisions per terrain mesh (lower = better perf)
+  ZOOM: 11,                   // Zoom level for elevation tiles (reduced for perf)
+  TERRAIN_SEGMENTS: 32,       // Subdivisions per terrain mesh (reduced for perf)
   TERRAIN_ENABLED: true,      // Enable/disable terrain elevation
   VERTICAL_EXAGGERATION: 1.0, // Multiply elevation values (1.0 = realistic)
 };

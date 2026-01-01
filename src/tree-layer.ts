@@ -50,88 +50,89 @@ interface LandcoverTreeConfig {
   heightVariation: number;   // std dev of height distribution
 }
 
+// Aggressive performance tuning: reduced tree densities
 const LANDCOVER_TREE_CONFIG: Record<string, LandcoverTreeConfig> = {
-  // Dense forests
+  // Dense forests (reduced from 15 to 6)
   forest: {
-    density: 15,          // ~15 trees per 1000 sqm = fairly dense
+    density: 6,           // Reduced for performance
     coniferRatio: 0.4,    // Mix of both
     minHeight: 8,
     maxHeight: 30,
     heightVariation: 5,
   },
-  // Woodland - dense tree coverage similar to forest
+  // Woodland - dense tree coverage similar to forest (reduced from 14 to 5)
   wood: {
-    density: 14,          // Dense like forest
+    density: 5,           // Reduced for performance
     coniferRatio: 0.35,   // Slightly more deciduous
     minHeight: 8,
     maxHeight: 28,
     heightVariation: 5,
   },
-  // Shrubland - smaller, sparser vegetation
+  // Shrubland - smaller, sparser vegetation (reduced from 8 to 3)
   shrub: {
-    density: 8,
+    density: 3,           // Reduced for performance
     coniferRatio: 0.2,
     minHeight: 2,
     maxHeight: 8,
     heightVariation: 2,
   },
-  // Parks - well-spaced ornamental trees
+  // Parks - well-spaced ornamental trees (reduced from 3 to 1.5)
   park: {
-    density: 3,
+    density: 1.5,         // Reduced for performance
     coniferRatio: 0.3,
     minHeight: 6,
     maxHeight: 20,
     heightVariation: 4,
   },
-  // Wetland - sparse, varied vegetation
+  // Wetland - sparse, varied vegetation (reduced from 2 to 1)
   wetland: {
-    density: 2,
+    density: 1,           // Reduced for performance
     coniferRatio: 0.1,
     minHeight: 4,
     maxHeight: 15,
     heightVariation: 4,
   },
-  // Swamp - similar to wetland (alias)
+  // Swamp - similar to wetland (alias) (reduced from 2 to 1)
   swamp: {
-    density: 2,
+    density: 1,           // Reduced for performance
     coniferRatio: 0.1,
     minHeight: 4,
     maxHeight: 15,
     heightVariation: 4,
   },
-  // Mangrove - dense but short
+  // Mangrove - dense but short (reduced from 12 to 4)
   mangrove: {
-    density: 12,
+    density: 4,           // Reduced for performance
     coniferRatio: 0.0,    // Broadleaved only
     minHeight: 3,
     maxHeight: 12,
     heightVariation: 3,
   },
-  // Grass/meadow - occasional trees
+  // Grass/meadow - occasional trees (reduced from 0.5 to 0.2)
   grass: {
-    density: 0.5,
+    density: 0.2,         // Reduced for performance
     coniferRatio: 0.2,
     minHeight: 5,
     maxHeight: 15,
     heightVariation: 3,
   },
   meadow: {
-    density: 0.5,
+    density: 0.2,         // Reduced for performance
     coniferRatio: 0.2,
     minHeight: 5,
     maxHeight: 15,
     heightVariation: 3,
   },
-  // Farmland - very sparse, mostly field boundaries
+  // Farmland - very sparse, mostly field boundaries (reduced from 0.2 to 0.1)
   crop: {
-    density: 0.2,
+    density: 0.1,         // Reduced for performance
     coniferRatio: 0.1,
     minHeight: 6,
     maxHeight: 18,
     heightVariation: 4,
   },
   farmland: {
-    density: 0.2,
+    density: 0.1,         // Reduced for performance
     coniferRatio: 0.1,
     minHeight: 6,
     maxHeight: 18,
@@ -139,8 +140,8 @@ const LANDCOVER_TREE_CONFIG: Record<string, LandcoverTreeConfig> = {
   },
 };
 
-// Maximum procedural trees per tile to avoid performance issues
-const MAX_PROCEDURAL_TREES_PER_TILE = 2000;
+// Maximum procedural trees per tile to avoid performance issues (reduced from 2000)
+const MAX_PROCEDURAL_TREES_PER_TILE = 500;
 
 // Cache for tree data - uses tile key as index
 const treeCache = new Map<string, TreeCacheEntry>();
