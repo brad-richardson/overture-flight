@@ -1,14 +1,14 @@
 /**
- * Tree layer module for rendering trees from OpenStreetMap and procedural generation
+ * Tree layer module for rendering trees from pre-computed OSM density data and procedural generation
  *
  * Two sources of trees:
- * 1. OSM individual trees (natural=tree) via Overpass API
+ * 1. OSM tree density data (pre-computed from natural=tree nodes, stored in tree-tiles.bin)
  * 2. Procedural trees generated within landcover polygons (forest, shrub, etc.)
  */
 
 import * as THREE from 'three';
 import { getScene, geoToWorld } from './scene.js';
-import { tileToBounds, TileBounds, loadBaseTile } from './tile-manager.js';
+import { tileToBounds, loadBaseTile } from './tile-manager.js';
 import { getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
 
@@ -16,28 +16,16 @@ import { ELEVATION } from './constants.js';
 export interface TreeData {
   lat: number;
   lng: number;
-  height?: number;        // Height in meters (from OSM tag)
+  height?: number;        // Height in meters
   species?: string;       // Tree species
   leafType?: string;      // broadleaved, needleleaved
   genus?: string;         // Tree genus (e.g., Quercus, Acer)
 }
 
-interface OverpassElement {
-  type: string;
-  id: number;
-  lat?: number;
-  lon?: number;
-  tags?: Record<string, string>;
-}
-
-interface OverpassResponse {
-  elements: OverpassElement[];
-}
-
-interface TreeCacheEntry {
-  trees: TreeData[];
-  timestamp: number;
-  isFailure?: boolean;  // True if this was a failed API request
+// OSM tree density data per z11 tile (from tree-tiles.bin)
+interface TileHint {
+  count: number;          // Number of OSM-mapped trees in this tile
+  coniferRatio: number;   // 0-1, ratio of conifers vs deciduous
 }
 
 // Landcover configuration for procedural tree generation
@@ -143,226 +131,127 @@ const LANDCOVER_TREE_CONFIG: Record<string, LandcoverTreeConfig> = {
 // Maximum procedural trees per tile to avoid performance issues (reduced from 2000)
 const MAX_PROCEDURAL_TREES_PER_TILE = 500;
 
-// Cache for tree data - uses tile key as index
-const treeCache = new Map<string, TreeCacheEntry>();
-
-// LocalStorage key prefix for persistent caching (OSM trees from Overpass API)
-const CACHE_PREFIX = 'osm-trees-';
-const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days - trees don't change often
-const FAILURE_CACHE_TTL = 5 * 60 * 1000;   // 5 minutes - retry failures sooner
-
-// Overpass API endpoints (use multiple for redundancy)
-const OVERPASS_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-];
-
-// Current endpoint index for round-robin
-let currentEndpointIndex = 0;
-
-// Pending loads to avoid duplicate fetches
-const pendingLoads = new Map<string, Promise<TreeData[]>>();
+// Maximum OSM density-based trees per tile
+const MAX_OSM_DENSITY_TREES_PER_TILE = 200;
 
 // ============================================================================
-// REGIONAL LOADING - Batch multiple tiles into larger queries
+// OSM TREE DENSITY DATA (from tree-tiles.bin)
 // ============================================================================
 
-// Regional cache: load trees at a lower zoom level to cover more area per API call
-// Zoom 11 tiles are 8x larger than zoom 14 tiles (2^3 = 8 per axis, 64 tiles total)
-const REGIONAL_ZOOM = 11;
+// Zoom level used in the pre-computed tile data
+const TILE_HINTS_ZOOM = 11;
 
-// Regional cache for trees (covers multiple detail tiles per entry)
-const regionalTreeCache = new Map<string, TreeCacheEntry>();
-
-// Pending regional loads to prevent duplicate fetches
-const pendingRegionalLoads = new Map<string, Promise<TreeData[]>>();
-
-// Request queue for rate limiting Overpass API calls
-interface QueuedRequest {
-  resolve: (value: TreeData[]) => void;
-  reject: (error: Error) => void;
-  bounds: TileBounds;
-}
-
-const requestQueue: QueuedRequest[] = [];
-let isProcessingQueue = false;
-
-// Minimum delay between Overpass API requests (ms)
-const MIN_REQUEST_DELAY = 1000;
-// Last request timestamp
-let lastRequestTime = 0;
+// Pre-loaded tile hints data: Map<"x,y" => TileHint>
+let tileHintsData: Map<string, TileHint> | null = null;
+let tileHintsLoadPromise: Promise<void> | null = null;
+let tileHintsLoadError: Error | null = null;
 
 /**
- * Process the request queue with rate limiting
+ * Load the tree-tiles.bin file containing pre-computed OSM tree density data
  */
-async function processRequestQueue(): Promise<void> {
-  if (isProcessingQueue) {
-    return;
+async function loadTreeHintsData(): Promise<void> {
+  if (tileHintsData !== null) {
+    return; // Already loaded
   }
 
-  isProcessingQueue = true;
-
-  try {
-    while (requestQueue.length > 0) {
-      const request = requestQueue.shift()!;
-
-      // Enforce minimum delay between requests
-      const now = Date.now();
-      const timeSinceLastRequest = now - lastRequestTime;
-      if (timeSinceLastRequest < MIN_REQUEST_DELAY) {
-        await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_DELAY - timeSinceLastRequest));
-      }
-
-      // Update timestamp before making request to prevent race conditions
-      lastRequestTime = Date.now();
-
-      try {
-        const trees = await fetchTreesFromOverpass(request.bounds);
-        request.resolve(trees);
-      } catch (error) {
-        request.reject(error as Error);
-      }
-    }
-  } finally {
-    isProcessingQueue = false;
-    // Check if new requests were added while we were processing
-    if (requestQueue.length > 0) {
-      processRequestQueue();
-    }
-  }
-}
-
-/**
- * Queue a request to the Overpass API with rate limiting
- */
-function queueOverpassRequest(bounds: TileBounds): Promise<TreeData[]> {
-  return new Promise((resolve, reject) => {
-    requestQueue.push({ resolve, reject, bounds });
-    processRequestQueue();
-  });
-}
-
-/**
- * Convert detail tile coordinates to regional tile coordinates
- * Returns the regional tile that contains the given detail tile
- */
-function detailToRegionalTile(tileX: number, tileY: number, tileZ: number): { rx: number; ry: number; rz: number } {
-  // If zoom is at or below regional zoom, use the tile coordinates directly
-  if (tileZ <= REGIONAL_ZOOM) {
-    // Scale up to regional zoom level
-    const zoomDiff = REGIONAL_ZOOM - tileZ;
-    const scale = Math.pow(2, zoomDiff);
-    return {
-      rx: Math.floor(tileX * scale),
-      ry: Math.floor(tileY * scale),
-      rz: REGIONAL_ZOOM,
-    };
+  if (tileHintsLoadPromise !== null) {
+    return tileHintsLoadPromise; // Already loading
   }
 
-  // Normal case: zoom is higher than regional zoom, scale down
-  const zoomDiff = tileZ - REGIONAL_ZOOM;
-  const scale = Math.pow(2, zoomDiff);
-  return {
-    rx: Math.floor(tileX / scale),
-    ry: Math.floor(tileY / scale),
-    rz: REGIONAL_ZOOM,
-  };
-}
-
-/**
- * Get the bounds for a regional tile
- */
-function getRegionalTileBounds(rx: number, ry: number): TileBounds {
-  const n = Math.pow(2, REGIONAL_ZOOM);
-  const west = rx / n * 360 - 180;
-  const east = (rx + 1) / n * 360 - 180;
-  const north = Math.atan(Math.sinh(Math.PI * (1 - 2 * ry / n))) * 180 / Math.PI;
-  const south = Math.atan(Math.sinh(Math.PI * (1 - 2 * (ry + 1) / n))) * 180 / Math.PI;
-  return { west, east, north, south };
-}
-
-/**
- * Load trees for a regional tile (covers multiple detail tiles)
- */
-async function loadTreesForRegion(rx: number, ry: number): Promise<TreeData[]> {
-  const key = `${REGIONAL_ZOOM}/${rx}/${ry}`;
-
-  // Check memory cache first
-  if (regionalTreeCache.has(key)) {
-    const entry = regionalTreeCache.get(key)!;
-    const ttl = entry.isFailure ? FAILURE_CACHE_TTL : CACHE_TTL;
-    if (Date.now() - entry.timestamp < ttl) {
-      return entry.trees;
-    }
-    regionalTreeCache.delete(key);
-  }
-
-  // Check localStorage cache
-  const localEntry = loadFromLocalStorage(key);
-  if (localEntry) {
-    const ttl = localEntry.isFailure ? FAILURE_CACHE_TTL : CACHE_TTL;
-    if (Date.now() - localEntry.timestamp < ttl) {
-      regionalTreeCache.set(key, localEntry);
-      return localEntry.trees;
-    }
-  }
-
-  // Check if already loading
-  if (pendingRegionalLoads.has(key)) {
-    return pendingRegionalLoads.get(key)!;
-  }
-
-  // Fetch from Overpass with rate limiting
-  const loadPromise = (async (): Promise<TreeData[]> => {
+  tileHintsLoadPromise = (async () => {
     try {
-      const bounds = getRegionalTileBounds(rx, ry);
-      const trees = await queueOverpassRequest(bounds);
+      const response = await fetch('/tree-tiles.bin');
+      if (!response.ok) {
+        throw new Error(`Failed to load tree-tiles.bin: HTTP ${response.status}`);
+      }
 
-      console.log(`Loaded ${trees.length} trees for regional tile ${key}`);
+      const buffer = await response.arrayBuffer();
+      const data = new DataView(buffer);
 
-      // Cache in memory
-      const entry: TreeCacheEntry = {
-        trees,
-        timestamp: Date.now(),
-      };
-      regionalTreeCache.set(key, entry);
+      // Parse header
+      const magic = String.fromCharCode(
+        data.getUint8(0),
+        data.getUint8(1),
+        data.getUint8(2),
+        data.getUint8(3)
+      );
 
-      // Cache in localStorage
-      saveToLocalStorage(key, trees);
+      if (magic !== 'TREE') {
+        throw new Error('Invalid tree-tiles.bin magic bytes');
+      }
 
-      pendingRegionalLoads.delete(key);
-      return trees;
+      const version = data.getUint8(4);
+      const zoom = data.getUint8(5);
+
+      if (zoom !== TILE_HINTS_ZOOM) {
+        console.warn(`Tree hints data is zoom ${zoom}, expected ${TILE_HINTS_ZOOM}`);
+      }
+
+      let offset: number;
+      let tileCount: number;
+
+      if (version === 1) {
+        tileCount = data.getUint16(6, true);
+        offset = 8;
+      } else if (version === 2) {
+        tileCount = data.getUint32(6, true);
+        offset = 10;
+      } else {
+        throw new Error(`Unsupported tree-tiles.bin version: ${version}`);
+      }
+
+      // Parse tiles
+      tileHintsData = new Map();
+
+      for (let i = 0; i < tileCount; i++) {
+        const x = data.getUint16(offset, true); offset += 2;
+        const y = data.getUint16(offset, true); offset += 2;
+        const count = data.getUint16(offset, true); offset += 2;
+        const coniferRatio = data.getUint8(offset) / 255; offset += 1;
+
+        tileHintsData.set(`${x},${y}`, { count, coniferRatio });
+      }
+
+      console.log(`Loaded tree hints: ${tileHintsData.size} tiles with OSM tree data`);
     } catch (error) {
-      console.warn(`Failed to load trees for regional tile ${key}:`, (error as Error).message);
-      pendingRegionalLoads.delete(key);
-
-      // Cache failure with short TTL
-      const failureEntry: TreeCacheEntry = {
-        trees: [],
-        timestamp: Date.now(),
-        isFailure: true,
-      };
-      regionalTreeCache.set(key, failureEntry);
-
-      return [];
+      tileHintsLoadError = error as Error;
+      console.warn('Failed to load tree hints data:', (error as Error).message);
+      tileHintsData = new Map(); // Empty map as fallback
     }
   })();
 
-  pendingRegionalLoads.set(key, loadPromise);
-  return loadPromise;
+  return tileHintsLoadPromise;
 }
 
 /**
- * Filter regional trees to only those within a specific detail tile
+ * Get the tile hint for a given z11 tile
  */
-function filterTreesForTile(trees: TreeData[], bounds: TileBounds): TreeData[] {
-  return trees.filter(tree =>
-    tree.lat >= bounds.south &&
-    tree.lat <= bounds.north &&
-    tree.lng >= bounds.west &&
-    tree.lng <= bounds.east
-  );
+function getTileHint(x: number, y: number): TileHint | null {
+  if (!tileHintsData) {
+    return null;
+  }
+  return tileHintsData.get(`${x},${y}`) || null;
+}
+
+/**
+ * Convert detail tile coordinates to z11 tile coordinates
+ */
+function detailToHintsTile(tileX: number, tileY: number, tileZ: number): { hx: number; hy: number } {
+  if (tileZ <= TILE_HINTS_ZOOM) {
+    const zoomDiff = TILE_HINTS_ZOOM - tileZ;
+    const scale = Math.pow(2, zoomDiff);
+    return {
+      hx: Math.floor(tileX * scale),
+      hy: Math.floor(tileY * scale),
+    };
+  }
+
+  const zoomDiff = tileZ - TILE_HINTS_ZOOM;
+  const scale = Math.pow(2, zoomDiff);
+  return {
+    hx: Math.floor(tileX / scale),
+    hy: Math.floor(tileY / scale),
+  };
 }
 
 // Tree rendering settings
@@ -425,244 +314,6 @@ const materials = {
     metalness: 0,
   }),
 };
-
-/**
- * Get the next Overpass endpoint (round-robin)
- */
-function getNextEndpoint(): string {
-  const endpoint = OVERPASS_ENDPOINTS[currentEndpointIndex];
-  currentEndpointIndex = (currentEndpointIndex + 1) % OVERPASS_ENDPOINTS.length;
-  return endpoint;
-}
-
-/**
- * Build Overpass QL query for trees in a bounding box
- */
-function buildOverpassQuery(bounds: TileBounds): string {
-  // Query for natural=tree nodes within the bounding box
-  // south,west,north,east format for Overpass
-  const bbox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`;
-
-  return `
-    [out:json][timeout:25];
-    node["natural"="tree"](${bbox});
-    out body;
-  `.trim();
-}
-
-/**
- * Parse tree height from OSM tags
- */
-function parseTreeHeight(tags: Record<string, string> | undefined): number | undefined {
-  if (!tags) return undefined;
-
-  // Try various height tags
-  const heightStr = tags['height'] || tags['est_height'];
-  if (!heightStr) return undefined;
-
-  // Parse height value (remove 'm' suffix if present)
-  const heightMatch = heightStr.match(/^([\d.]+)\s*m?$/);
-  if (heightMatch) {
-    const height = parseFloat(heightMatch[1]);
-    if (!isNaN(height) && height >= MIN_TREE_HEIGHT && height <= MAX_TREE_HEIGHT) {
-      return height;
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Determine leaf type from OSM tags
- */
-function parseLeafType(tags: Record<string, string> | undefined): string | undefined {
-  if (!tags) return undefined;
-  return tags['leaf_type'] || undefined;
-}
-
-/**
- * Try to load cached trees from localStorage
- */
-function loadFromLocalStorage(key: string): TreeCacheEntry | null {
-  try {
-    const stored = localStorage.getItem(CACHE_PREFIX + key);
-    if (stored) {
-      const entry = JSON.parse(stored) as TreeCacheEntry;
-      // Check if cache is still valid
-      if (Date.now() - entry.timestamp < CACHE_TTL) {
-        return entry;
-      }
-      // Cache expired, remove it
-      localStorage.removeItem(CACHE_PREFIX + key);
-    }
-  } catch {
-    // localStorage not available or parse error
-  }
-  return null;
-}
-
-/**
- * Save trees to localStorage
- */
-function saveToLocalStorage(key: string, trees: TreeData[]): void {
-  try {
-    const entry: TreeCacheEntry = {
-      trees,
-      timestamp: Date.now(),
-    };
-    localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(entry));
-  } catch {
-    // localStorage full or not available - silently fail
-  }
-}
-
-/**
- * Fetch trees from Overpass API with retry logic
- * Immediately tries next endpoint on failure (no delay between different endpoints)
- * Only applies backoff delay when retrying after rate limiting (429) or server error (503)
- */
-async function fetchTreesFromOverpass(bounds: TileBounds): Promise<TreeData[]> {
-  const query = buildOverpassQuery(bounds);
-  let lastError: Error | undefined;
-  let rateLimitBackoff = 0; // Backoff only for rate limiting
-
-  // Try each endpoint
-  for (let attempt = 0; attempt < OVERPASS_ENDPOINTS.length; attempt++) {
-    const endpoint = getNextEndpoint();
-
-    // Apply backoff only if we hit rate limiting on previous attempt
-    if (rateLimitBackoff > 0) {
-      console.log(`Rate limited, waiting ${rateLimitBackoff}ms before retry...`);
-      await new Promise(resolve => setTimeout(resolve, rateLimitBackoff));
-      rateLimitBackoff = 0; // Reset after waiting
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        // Set backoff for rate limiting or server errors
-        if (response.status === 429 || response.status === 503) {
-          rateLimitBackoff = Math.min(1000 * Math.pow(2, attempt), 8000);
-        }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json() as OverpassResponse;
-
-      // Validate response structure
-      if (!data || !Array.isArray(data.elements)) {
-        throw new Error('Invalid Overpass response structure');
-      }
-
-      // Parse elements into TreeData
-      const trees: TreeData[] = [];
-      for (const element of data.elements) {
-        if (element.type === 'node' && element.lat !== undefined && element.lon !== undefined) {
-          trees.push({
-            lat: element.lat,
-            lng: element.lon,
-            height: parseTreeHeight(element.tags),
-            species: element.tags?.['species'] || element.tags?.['taxon'],
-            leafType: parseLeafType(element.tags),
-            genus: element.tags?.['genus'],
-          });
-        }
-      }
-
-      return trees;
-    } catch (error) {
-      lastError = error as Error;
-      const errorMessage = (error as Error).name === 'AbortError'
-        ? 'Request timed out'
-        : (error as Error).message;
-      console.warn(`Overpass endpoint ${endpoint} failed:`, errorMessage);
-      // Try next endpoint immediately (no delay for switching endpoints)
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  throw lastError || new Error('All Overpass endpoints failed');
-}
-
-/**
- * Load trees for a tile with caching
- * Uses regional loading to reduce API calls - loads a larger area and filters
- */
-export async function loadTreesForTile(
-  tileX: number,
-  tileY: number,
-  tileZ: number
-): Promise<TreeData[]> {
-  const key = `${tileZ}/${tileX}/${tileY}`;
-
-  // Check tile-level memory cache first (for quick lookups after initial load)
-  if (treeCache.has(key)) {
-    const entry = treeCache.get(key)!;
-    const ttl = entry.isFailure ? FAILURE_CACHE_TTL : CACHE_TTL;
-    if (Date.now() - entry.timestamp < ttl) {
-      return entry.trees;
-    }
-    treeCache.delete(key);
-  }
-
-  // Check if already loading this tile
-  if (pendingLoads.has(key)) {
-    return pendingLoads.get(key)!;
-  }
-
-  // Use regional loading - load the parent regional tile and filter
-  const loadPromise = (async (): Promise<TreeData[]> => {
-    try {
-      // Get the regional tile that contains this detail tile
-      const { rx, ry } = detailToRegionalTile(tileX, tileY, tileZ);
-
-      // Load trees for the entire region (this is cached and rate-limited)
-      const regionalTrees = await loadTreesForRegion(rx, ry);
-
-      // Filter to just the trees in this specific tile
-      const tileBounds = tileToBounds(tileX, tileY, tileZ);
-      const tileTrees = filterTreesForTile(regionalTrees, tileBounds);
-
-      // Cache the filtered result for this specific tile
-      const entry: TreeCacheEntry = {
-        trees: tileTrees,
-        timestamp: Date.now(),
-      };
-      treeCache.set(key, entry);
-
-      pendingLoads.delete(key);
-      return tileTrees;
-    } catch (error) {
-      console.warn(`Failed to load trees for tile ${key}:`, (error as Error).message);
-      pendingLoads.delete(key);
-
-      // Cache failure with short TTL to allow retry
-      const failureEntry: TreeCacheEntry = {
-        trees: [],
-        timestamp: Date.now(),
-        isFailure: true,
-      };
-      treeCache.set(key, failureEntry);
-
-      return [];
-    }
-  })();
-
-  pendingLoads.set(key, loadPromise);
-  return loadPromise;
-}
 
 // ============================================================================
 // PROCEDURAL TREE GENERATION
@@ -806,11 +457,6 @@ function generateTreesInPolygon(
     });
   }
 
-  // Warn if we couldn't place enough trees (complex polygon with low fill ratio)
-  if (trees.length < treeCount * 0.5 && treeCount > 10) {
-    console.warn(`Rejection sampling placed only ${trees.length}/${treeCount} trees (${Math.round(trees.length / treeCount * 100)}%) - polygon may have low fill ratio`);
-  }
-
   return trees;
 }
 
@@ -873,28 +519,101 @@ async function generateProceduralTrees(
     }
   }
 
-  console.log(`Generated ${allTrees.length} procedural trees for tile ${tileZ}/${tileX}/${tileY} from ${treeCoverFeatures.length} landcover features`);
   return allTrees;
 }
 
 /**
- * Load all trees for a tile (OSM + procedural)
+ * Generate trees based on OSM density data for a tile
+ * These represent individually mapped trees from OSM, placed procedurally
+ * within the tile based on pre-computed density hints
+ */
+async function generateOSMDensityTrees(
+  tileX: number,
+  tileY: number,
+  tileZ: number
+): Promise<TreeData[]> {
+  // Ensure tile hints are loaded
+  await loadTreeHintsData();
+
+  // Get the z11 tile that contains this detail tile
+  const { hx, hy } = detailToHintsTile(tileX, tileY, tileZ);
+  const hint = getTileHint(hx, hy);
+
+  if (!hint || hint.count === 0) {
+    return [];
+  }
+
+  // Calculate how many trees to generate for this detail tile
+  // A z11 tile contains 2^(tileZ - 11) x 2^(tileZ - 11) detail tiles
+  const zoomDiff = Math.max(0, tileZ - TILE_HINTS_ZOOM);
+  const tilesPerHintTile = Math.pow(2, zoomDiff * 2); // Total detail tiles in this z11 tile
+  const treesPerDetailTile = Math.ceil(hint.count / tilesPerHintTile);
+
+  // Cap the number of trees per tile
+  const treeCount = Math.min(treesPerDetailTile, MAX_OSM_DENSITY_TREES_PER_TILE);
+
+  if (treeCount === 0) {
+    return [];
+  }
+
+  // Get tile bounds for placing trees
+  const bounds = tileToBounds(tileX, tileY, tileZ);
+
+  // Create seeded random for consistent placement
+  // Use a different seed offset than landcover trees to avoid overlap
+  const seed = getTileSeed(tileX, tileY, tileZ) + 999999;
+  const random = seededRandom(seed);
+
+  const trees: TreeData[] = [];
+
+  for (let i = 0; i < treeCount; i++) {
+    // Random position within tile
+    const lng = bounds.west + random() * (bounds.east - bounds.west);
+    const lat = bounds.south + random() * (bounds.north - bounds.south);
+
+    // Determine tree type based on hint's conifer ratio
+    const isConifer = random() < hint.coniferRatio;
+
+    // Generate height with some variation
+    const u1 = random();
+    const u2 = random();
+    const z = Math.sqrt(-2 * Math.log(Math.max(u1, 0.0001))) * Math.cos(2 * Math.PI * u2);
+    const meanHeight = 10;
+    const heightVariation = 4;
+    let height = meanHeight + z * heightVariation;
+    height = Math.max(MIN_TREE_HEIGHT, Math.min(MAX_TREE_HEIGHT, height));
+
+    trees.push({
+      lat,
+      lng,
+      height,
+      leafType: isConifer ? 'needleleaved' : 'broadleaved',
+    });
+  }
+
+  return trees;
+}
+
+/**
+ * Load all trees for a tile (OSM density-based + procedural from landcover)
  */
 export async function loadAllTreesForTile(
   tileX: number,
   tileY: number,
   tileZ: number
 ): Promise<TreeData[]> {
-  // Load OSM trees and procedural trees in parallel
+  // Load OSM density trees and procedural trees in parallel
   const [osmTrees, proceduralTrees] = await Promise.all([
-    loadTreesForTile(tileX, tileY, tileZ),
+    generateOSMDensityTrees(tileX, tileY, tileZ),
     generateProceduralTrees(tileX, tileY, tileZ),
   ]);
 
   // Combine both sources
   const allTrees = [...osmTrees, ...proceduralTrees];
 
-  console.log(`Total trees for tile ${tileZ}/${tileX}/${tileY}: ${allTrees.length} (${osmTrees.length} OSM + ${proceduralTrees.length} procedural)`);
+  if (allTrees.length > 0) {
+    console.log(`Trees for tile ${tileZ}/${tileX}/${tileY}: ${allTrees.length} (${osmTrees.length} OSM + ${proceduralTrees.length} procedural)`);
+  }
 
   return allTrees;
 }
@@ -1096,7 +815,7 @@ export async function createTreesForTile(
     return null;
   }
 
-  // Load both OSM trees and procedurally generated trees
+  // Load all trees for this tile
   const trees = await loadAllTreesForTile(tileX, tileY, tileZ);
 
   if (trees.length === 0) {
@@ -1173,7 +892,6 @@ export async function createTreesForTile(
   }
 
   scene.add(group);
-  console.log(`Trees ${tileZ}/${tileX}/${tileY}: ${trees.length} trees (${conifers.length} conifers, ${deciduous.length} deciduous)`);
 
   return group;
 }
@@ -1203,67 +921,26 @@ export function removeTreesGroup(group: THREE.Group): void {
   });
 
   group.clear();
-
-  if (disposedGeometries > 0) {
-    console.log(`Disposed trees group ${group.name}: ${disposedGeometries} geometries`);
-  }
 }
 
 /**
- * Clear tree cache for a specific tile
+ * Initialize tree layer - call this early to preload the tile hints data
  */
-export function clearTreeCache(key: string): void {
-  treeCache.delete(key);
-  try {
-    localStorage.removeItem(CACHE_PREFIX + key);
-  } catch {
-    // Ignore localStorage errors
-  }
+export async function initTreeLayer(): Promise<void> {
+  await loadTreeHintsData();
 }
 
 /**
- * Clear entire tree cache (including regional cache and pending loads)
+ * Get tree hints data statistics
  */
-export function clearAllTreeCache(): void {
-  treeCache.clear();
-  regionalTreeCache.clear();
-  pendingLoads.clear();
-  pendingRegionalLoads.clear();
-  try {
-    for (const key of Object.keys(localStorage)) {
-      if (key.startsWith(CACHE_PREFIX)) {
-        localStorage.removeItem(key);
-      }
-    }
-  } catch {
-    // Ignore localStorage errors
-  }
-}
-
-/**
- * Get tree cache statistics
- */
-export function getTreeCacheStats(): {
-  memoryCacheSize: number;
-  regionalCacheSize: number;
-  localStorageCacheSize: number;
-  pendingRequests: number;
+export function getTreeHintsStats(): {
+  loaded: boolean;
+  tileCount: number;
+  error: string | null;
 } {
-  let localStorageCacheSize = 0;
-  try {
-    for (const key of Object.keys(localStorage)) {
-      if (key.startsWith(CACHE_PREFIX)) {
-        localStorageCacheSize++;
-      }
-    }
-  } catch {
-    // Ignore localStorage errors
-  }
-
   return {
-    memoryCacheSize: treeCache.size,
-    regionalCacheSize: regionalTreeCache.size,
-    localStorageCacheSize,
-    pendingRequests: requestQueue.length,
+    loaded: tileHintsData !== null,
+    tileCount: tileHintsData?.size || 0,
+    error: tileHintsLoadError?.message || null,
   };
 }
