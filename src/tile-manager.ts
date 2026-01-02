@@ -87,6 +87,10 @@ export function getInitErrors(): string[] {
 // Loaded tiles cache
 const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loading: boolean }
 
+// Water polygon cache - keyed by lower zoom tile "z/x/y"
+// Shared between base-layer (for rendering) and tree-layer (for filtering)
+const waterPolygonCache = new Map<string, ParsedFeature[]>();
+
 // Tile loading settings (aggressive performance tuning)
 const TILE_ZOOM = 14; // Zoom level for tile loading
 const TILE_RADIUS = 1; // Load tiles within this radius of center (reduced from 2 for perf)
@@ -335,6 +339,9 @@ export async function loadBaseTile(
  * This helps find larger water bodies (like full river extents) that may only
  * be represented as polygons at lower (zoomed out) zoom levels.
  * At higher zooms, rivers often only exist as line features.
+ *
+ * Results are cached by lower zoom tile coordinates for efficiency -
+ * multiple detail tiles share the same lower zoom water data.
  */
 export async function loadWaterPolygonsFromLowerZooms(
   x: number,
@@ -354,19 +361,39 @@ export async function loadWaterPolygonsFromLowerZooms(
     const scale = Math.pow(2, zoom - lowerZoom);
     const lowerX = Math.floor(x / scale);
     const lowerY = Math.floor(y / scale);
+    const cacheKey = `${lowerZoom}/${lowerX}/${lowerY}`;
 
-    const data = await getTileData(basePMTiles, lowerZoom, lowerX, lowerY);
-    if (!data) continue;
+    // Check cache first
+    let features: ParsedFeature[];
+    if (waterPolygonCache.has(cacheKey)) {
+      features = waterPolygonCache.get(cacheKey)!;
+    } else {
+      // Fetch and cache
+      const data = await getTileData(basePMTiles, lowerZoom, lowerX, lowerY);
+      if (!data) continue;
 
-    const features = parseMVT(data, lowerX, lowerY, lowerZoom, 'water');
+      const allFeatures = parseMVT(data, lowerX, lowerY, lowerZoom, 'water');
 
-    // Filter for polygon features only (the larger water bodies we're looking for)
-    for (const feature of features) {
-      if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') {
-        continue;
+      // Filter for polygon features only and mark them
+      features = [];
+      for (const feature of allFeatures) {
+        if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') {
+          continue;
+        }
+        // Mark this feature as coming from a lower zoom level
+        feature.properties = {
+          ...feature.properties,
+          _fromLowerZoom: true,
+          _sourceZoom: lowerZoom
+        };
+        features.push(feature);
       }
 
-      // Create a simple key based on first coordinate to dedupe
+      waterPolygonCache.set(cacheKey, features);
+    }
+
+    // Dedupe across zoom levels
+    for (const feature of features) {
       const coords = feature.coordinates as number[][][] | number[][][][];
       const firstRing = feature.type === 'Polygon' ? coords[0] : (coords[0] as number[][][])[0];
       if (!firstRing || firstRing.length < 3) continue;
@@ -377,26 +404,50 @@ export async function loadWaterPolygonsFromLowerZooms(
       if (seenAreas.has(areaKey)) continue;
       seenAreas.add(areaKey);
 
-      // Mark this feature as coming from a lower zoom level
-      // This helps the base layer know it's a large water polygon, not a centerline polygon
-      feature.properties = {
-        ...feature.properties,
-        _fromLowerZoom: true,
-        _sourceZoom: lowerZoom
-      };
-
       waterPolygons.push(feature);
     }
 
     // If we found water polygons at this zoom level, we can stop
-    // (lower zooms have larger/more generalized features)
     if (waterPolygons.length > 0) {
-      console.log(`Found ${waterPolygons.length} water polygons at zoom ${lowerZoom} for tile ${zoom}/${x}/${y}`);
       break;
     }
   }
 
   return waterPolygons;
+}
+
+/**
+ * Clear water polygon cache entries for tiles far from the given position
+ */
+export function clearDistantWaterPolygonCache(
+  centerLat: number,
+  centerLng: number,
+  maxDistanceMeters: number = 50000
+): number {
+  const toRemove: string[] = [];
+
+  for (const key of waterPolygonCache.keys()) {
+    const [zoom, x, y] = key.split('/').map(Number);
+    // Convert tile to approximate center lat/lng
+    const n = Math.pow(2, zoom);
+    const tileLng = (x / n) * 360 - 180;
+    const tileLat = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
+
+    // Simple distance check
+    const dLat = (tileLat - centerLat) * METERS_PER_DEGREE_LAT;
+    const dLng = (tileLng - centerLng) * metersPerDegreeLng(centerLat);
+    const distance = Math.sqrt(dLat * dLat + dLng * dLng);
+
+    if (distance > maxDistanceMeters) {
+      toRemove.push(key);
+    }
+  }
+
+  for (const key of toRemove) {
+    waterPolygonCache.delete(key);
+  }
+
+  return toRemove.length;
 }
 
 /**

@@ -5,7 +5,7 @@ import { createConnection, Connection, WelcomeMessage } from './network.js';
 import { checkCollision } from './collision.js';
 import { updateHUD, updatePlayerList, showCrashMessage } from './ui.js';
 import { initMinimap, updateMinimap } from './minimap.js';
-import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile } from './tile-manager.js';
+import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile, clearDistantWaterPolygonCache } from './tile-manager.js';
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
@@ -116,6 +116,9 @@ async function updateTiles(
   if (ELEVATION.TERRAIN_ENABLED) {
     unloadDistantElevationTiles(lng, lat, 5);
   }
+
+  // Clean up distant water polygon cache
+  clearDistantWaterPolygonCache(lat, lng);
 }
 
 /**
