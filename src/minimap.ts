@@ -3,6 +3,7 @@ import { Protocol } from 'pmtiles';
 import { OvertureGeocoder } from 'overture-geocoder';
 import { LOCATIONS, OVERTURE_BASE_PMTILES, OVERTURE_BUILDINGS_PMTILES, OVERTURE_TRANSPORTATION_PMTILES, OVERTURE_DIVISIONS_PMTILES } from './constants.js';
 import type { PlaneState } from './plane.js';
+import { setFeaturePickerEnabled, isFeaturePickerEnabled } from './feature-picker.js';
 
 // Initialize the Overture Geocoder client
 const geocoder = new OvertureGeocoder();
@@ -818,6 +819,18 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
         // Reset select
         locationsSelect.value = '';
       }
+    });
+  }
+
+  // X-Ray mode toggle
+  const xrayCheckbox = document.getElementById('xray-checkbox') as HTMLInputElement | null;
+  if (xrayCheckbox) {
+    // Set initial state (disabled by default)
+    xrayCheckbox.checked = isFeaturePickerEnabled();
+
+    xrayCheckbox.addEventListener('change', () => {
+      setFeaturePickerEnabled(xrayCheckbox.checked);
+      console.log('Feature Inspector:', xrayCheckbox.checked ? 'enabled' : 'disabled');
     });
   }
 

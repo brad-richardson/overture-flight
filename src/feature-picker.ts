@@ -450,9 +450,9 @@ export function initFeaturePicker(
   canvas.addEventListener('touchstart', handlePointerDown, { passive: true });
   canvas.addEventListener('touchend', handlePointerUp, { passive: true });
 
-  isEnabled = true;
+  // isEnabled defaults to false - user must enable via UI toggle
   isInitialized = true;
-  console.log('Feature picker initialized');
+  console.log('Feature picker initialized (disabled by default)');
 }
 
 /**

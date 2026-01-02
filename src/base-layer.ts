@@ -306,8 +306,7 @@ export async function createBaseLayerForTile(
   const features = await loadBaseTile(tileX, tileY, tileZ);
   console.log(`Base tile ${tileZ}/${tileX}/${tileY}: ${features.length} features`);
 
-  // Check if we have any water line features (rivers, streams) - if so, also fetch
-  // water polygons from lower zoom levels to get the full river extent
+  // Check if we have any water line features (rivers, streams)
   const hasWaterLines = features.some(f =>
     (f.type === 'LineString' || f.type === 'MultiLineString') &&
     f.layer === 'water' &&
@@ -317,11 +316,19 @@ export async function createBaseLayerForTile(
   // Track if we found covering water polygons - if so, we'll skip rendering river LineStrings
   let hasLowerZoomWaterPolygons = false;
 
+  // Fetch lower zoom water if we have water lines (rivers) that need polygon fill
+  // Filter out ocean/bay/sea types from lower zoom - those are bloated at low zoom and
+  // should come from z14 data or bathymetry layer instead
   if (hasWaterLines) {
     const lowerZoomWaterPolygons = await loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ);
-    if (lowerZoomWaterPolygons.length > 0) {
-      console.log(`Adding ${lowerZoomWaterPolygons.length} water polygons from lower zoom levels`);
-      features.push(...lowerZoomWaterPolygons);
+    // Filter out ocean-type water - we only want river/lake polygons from lower zoom
+    const filteredPolygons = lowerZoomWaterPolygons.filter(f => {
+      const subtype = String(f.properties?.subtype || f.properties?.class || '').toLowerCase();
+      return !OCEAN_WATER_TYPES.includes(subtype);
+    });
+    if (filteredPolygons.length > 0) {
+      console.log(`Adding ${filteredPolygons.length} water polygons from lower zoom levels (filtered from ${lowerZoomWaterPolygons.length})`);
+      features.push(...filteredPolygons);
       hasLowerZoomWaterPolygons = true;
     }
   }
