@@ -163,7 +163,7 @@ async function loadTreeHintsData(): Promise<void> {
 
   tileHintsLoadPromise = (async () => {
     try {
-      const response = await fetch('/tree-tiles.bin');
+      const response = await fetch(`${import.meta.env.BASE_URL}tree-tiles.bin`);
       if (!response.ok) {
         throw new Error(`Failed to load tree-tiles.bin: HTTP ${response.status}`);
       }
