@@ -8,7 +8,7 @@
 
 import * as THREE from 'three';
 import { getScene, geoToWorld } from './scene.js';
-import { tileToBounds, loadBaseTile } from './tile-manager.js';
+import { tileToBounds, loadBaseTile, loadWaterPolygonsFromLowerZooms, ParsedFeature } from './tile-manager.js';
 import { getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
 
@@ -22,7 +22,7 @@ export interface TreeData {
   genus?: string;         // Tree genus (e.g., Quercus, Acer)
 }
 
-// OSM tree density data per z11 tile (from tree-tiles.bin)
+// OSM tree density data per tile (from tree-tiles.bin, currently z14)
 interface TileHint {
   count: number;          // Number of OSM-mapped trees in this tile
   coniferRatio: number;   // 0-1, ratio of conifers vs deciduous
@@ -139,7 +139,7 @@ const MAX_OSM_DENSITY_TREES_PER_TILE = 200;
 // ============================================================================
 
 // Default zoom level for tile hints (can be overridden by file header)
-const DEFAULT_TILE_HINTS_ZOOM = 11;
+const DEFAULT_TILE_HINTS_ZOOM = 14;
 
 // Actual zoom level from the loaded file
 let tileHintsZoom = DEFAULT_TILE_HINTS_ZOOM;
@@ -231,7 +231,7 @@ async function loadTreeHintsData(): Promise<void> {
 }
 
 /**
- * Get the tile hint for a given z11 tile
+ * Get the tile hint for a given hints-zoom tile
  */
 function getTileHint(x: number, y: number): TileHint | null {
   if (!tileHintsData) {
@@ -241,7 +241,7 @@ function getTileHint(x: number, y: number): TileHint | null {
 }
 
 /**
- * Convert detail tile coordinates to z11 tile coordinates
+ * Convert detail tile coordinates to hints-zoom tile coordinates
  */
 function detailToHintsTile(tileX: number, tileY: number, tileZ: number): { hx: number; hy: number } {
   if (tileZ <= tileHintsZoom) {
@@ -542,7 +542,7 @@ async function generateOSMDensityTrees(
   // Ensure tile hints are loaded
   await loadTreeHintsData();
 
-  // Get the z11 tile that contains this detail tile
+  // Get the hints tile that contains this detail tile
   const { hx, hy } = detailToHintsTile(tileX, tileY, tileZ);
   const hint = getTileHint(hx, hy);
 
@@ -553,7 +553,7 @@ async function generateOSMDensityTrees(
   // Calculate how many trees to generate for this detail tile
   // A hints tile contains 2^(tileZ - hintsZoom) x 2^(tileZ - hintsZoom) detail tiles
   const zoomDiff = Math.max(0, tileZ - tileHintsZoom);
-  const tilesPerHintTile = Math.pow(2, zoomDiff * 2); // Total detail tiles in this z11 tile
+  const tilesPerHintTile = Math.pow(2, zoomDiff * 2); // Total detail tiles in this hints tile
   const treesPerDetailTile = Math.ceil(hint.count / tilesPerHintTile);
 
   // Cap the number of trees per tile
@@ -602,6 +602,49 @@ async function generateOSMDensityTrees(
 }
 
 /**
+ * Check if a point is inside any water polygon
+ */
+function isPointInWater(lng: number, lat: number, waterPolygons: ParsedFeature[]): boolean {
+  for (const feature of waterPolygons) {
+    if (feature.type === 'Polygon') {
+      const coords = feature.coordinates as number[][][];
+      if (pointInPolygonWithHoles(lng, lat, coords)) {
+        return true;
+      }
+    } else if (feature.type === 'MultiPolygon') {
+      const coords = feature.coordinates as number[][][][];
+      for (const polygon of coords) {
+        if (pointInPolygonWithHoles(lng, lat, polygon)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if point is in polygon with holes (first ring is outer, rest are holes)
+ */
+function pointInPolygonWithHoles(lng: number, lat: number, rings: number[][][]): boolean {
+  if (rings.length === 0) return false;
+
+  // Must be inside outer ring
+  if (!pointInPolygon(lng, lat, rings[0])) {
+    return false;
+  }
+
+  // Must not be inside any hole
+  for (let i = 1; i < rings.length; i++) {
+    if (pointInPolygon(lng, lat, rings[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Load all trees for a tile (OSM density-based + procedural from landcover)
  */
 export async function loadAllTreesForTile(
@@ -609,14 +652,25 @@ export async function loadAllTreesForTile(
   tileY: number,
   tileZ: number
 ): Promise<TreeData[]> {
-  // Load OSM density trees and procedural trees in parallel
-  const [osmTrees, proceduralTrees] = await Promise.all([
+  // Load OSM density trees, procedural trees, and water polygons in parallel
+  const [osmTrees, proceduralTrees, waterPolygons] = await Promise.all([
     generateOSMDensityTrees(tileX, tileY, tileZ),
     generateProceduralTrees(tileX, tileY, tileZ),
+    loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ),
   ]);
 
   // Combine both sources
-  const allTrees = [...osmTrees, ...proceduralTrees];
+  let allTrees = [...osmTrees, ...proceduralTrees];
+
+  // Filter out trees that are in water
+  if (waterPolygons.length > 0) {
+    const beforeCount = allTrees.length;
+    allTrees = allTrees.filter(tree => !isPointInWater(tree.lng, tree.lat, waterPolygons));
+    const filteredCount = beforeCount - allTrees.length;
+    if (filteredCount > 0) {
+      console.log(`Filtered ${filteredCount} trees in water for tile ${tileZ}/${tileX}/${tileY}`);
+    }
+  }
 
   if (allTrees.length > 0) {
     console.log(`Trees for tile ${tileZ}/${tileX}/${tileY}: ${allTrees.length} (${osmTrees.length} OSM + ${proceduralTrees.length} procedural)`);

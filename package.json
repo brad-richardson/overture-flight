@@ -14,7 +14,7 @@
     "party:dev": "partykit dev",
     "party:deploy": "partykit deploy",
     "generate:trees:sample": "node scripts/generate-sample-tree-data.js",
-    "generate:trees:duckdb": "node scripts/generate-tree-tiles-duckdb.js"
+    "generate:trees": "uv run scripts/generate-tree-tiles.py"
   },
   "dependencies": {
     "@loaders.gl/gltf": "^4.3.4",
