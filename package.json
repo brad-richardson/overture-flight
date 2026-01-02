@@ -12,7 +12,9 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "party:dev": "partykit dev",
-    "party:deploy": "partykit deploy"
+    "party:deploy": "partykit deploy",
+    "generate:trees:sample": "node scripts/generate-sample-tree-data.js",
+    "generate:trees": "uv run scripts/generate-tree-tiles.py"
   },
   "dependencies": {
     "@loaders.gl/gltf": "^4.3.4",
