@@ -123,7 +123,6 @@ export async function createTransportationForTile(
   }
 
   const features = await loadTransportationTile(tileX, tileY, tileZ);
-  console.log(`Transportation tile ${tileZ}/${tileX}/${tileY}: ${features.length} features`);
   if (features.length === 0) {
     return null;
   }
@@ -381,8 +380,4 @@ export function removeTransportationGroup(group: THREE.Group): void {
 
   // Clear the group's children array
   group.clear();
-
-  if (disposedGeometries > 0) {
-    console.log(`Disposed transportation group ${group.name}: ${disposedGeometries} geometries`);
-  }
 }

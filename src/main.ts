@@ -65,7 +65,6 @@ async function updateTiles(
     }
 
     loadingTiles.add(tile.key);
-    console.log('Loading tile:', tile.key);
 
     // Load base layer, buildings, transportation, and trees in parallel
     // Wrap tree creation to isolate failures - trees are optional, other layers are critical
@@ -91,7 +90,6 @@ async function updateTiles(
         trees: treesGroup
       });
       loadingTiles.delete(tile.key);
-      console.log('Tile loaded:', tile.key);
     }).catch(e => {
       console.warn(`Failed to load tile ${tile.key}:`, e);
       loadingTiles.delete(tile.key);
@@ -267,7 +265,6 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
 
   // Preload elevation tiles for the new location
   if (ELEVATION.TERRAIN_ENABLED) {
-    console.log(`Preloading elevation tiles for teleport to (${lat.toFixed(4)}, ${lng.toFixed(4)})...`);
     try {
       await preloadElevationTiles(lng, lat, 2);
     } catch (error) {
@@ -351,19 +348,15 @@ function showError(title: string, details: string[] = [], footer: string = ''): 
  * Initialize the game
  */
 async function init(): Promise<void> {
-  console.log('Initializing Flight Simulator...');
-
   try {
     // Set initial origin
     setOrigin(DEFAULT_LOCATION.lng, DEFAULT_LOCATION.lat);
 
     // Initialize Three.js scene
     await initScene();
-    console.log('Scene initialized');
 
     // Initialize tile manager (PMTiles sources)
     const tileStatus = await initTileManager();
-    console.log('Tile manager initialized:', tileStatus);
 
     // Show warning if data failed to load
     if (tileStatus.errors && tileStatus.errors.length > 0) {
@@ -376,36 +369,29 @@ async function init(): Promise<void> {
 
     // Preload elevation tiles for the starting area
     if (ELEVATION.TERRAIN_ENABLED) {
-      console.log('Preloading elevation tiles...');
       await preloadElevationTiles(DEFAULT_LOCATION.lng, DEFAULT_LOCATION.lat, 2);
-      console.log('Elevation tiles preloaded');
     }
 
     // Initialize controls (keyboard)
     initControls();
     initCameraControls();
-    console.log('Controls initialized');
 
     // Initialize mobile controls (touch joystick)
     initMobileControls();
-    console.log('Mobile controls initialized');
 
     // Initialize minimap
     initMinimap(handleTeleport);
-    console.log('Minimap initialized');
 
     // Initialize feature picker and modal (click on features to see properties)
     initFeatureModal();
     initFeaturePicker((features, worldPos) => {
       showFeatureModal(features, worldPos);
     });
-    console.log('Feature picker initialized');
 
     // Generate local ID and color immediately so plane renders without network
     localId = generateLocalId();
     localColor = PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)];
     setPlaneIdentity(localId, localColor);
-    console.log('Local player initialized:', localId);
 
     // Connect to multiplayer server
     connection = createConnection('global', {
@@ -414,12 +400,10 @@ async function init(): Promise<void> {
       onPlayerJoined: handlePlayerJoined,
       onPlayerLeft: handlePlayerLeft,
     });
-    console.log('Connecting to server...');
 
     // Start game loop
     isRunning = true;
     requestAnimationFrame(gameLoop);
-    console.log('Game started');
 
   } catch (error) {
     console.error('Failed to initialize:', error);

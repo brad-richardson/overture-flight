@@ -116,8 +116,6 @@ async function loadElevationTile(x: number, y: number, z: number): Promise<Float
         .replace('{x}', x.toString())
         .replace('{y}', y.toString());
 
-      console.log(`Loading elevation tile ${key} from ${url}`);
-
       const img = await loadImage(url);
 
       // Draw to canvas to extract pixel data
@@ -140,16 +138,6 @@ async function loadElevationTile(x: number, y: number, z: number): Promise<Float
       // Cache the result
       elevationCache.set(key, { heights, loading: false });
       pendingLoads.delete(key);
-
-      // Log elevation range for debugging
-      let min = Infinity, max = -Infinity;
-      for (const h of heights) {
-        if (!Number.isNaN(h)) {
-          if (h < min) min = h;
-          if (h > max) max = h;
-        }
-      }
-      console.log(`Elevation tile ${key}: range ${min.toFixed(1)}m to ${max.toFixed(1)}m`);
 
       return heights;
     } catch (error) {
@@ -262,7 +250,6 @@ export async function preloadElevationTiles(
   }
 
   await Promise.all(promises);
-  console.log(`Preloaded ${promises.length} elevation tiles around (${lng.toFixed(4)}, ${lat.toFixed(4)})`);
 }
 
 /**
@@ -320,7 +307,6 @@ export function unloadDistantElevationTiles(
     const distance = Math.max(Math.abs(tx - centerX), Math.abs(ty - centerY));
     if (distance > maxDistance) {
       elevationCache.delete(key);
-      console.log(`Unloaded distant elevation tile ${key}`);
     }
   }
 }

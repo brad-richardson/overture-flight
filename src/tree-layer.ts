@@ -188,9 +188,6 @@ async function loadTreeHintsData(): Promise<void> {
 
       // Use the zoom level from the file
       tileHintsZoom = zoom;
-      if (zoom !== DEFAULT_TILE_HINTS_ZOOM) {
-        console.log(`Tree hints data uses zoom ${zoom} (default is ${DEFAULT_TILE_HINTS_ZOOM})`);
-      }
 
       let offset: number;
       let tileCount: number;
@@ -216,8 +213,6 @@ async function loadTreeHintsData(): Promise<void> {
 
         tileHintsData.set(`${x},${y}`, { count, coniferRatio });
       }
-
-      console.log(`Loaded tree hints: ${tileHintsData.size} tiles with OSM tree data`);
     } catch (error) {
       tileHintsLoadError = error as Error;
       console.warn('Failed to load tree hints data:', (error as Error).message);
@@ -664,16 +659,7 @@ export async function loadAllTreesForTile(
 
   // Filter out trees that are in water
   if (waterPolygons.length > 0) {
-    const beforeCount = allTrees.length;
     allTrees = allTrees.filter(tree => !isPointInWater(tree.lng, tree.lat, waterPolygons));
-    const filteredCount = beforeCount - allTrees.length;
-    if (filteredCount > 0) {
-      console.log(`Filtered ${filteredCount} trees in water for tile ${tileZ}/${tileX}/${tileY}`);
-    }
-  }
-
-  if (allTrees.length > 0) {
-    console.log(`Trees for tile ${tileZ}/${tileX}/${tileY}: ${allTrees.length} (${osmTrees.length} OSM + ${proceduralTrees.length} procedural)`);
   }
 
   return allTrees;

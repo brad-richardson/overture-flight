@@ -355,7 +355,6 @@ async function loadPlaneModel(): Promise<THREE.Group> {
             meshIndex++;
           }
         });
-        console.log('Plane model loaded');
         resolve(planeModel);
       },
       undefined,

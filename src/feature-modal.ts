@@ -298,6 +298,4 @@ export function initFeatureModal(): void {
     }
   };
   document.addEventListener('keydown', keyboardHandler);
-
-  console.log('Feature modal initialized');
 }

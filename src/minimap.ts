@@ -22,7 +22,6 @@ function ensurePMTilesProtocol(): void {
   if (!pmtilesProtocol) {
     pmtilesProtocol = new Protocol();
     maplibregl.addProtocol('pmtiles', pmtilesProtocol.tile);
-    console.log('PMTiles protocol registered for minimap');
   }
 }
 
@@ -675,7 +674,7 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           'source-layer': 'division',
           filter: ['==', ['get', 'subtype'], 'locality'],
           layout: {
-            'text-field': '{names.primary}',  // Try dot notation in mustache
+            'text-field': ['get', '@name'],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
@@ -702,7 +701,7 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           filter: ['==', ['get', 'subtype'], 'region'],
           maxzoom: 8,
           layout: {
-            'text-field': '{names.primary}',  // Try dot notation in mustache
+            'text-field': ['get', '@name'],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
@@ -860,11 +859,8 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
 
     xrayCheckbox.addEventListener('change', () => {
       setFeaturePickerEnabled(xrayCheckbox.checked);
-      console.log('Feature Inspector:', xrayCheckbox.checked ? 'enabled' : 'disabled');
     });
   }
-
-  console.log('Minimap initialized');
 }
 
 /**

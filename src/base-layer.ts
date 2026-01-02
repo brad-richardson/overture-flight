@@ -180,9 +180,6 @@ const LINEAR_WATER_TYPES = ['river', 'stream', 'canal', 'drain', 'ditch', 'water
 // All other water types (including unknown subtypes) are rendered to ensure inland water is visible
 const OCEAN_WATER_TYPES = ['ocean', 'sea', 'bay', 'strait', 'gulf', 'sound'];
 
-// Track logged land_cover subtypes to avoid console spam
-const landCoverSubtypesLogged = new Set<string>();
-
 /**
  * Get or create material for a color and layer
  * Each layer gets its own material with appropriate polygon offset for z-fighting prevention
@@ -240,11 +237,6 @@ function getColorForFeature(layer: string, properties: Record<string, unknown>):
 
   // For land_cover, check the type against our colors
   if (layer === 'land_cover') {
-    // Log once per subtype to debug
-    if (!landCoverSubtypesLogged.has(type)) {
-      landCoverSubtypesLogged.add(type);
-      console.log(`land_cover subtype: "${type}" (all props: ${JSON.stringify(properties)})`);
-    }
     // Return color if we have it, otherwise fall back to grass
     if (COLORS[type]) {
       return COLORS[type];
@@ -304,7 +296,6 @@ export async function createBaseLayerForTile(
 
   // Load and render base features (land, water, land_cover, land_use)
   const features = await loadBaseTile(tileX, tileY, tileZ);
-  console.log(`Base tile ${tileZ}/${tileX}/${tileY}: ${features.length} features`);
 
   // Check if we have any water line features (rivers, streams)
   const hasWaterLines = features.some(f =>
@@ -327,7 +318,6 @@ export async function createBaseLayerForTile(
       return !OCEAN_WATER_TYPES.includes(subtype);
     });
     if (filteredPolygons.length > 0) {
-      console.log(`Adding ${filteredPolygons.length} water polygons from lower zoom levels (filtered from ${lowerZoomWaterPolygons.length})`);
       features.push(...filteredPolygons);
       hasLowerZoomWaterPolygons = true;
     }
@@ -765,8 +755,4 @@ export function removeBaseLayerGroup(group: THREE.Group): void {
 
   // Clear the group's children array
   group.clear();
-
-  if (disposedGeometries > 0 || disposedMaterials > 0) {
-    console.log(`Disposed base layer group ${group.name}: ${disposedGeometries} geometries, ${disposedMaterials} materials`);
-  }
 }

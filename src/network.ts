@@ -82,7 +82,6 @@ export function createConnection(roomId: string, callbacks: NetworkCallbacks): C
   socket.addEventListener('open', () => {
     const wasConnected = isConnected;
     isConnected = true;
-    console.log('Connected to server');
     if (wasConnected === false && callbacks.onReconnect) {
       callbacks.onReconnect();
     }
@@ -114,7 +113,6 @@ export function createConnection(roomId: string, callbacks: NetworkCallbacks): C
   socket.addEventListener('close', () => {
     const wasConnected = isConnected;
     isConnected = false;
-    console.log('Disconnected from server');
     if (wasConnected && callbacks.onDisconnect) {
       callbacks.onDisconnect();
     }

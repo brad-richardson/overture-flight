@@ -132,7 +132,6 @@ export async function createBuildingsForTile(
   }
 
   const features = await loadBuildingTile(tileX, tileY, tileZ);
-  console.log(`Buildings tile ${tileZ}/${tileX}/${tileY}: ${features.length} features`);
   if (features.length === 0) {
     return null;
   }
@@ -253,15 +252,11 @@ export async function createBuildingsForTile(
     }
   }
 
-  const lodLabel = ['HIGH', 'MEDIUM', 'LOW'][lodLevel];
-  console.log(`Buildings ${tileZ}/${tileX}/${tileY}: ${totalGeometries} geometries, LOD=${lodLabel}, dist=${Math.round(tileDistance)}m${skippedSmall > 0 ? `, skipped ${skippedSmall} small` : ''}`);
-
   if (group.children.length === 0) {
     return null;
   }
 
   scene.add(group);
-  console.log(`Buildings group added to scene: ${group.children.length} meshes`);
   return group;
 }
 
@@ -546,10 +541,6 @@ export function removeBuildingsGroup(group: THREE.Group): void {
 
   // Clear the group's children array
   group.clear();
-
-  if (disposedGeometries > 0 || disposedMaterials > 0) {
-    console.log(`Disposed buildings group ${group.name}: ${disposedGeometries} geometries, ${disposedMaterials} materials`);
-  }
 }
 
 /**

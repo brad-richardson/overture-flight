@@ -118,12 +118,7 @@ export async function initTileManager(): Promise<InitStatus> {
 
   // Get metadata to verify sources are working with retry
   try {
-    const buildingsHeader = await retryWithBackoff(
-      () => buildingsPMTiles!.getHeader(),
-      3,
-      1000
-    );
-    console.log('Buildings PMTiles initialized:', buildingsHeader);
+    await retryWithBackoff(() => buildingsPMTiles!.getHeader(), 3, 1000);
   } catch (e) {
     const error = e as Error;
     const msg = `Failed to load buildings data: ${error.message || 'Network error'}`;
@@ -133,12 +128,7 @@ export async function initTileManager(): Promise<InitStatus> {
   }
 
   try {
-    const baseHeader = await retryWithBackoff(
-      () => basePMTiles!.getHeader(),
-      3,
-      1000
-    );
-    console.log('Base PMTiles initialized:', baseHeader);
+    await retryWithBackoff(() => basePMTiles!.getHeader(), 3, 1000);
   } catch (e) {
     const error = e as Error;
     const msg = `Failed to load terrain data: ${error.message || 'Network error'}`;
@@ -148,12 +138,7 @@ export async function initTileManager(): Promise<InitStatus> {
   }
 
   try {
-    const transportationHeader = await retryWithBackoff(
-      () => transportationPMTiles!.getHeader(),
-      3,
-      1000
-    );
-    console.log('Transportation PMTiles initialized:', transportationHeader);
+    await retryWithBackoff(() => transportationPMTiles!.getHeader(), 3, 1000);
   } catch (e) {
     const error = e as Error;
     const msg = `Failed to load transportation data: ${error.message || 'Network error'}`;
@@ -223,7 +208,6 @@ export function parseMVT(
   const features: ParsedFeature[] = [];
 
   const allLayerNames = Object.keys(tile.layers);
-  console.log(`MVT layers at ${zoom}/${tileX}/${tileY}: [${allLayerNames.join(', ')}] requested: ${layerName}`);
 
   // If layer name not found, use all available layers
   const layerNames = layerName && tile.layers[layerName] ? [layerName] : allLayerNames;
@@ -325,12 +309,10 @@ export async function loadBaseTile(
 
     const fallbackData = await getTileData(basePMTiles, fallbackZoom, fallbackX, fallbackY);
     if (fallbackData) {
-      console.log(`Base tile ${zoom}/${x}/${y} empty, using fallback ${fallbackZoom}/${fallbackX}/${fallbackY}`);
       return parseMVT(fallbackData, fallbackX, fallbackY, fallbackZoom);
     }
   }
 
-  console.log(`Base tile ${zoom}/${x}/${y}: no data found at any zoom level`);
   return [];
 }
 
@@ -485,13 +467,6 @@ export function getTilesToLoad(
   const [centerX, centerY] = lngLatToTile(lng, lat, TILE_ZOOM);
   const tiles: TileInfo[] = [];
   const addedTiles = new Set<string>();
-
-  // Debug: Log tile calculation (only occasionally to avoid spam)
-  if (Math.random() < 0.01) {
-    console.log(`Tile calc: lng=${lng.toFixed(4)}, lat=${lat.toFixed(4)} -> center tile ${TILE_ZOOM}/${centerX}/${centerY}`);
-    const bounds = tileToBounds(centerX, centerY, TILE_ZOOM);
-    console.log(`Center tile bounds: W=${bounds.west.toFixed(4)}, E=${bounds.east.toFixed(4)}, N=${bounds.north.toFixed(4)}, S=${bounds.south.toFixed(4)}`);
-  }
 
   // Helper to add tile if not already added
   const addTile = (x: number, y: number) => {
