@@ -82,6 +82,10 @@ let isOpen = false;
 let onTeleportCallback: ((lat: number, lng: number) => void) | null = null;
 let currentPlaneState: PlaneState | null = null;
 
+// Click vs drag detection
+let mouseDownPos: { x: number; y: number } | null = null;
+const DRAG_THRESHOLD = 5; // pixels
+
 // DOM elements
 let modal: HTMLElement | null = null;
 let lockBtn: HTMLElement | null = null;
@@ -249,10 +253,34 @@ function hideTargetMarker(): void {
  *
  * @param e - The MapLibre mouse event containing click coordinates
  */
-function handleMapClick(e: maplibregl.MapMouseEvent): void {
-  if (!onTeleportCallback) return;
+function handleMapMouseDown(e: maplibregl.MapMouseEvent): void {
+  mouseDownPos = { x: e.originalEvent.clientX, y: e.originalEvent.clientY };
+}
 
-  const { lng, lat } = e.lngLat;
+function handleMapMouseUp(e: MouseEvent): void {
+  if (!onTeleportCallback || !map || !mouseDownPos) return;
+
+  // Check if this was a drag (mouse moved too far from mousedown position)
+  const dx = e.clientX - mouseDownPos.x;
+  const dy = e.clientY - mouseDownPos.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  mouseDownPos = null;
+
+  if (distance > DRAG_THRESHOLD) {
+    // This was a drag - unlock from following
+    if (isFollowing) {
+      isFollowing = false;
+      updateLockButton();
+    }
+    return;
+  }
+
+  // Convert screen coordinates to map coordinates
+  const rect = map.getCanvas().getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const lngLat = map.unproject([x, y]);
+  const { lng, lat } = lngLat;
 
   // Show target marker
   showTargetMarker(lng, lat);
@@ -711,8 +739,10 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
     .setLngLat([0, 0])
     .addTo(map);
 
-  // Handle map click
-  map.on('click', handleMapClick);
+  // Handle map click (with drag detection)
+  // Use MapLibre's mousedown to not interfere with drag, but native mouseup for detection
+  map.on('mousedown', handleMapMouseDown);
+  map.getCanvas().addEventListener('mouseup', handleMapMouseUp);
 
   // Detect when user pans the map (unlock from following)
   map.on('dragstart', () => {
