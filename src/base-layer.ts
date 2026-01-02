@@ -76,8 +76,8 @@ const COLORS: Record<string, number> = {
 // base offset is relative to terrain surface (added on top of terrain height)
 const LAYER_DEPTHS: Record<string, number> = {
   terrain: -5.0,      // Terrain mesh at lowest position
-  bathymetry: -4.0,   // Bathymetry above terrain but below land
-  land: -4.0,         // Base land - pushed down further from water (was -3.0)
+  bathymetry: -4.5,   // Bathymetry below land (was -4.0, same as land)
+  land: -4.0,         // Base land fill layer (fixed position, not terrain-following)
   land_cover: 0.3,    // Land cover offset ABOVE terrain surface (terrain-following)
   land_use: 0.8,      // Land use 0.5m above land_cover
   water: 1.0,         // Water above land_cover/land_use (lowered to reduce flooding)
@@ -98,8 +98,8 @@ const RENDER_ORDER: Record<string, number> = {
 };
 
 // Layers that should follow terrain elevation
-// Water bodies (lakes, ponds) and land should also follow terrain to appear at correct altitude
-const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use', 'water', 'land'];
+// Water bodies (lakes, ponds) follow terrain; land is a fixed base fill layer
+const TERRAIN_FOLLOWING_LAYERS = ['land_cover', 'land_use', 'water'];
 
 // Layers to skip rendering entirely
 const SKIP_LAYERS: string[] = [];
@@ -159,15 +159,16 @@ const lineMaterials = new Map<number, THREE.LineBasicMaterial>();
 
 // Polygon offset values per layer to prevent z-fighting
 // Higher factor/units = pushed further back in depth buffer
+// Values doubled for better depth separation between layers
 const POLYGON_OFFSET: Record<string, { factor: number; units: number }> = {
-  terrain: { factor: 6, units: 6 },
-  bathymetry: { factor: 5, units: 5 },
-  land: { factor: 4, units: 4 },        // Push further back (was 2, 2)
-  water: { factor: 0, units: 0 },       // Bring forward (was 1, 1)
-  water_lines: { factor: -1, units: -1 }, // Bring even more forward (was 0, 0)
-  land_cover: { factor: 3, units: 3 },  // Push back to avoid fighting with land_use
-  land_use: { factor: 1, units: 1 },    // Land_use renders on top (was 0, 0)
-  default: { factor: 2, units: 2 }
+  terrain: { factor: 10, units: 10 },
+  bathymetry: { factor: 8, units: 8 },
+  land: { factor: 6, units: 6 },
+  land_cover: { factor: 4, units: 4 },
+  land_use: { factor: 2, units: 2 },
+  water: { factor: 0, units: 0 },
+  water_lines: { factor: -2, units: -2 },
+  default: { factor: 3, units: 3 }
 };
 
 // Linear water feature types to render as lines (rivers, streams, etc.)
