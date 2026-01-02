@@ -34,7 +34,7 @@ import osmium
 sys.stdout.reconfigure(line_buffering=True)
 
 # Configuration
-ZOOM_LEVEL = 14
+ZOOM_LEVEL = 15
 DEFAULT_OUTPUT = Path(__file__).parent.parent / "public" / "tree-tiles.bin"
 
 # Conifer genera for classification (lowercase for comparison)

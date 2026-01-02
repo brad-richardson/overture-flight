@@ -8,7 +8,7 @@
 
 import * as THREE from 'three';
 import { getScene, geoToWorld } from './scene.js';
-import { tileToBounds, loadBaseTile, loadWaterPolygonsFromLowerZooms, ParsedFeature } from './tile-manager.js';
+import { tileToBounds, loadBaseTile, loadWaterPolygonsFromLowerZooms, loadBuildingTile, loadTransportationTile, ParsedFeature } from './tile-manager.js';
 import { getTerrainHeight } from './elevation.js';
 import { ELEVATION } from './constants.js';
 
@@ -640,6 +640,126 @@ function pointInPolygonWithHoles(lng: number, lat: number, rings: number[][][]):
 }
 
 /**
+ * Check if a point is inside any building polygon
+ */
+function isPointInBuilding(lng: number, lat: number, buildings: ParsedFeature[]): boolean {
+  for (const feature of buildings) {
+    if (feature.type === 'Polygon') {
+      const coords = feature.coordinates as number[][][];
+      if (pointInPolygonWithHoles(lng, lat, coords)) {
+        return true;
+      }
+    } else if (feature.type === 'MultiPolygon') {
+      const coords = feature.coordinates as number[][][][];
+      for (const polygon of coords) {
+        if (pointInPolygonWithHoles(lng, lat, polygon)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Road buffer widths in meters (half-width for distance check)
+// Based on transportation-layer.ts road widths scaled by 5
+const ROAD_BUFFER_METERS: Record<string, number> = {
+  motorway: 8,
+  trunk: 7,
+  primary: 6,
+  secondary: 5,
+  tertiary: 4,
+  residential: 3,
+  unclassified: 2,
+  service: 2,
+  living_street: 2,
+  pedestrian: 2,
+  footway: 1,
+  path: 1,
+  cycleway: 1.5,
+  rail: 3,
+  subway: 2,
+  tram: 2,
+  default: 2,
+};
+
+/**
+ * Calculate distance from a point to a line segment in degrees
+ * Returns approximate meters using latitude-adjusted conversion
+ */
+function pointToSegmentDistanceMeters(
+  px: number, py: number,  // point (lng, lat)
+  x1: number, y1: number,  // segment start (lng, lat)
+  x2: number, y2: number   // segment end (lng, lat)
+): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lengthSq = dx * dx + dy * dy;
+
+  let t = 0;
+  if (lengthSq > 0) {
+    t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSq));
+  }
+
+  const nearestX = x1 + t * dx;
+  const nearestY = y1 + t * dy;
+
+  // Convert degree difference to meters
+  const metersPerDegreeLat = 111320;
+  const metersPerDegreeLng = 111320 * Math.cos(py * Math.PI / 180);
+
+  const distLng = (px - nearestX) * metersPerDegreeLng;
+  const distLat = (py - nearestY) * metersPerDegreeLat;
+
+  return Math.sqrt(distLng * distLng + distLat * distLat);
+}
+
+/**
+ * Check if a point is near any road (within road buffer width)
+ */
+function isPointNearRoad(lng: number, lat: number, roads: ParsedFeature[]): boolean {
+  for (const feature of roads) {
+    // Only check line features (roads are LineStrings)
+    if (feature.type !== 'LineString' && feature.type !== 'MultiLineString') {
+      continue;
+    }
+
+    // Get road class to determine buffer width
+    const roadClass = (feature.properties.class as string) || 'default';
+    const bufferMeters = ROAD_BUFFER_METERS[roadClass] || ROAD_BUFFER_METERS.default;
+
+    if (feature.type === 'LineString') {
+      const coords = feature.coordinates as number[][];
+      for (let i = 0; i < coords.length - 1; i++) {
+        const dist = pointToSegmentDistanceMeters(
+          lng, lat,
+          coords[i][0], coords[i][1],
+          coords[i + 1][0], coords[i + 1][1]
+        );
+        if (dist < bufferMeters) {
+          return true;
+        }
+      }
+    } else if (feature.type === 'MultiLineString') {
+      const lines = feature.coordinates as number[][][];
+      for (const line of lines) {
+        for (let i = 0; i < line.length - 1; i++) {
+          const dist = pointToSegmentDistanceMeters(
+            lng, lat,
+            line[i][0], line[i][1],
+            line[i + 1][0], line[i + 1][1]
+          );
+          if (dist < bufferMeters) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Load all trees for a tile (OSM density-based + procedural from landcover)
  */
 export async function loadAllTreesForTile(
@@ -647,20 +767,39 @@ export async function loadAllTreesForTile(
   tileY: number,
   tileZ: number
 ): Promise<TreeData[]> {
-  // Load OSM density trees, procedural trees, and water polygons in parallel
-  const [osmTrees, proceduralTrees, waterPolygons] = await Promise.all([
+  // Load OSM density trees, procedural trees, water, buildings, and roads in parallel
+  const [osmTrees, proceduralTrees, waterPolygons, buildings, roads] = await Promise.all([
     generateOSMDensityTrees(tileX, tileY, tileZ),
     generateProceduralTrees(tileX, tileY, tileZ),
     loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ),
+    loadBuildingTile(tileX, tileY, tileZ),
+    loadTransportationTile(tileX, tileY, tileZ),
   ]);
 
   // Combine both sources
   let allTrees = [...osmTrees, ...proceduralTrees];
 
-  // Filter out trees that are in water
-  if (waterPolygons.length > 0) {
-    allTrees = allTrees.filter(tree => !isPointInWater(tree.lng, tree.lat, waterPolygons));
-  }
+  // Filter out trees that are in water, buildings, or on roads
+  allTrees = allTrees.filter(tree => {
+    const { lng, lat } = tree;
+
+    // Check water
+    if (waterPolygons.length > 0 && isPointInWater(lng, lat, waterPolygons)) {
+      return false;
+    }
+
+    // Check buildings
+    if (buildings.length > 0 && isPointInBuilding(lng, lat, buildings)) {
+      return false;
+    }
+
+    // Check roads
+    if (roads.length > 0 && isPointNearRoad(lng, lat, roads)) {
+      return false;
+    }
+
+    return true;
+  });
 
   return allTrees;
 }
