@@ -638,15 +638,15 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           }
         },
 
-        // City/locality labels
+        // City/locality labels - try 'division' layer with point features
         {
           id: 'city-labels',
           type: 'symbol',
           source: 'overture-divisions',
           'source-layer': 'division',
-          filter: ['==', ['get', 'subtype'], 'locality'],
+          filter: ['==', ['geometry-type'], 'Point'],
           layout: {
-            'text-field': '{names.primary}',  // Try dot notation in mustache
+            'text-field': ['coalesce', ['get', 'primary_name'], ['get', 'name'], ['to-string', ['get', 'names']], ['to-string', ['get', 'id']]],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
@@ -655,40 +655,13 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
               12, 14
             ],
             'text-anchor': 'center',
-            'text-max-width': 8
+            'text-max-width': 8,
+            'text-allow-overlap': true
           },
           paint: {
             'text-color': CARTO_COLORS.cityLabel,
             'text-halo-color': CARTO_COLORS.textHalo,
             'text-halo-width': 1.5
-          }
-        },
-
-        // State/region labels
-        {
-          id: 'state-labels',
-          type: 'symbol',
-          source: 'overture-divisions',
-          'source-layer': 'division',
-          filter: ['==', ['get', 'subtype'], 'region'],
-          maxzoom: 8,
-          layout: {
-            'text-field': '{names.primary}',  // Try dot notation in mustache
-            'text-font': ['Noto Sans Bold'],
-            'text-size': [
-              'interpolate', ['linear'], ['zoom'],
-              3, 10,
-              6, 14
-            ],
-            'text-transform': 'uppercase',
-            'text-letter-spacing': 0.1,
-            'text-anchor': 'center',
-            'text-max-width': 10
-          },
-          paint: {
-            'text-color': CARTO_COLORS.stateLabel,
-            'text-halo-color': CARTO_COLORS.textHalo,
-            'text-halo-width': 2
           }
         }
       ]
@@ -700,6 +673,22 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
 
   // Add navigation controls
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
+
+  // Debug: log available source layers when map loads
+  map.on('load', () => {
+    console.log('=== DIVISION DEBUG: Map loaded ===');
+  });
+
+  // Debug on sourcedata to catch when tiles actually load
+  map.on('sourcedata', (e) => {
+    if (e.sourceId === 'overture-divisions' && e.isSourceLoaded) {
+      const divisionFeatures = map!.querySourceFeatures('overture-divisions', { sourceLayer: 'division' });
+      if (divisionFeatures.length > 0) {
+        console.log('=== DIVISION FEATURE FOUND ===');
+        console.log('Properties:', JSON.stringify(divisionFeatures[0].properties, null, 2));
+      }
+    }
+  });
 
   // Create plane marker
   planeMarker = new maplibregl.Marker({
