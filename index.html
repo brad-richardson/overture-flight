@@ -237,6 +237,27 @@
       color: rgba(255, 255, 255, 0.5);
     }
 
+    /* X-Ray toggle in minimap footer */
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 12px;
+    }
+
+    .toggle-label input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      accent-color: #3b82f6;
+    }
+
+    .toggle-text {
+      user-select: none;
+    }
+
     #minimap-attribution {
       color: rgba(255, 255, 255, 0.4);
       font-size: 10px;
@@ -793,7 +814,7 @@
       }
     }
   </style>
-  <script type="module" crossorigin src="/overture-flight/assets/index-DciEAll0.js"></script>
+  <script type="module" crossorigin src="/overture-flight/assets/index-CNV9cbR8.js"></script>
 </head>
 <body>
   <div id="map"></div>
@@ -849,6 +870,10 @@
       <div id="minimap-map"></div>
       <div id="minimap-footer">
         <span id="minimap-coords">--</span>
+        <label id="xray-toggle" class="toggle-label" title="Click on buildings and features in flight mode to view their properties">
+          <input type="checkbox" id="xray-checkbox" />
+          <span class="toggle-text">Feature Inspector</span>
+        </label>
         <span id="minimap-hint">Click anywhere to teleport</span>
         <span id="minimap-attribution">Data: <a href="https://overturemaps.org" target="_blank">Overture Maps</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors</span>
       </div>
