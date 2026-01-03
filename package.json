@@ -21,7 +21,7 @@
     "@loaders.gl/gltf": "^4.3.4",
     "@mapbox/vector-tile": "^2.0.4",
     "maplibre-gl": "^5.0.0",
-    "overture-geocoder": "github:Brad-Richardson/overture-geocoder",
+    "@bradrichardson/overture-geocoder": "^0.2.2",
     "partysocket": "^1.0.2",
     "pbf": "^4.0.1",
     "pmtiles": "^4.3.2",

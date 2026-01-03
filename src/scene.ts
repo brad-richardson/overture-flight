@@ -336,7 +336,7 @@ async function loadPlaneModel(): Promise<THREE.Group> {
         planeModel.traverse((child) => {
           if ((child as THREE.Mesh).isMesh) {
             const mesh = child as THREE.Mesh;
-            mesh.castShadow = true;
+            mesh.castShadow = false;
             // Disable receiving shadows to prevent shadow acne artifacts
             // when flying through building shadows
             mesh.receiveShadow = false;

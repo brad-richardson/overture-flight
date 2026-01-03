@@ -1,5 +1,4 @@
 import { defineConfig } from 'vite';
-import path from 'path';
 
 export default defineConfig(() => ({
   // Base path configuration:
@@ -13,11 +12,5 @@ export default defineConfig(() => ({
   build: {
     outDir: 'dist',
     sourcemap: true
-  },
-  resolve: {
-    alias: {
-      // Point to the JS client's dist folder within the monorepo
-      'overture-geocoder': path.resolve(__dirname, 'node_modules/overture-geocoder/clients/js/dist/index.mjs')
-    }
   }
 }));
