@@ -653,18 +653,6 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           }
         },
 
-        // State/region boundaries
-        {
-          id: 'state-boundaries',
-          type: 'line',
-          source: 'overture-divisions',
-          'source-layer': 'division_boundary',
-          paint: {
-            'line-color': CARTO_COLORS.stateBoundary,
-            'line-width': 1,
-            'line-dasharray': [4, 2]
-          }
-        },
 
         // City/locality labels
         {
@@ -673,22 +661,63 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           source: 'overture-divisions',
           'source-layer': 'division',
           filter: ['==', ['get', 'subtype'], 'locality'],
+          minzoom: 3,
           layout: {
             'text-field': ['get', '@name'],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
-              4, 10,
-              8, 12,
-              12, 14
+              3, 10,
+              6, 12,
+              10, 14,
+              14, 16
             ],
             'text-anchor': 'center',
-            'text-max-width': 8
+            'text-max-width': 8,
+            'text-optional': false,
+            'text-allow-overlap': false,
+            'text-padding': 2,
+            'symbol-sort-key': ['*', -1, ['coalesce', ['get', 'population'], 0]]
           },
           paint: {
             'text-color': CARTO_COLORS.cityLabel,
             'text-halo-color': CARTO_COLORS.textHalo,
-            'text-halo-width': 1.5
+            'text-halo-width': 2
+          }
+        },
+
+        // Country labels
+        {
+          id: 'country-labels',
+          type: 'symbol',
+          source: 'overture-divisions',
+          'source-layer': 'division',
+          filter: ['==', ['get', 'subtype'], 'country'],
+          minzoom: 1,
+          maxzoom: 6,
+          layout: {
+            'text-field': ['get', '@name'],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': [
+              'interpolate', ['linear'], ['zoom'],
+              1, 10,
+              3, 14,
+              6, 16
+            ],
+            'text-transform': 'uppercase',
+            'text-letter-spacing': 0.15,
+            'text-anchor': 'center',
+            'text-max-width': 12
+          },
+          paint: {
+            'text-color': '#505060',
+            'text-halo-color': CARTO_COLORS.textHalo,
+            'text-halo-width': 2,
+            'text-opacity': [
+              'interpolate', ['linear'], ['zoom'],
+              4, 1,
+              6, 0.5
+            ]
           }
         },
 
@@ -699,14 +728,17 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           source: 'overture-divisions',
           'source-layer': 'division',
           filter: ['==', ['get', 'subtype'], 'region'],
-          maxzoom: 8,
+          minzoom: 2,
+          maxzoom: 10,
           layout: {
             'text-field': ['get', '@name'],
             'text-font': ['Noto Sans Bold'],
             'text-size': [
               'interpolate', ['linear'], ['zoom'],
-              3, 10,
-              6, 14
+              2, 8,
+              4, 11,
+              6, 14,
+              10, 12
             ],
             'text-transform': 'uppercase',
             'text-letter-spacing': 0.1,
@@ -716,7 +748,12 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
           paint: {
             'text-color': CARTO_COLORS.stateLabel,
             'text-halo-color': CARTO_COLORS.textHalo,
-            'text-halo-width': 2
+            'text-halo-width': 2,
+            'text-opacity': [
+              'interpolate', ['linear'], ['zoom'],
+              8, 1,
+              10, 0.6
+            ]
           }
         }
       ]
