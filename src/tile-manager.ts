@@ -102,6 +102,11 @@ const SPEED_TO_TILES_DIVISOR = 25;
 const MIN_FALLBACK_ZOOM = 6; // Minimum zoom level for base tile fallback
 const WATER_POLYGON_ZOOM_LEVELS = [10, 8, 6]; // Lower zoom levels to check for larger water polygons
 
+// High-zoom building tile settings
+// These are loaded dynamically when the plane is close to get more detailed building data
+const HIGH_ZOOM_BUILDING_LEVELS = [15]; // Higher zoom level for dense urban areas (z15 is max for Overture buildings)
+const HIGH_ZOOM_BUILDING_RADIUS = 1; // Only load high-zoom tiles within this radius (immediate area)
+
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
 const metersPerDegreeLng = (lat: number): number => 111320 * Math.cos(lat * Math.PI / 180);
@@ -517,6 +522,73 @@ export function getTilesToLoad(
   }
 
   return tiles;
+}
+
+/**
+ * Get high-zoom building tiles to load for dense urban areas
+ * Only loads tiles in the immediate vicinity (within HIGH_ZOOM_BUILDING_RADIUS)
+ * Returns tiles at zoom levels 15 and 16 for more detailed building data
+ */
+export function getHighZoomBuildingTilesToLoad(
+  lng: number,
+  lat: number
+): TileInfo[] {
+  const tiles: TileInfo[] = [];
+  const addedTiles = new Set<string>();
+
+  // Helper to add tile if not already added
+  const addTile = (x: number, y: number, z: number) => {
+    const key = `${z}/${x}/${y}`;
+    if (!addedTiles.has(key)) {
+      addedTiles.add(key);
+      tiles.push({ x, y, z, key });
+    }
+  };
+
+  // Load high-zoom tiles only in immediate area
+  for (const zoom of HIGH_ZOOM_BUILDING_LEVELS) {
+    const [centerX, centerY] = lngLatToTile(lng, lat, zoom);
+
+    // Load tiles in radius around current position at this zoom level
+    for (let dx = -HIGH_ZOOM_BUILDING_RADIUS; dx <= HIGH_ZOOM_BUILDING_RADIUS; dx++) {
+      for (let dy = -HIGH_ZOOM_BUILDING_RADIUS; dy <= HIGH_ZOOM_BUILDING_RADIUS; dy++) {
+        addTile(centerX + dx, centerY + dy, zoom);
+      }
+    }
+  }
+
+  return tiles;
+}
+
+/**
+ * Get keys of high-zoom building tiles that should be unloaded
+ * Unloads tiles that are more than maxDistance away from current position
+ */
+export function getHighZoomBuildingTilesToUnload(
+  lng: number,
+  lat: number,
+  maxDistance: number = 2
+): string[] {
+  const toUnload: string[] = [];
+
+  for (const [key] of loadedTiles) {
+    const parts = key.split('/');
+    const z = Number(parts[0]);
+
+    // Only consider high-zoom building tiles (z15)
+    if (!HIGH_ZOOM_BUILDING_LEVELS.includes(z)) continue;
+
+    const x = Number(parts[1]);
+    const y = Number(parts[2]);
+    const [centerX, centerY] = lngLatToTile(lng, lat, z);
+    const distance = Math.max(Math.abs(x - centerX), Math.abs(y - centerY));
+
+    if (distance > maxDistance) {
+      toUnload.push(key);
+    }
+  }
+
+  return toUnload;
 }
 
 /**

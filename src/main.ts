@@ -5,7 +5,7 @@ import { createConnection, Connection, WelcomeMessage } from './network.js';
 import { checkCollision } from './collision.js';
 import { updateHUD, updatePlayerList, showCrashMessage } from './ui.js';
 import { initMinimap, updateMinimap } from './minimap.js';
-import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile, clearDistantWaterPolygonCache } from './tile-manager.js';
+import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile, clearDistantWaterPolygonCache, getHighZoomBuildingTilesToLoad, getHighZoomBuildingTilesToUnload, markTileLoading, markTileLoaded } from './tile-manager.js';
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
@@ -45,6 +45,11 @@ const players = new Map<string, PlaneState>();
 // Tile meshes tracking
 const tileMeshes = new Map<string, TileMeshes>(); // key -> { buildings: Group, base: Group, transportation: Group }
 const loadingTiles = new Set<string>(); // Track tiles currently being loaded
+
+// High-zoom building tile meshes (z15, z16)
+// These are loaded dynamically when the plane is close to get more detailed building data
+const highZoomBuildingMeshes = new Map<string, THREE.Group>(); // "z/x/y" -> building Group
+const loadingHighZoomTiles = new Set<string>(); // Track high-zoom tiles currently being loaded
 
 /**
  * Load tiles around the current position with predictive loading
@@ -106,6 +111,43 @@ async function updateTiles(
       if (meshes.transportation) removeTransportationGroup(meshes.transportation);
       if (meshes.trees) removeTreesGroup(meshes.trees);
       tileMeshes.delete(key);
+    }
+    removeTile(key);
+  }
+
+  // Load high-zoom building tiles (z15) for the immediate area
+  // This provides more detailed building data in dense urban areas
+  const highZoomTilesToLoad = getHighZoomBuildingTilesToLoad(lng, lat);
+  for (const tile of highZoomTilesToLoad) {
+    // Skip if already loaded or currently loading
+    if (highZoomBuildingMeshes.has(tile.key) || loadingHighZoomTiles.has(tile.key)) {
+      continue;
+    }
+
+    loadingHighZoomTiles.add(tile.key);
+    markTileLoading(tile.key);
+
+    createBuildingsForTile(tile.x, tile.y, tile.z)
+      .then((buildingsGroup) => {
+        if (buildingsGroup) {
+          highZoomBuildingMeshes.set(tile.key, buildingsGroup);
+        }
+        markTileLoaded(tile.key, buildingsGroup ? [buildingsGroup] : []);
+        loadingHighZoomTiles.delete(tile.key);
+      })
+      .catch((e) => {
+        console.warn(`Failed to load high-zoom building tile ${tile.key}:`, e);
+        loadingHighZoomTiles.delete(tile.key);
+      });
+  }
+
+  // Unload distant high-zoom building tiles
+  const highZoomTilesToUnload = getHighZoomBuildingTilesToUnload(lng, lat);
+  for (const key of highZoomTilesToUnload) {
+    const buildingGroup = highZoomBuildingMeshes.get(key);
+    if (buildingGroup) {
+      removeBuildingsGroup(buildingGroup);
+      highZoomBuildingMeshes.delete(key);
     }
     removeTile(key);
   }
@@ -259,6 +301,13 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
     removeTile(key);
   }
   tileMeshes.clear();
+
+  // Clear high-zoom building tiles
+  for (const [key, buildingGroup] of highZoomBuildingMeshes) {
+    removeBuildingsGroup(buildingGroup);
+    removeTile(key);
+  }
+  highZoomBuildingMeshes.clear();
 
   // Clear stored features for click picking
   clearAllFeatures();
