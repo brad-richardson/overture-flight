@@ -15,7 +15,6 @@ import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT } from
 import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
 import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
 import { initFeatureModal, showFeatureModal } from './feature-modal.js';
-import { lngLatToTile, tileToBounds, getTileZoom } from './tile-manager.js';
 import * as THREE from 'three';
 
 // Tile meshes type
@@ -26,27 +25,26 @@ interface TileMeshes {
   trees: THREE.Group | null;
 }
 
-// URL location tracking
-let currentTileKey: string | null = null;
+// URL location tracking - store last hash to detect meaningful changes
+let lastLocationHash: string | null = null;
 
 /**
- * Parse location from URL hash in format #zoom/lat/lng
+ * Parse location from URL hash in format #lat/lng
  * Returns null if hash is invalid or not present
  */
 function parseLocationFromHash(): { lat: number; lng: number } | null {
   const hash = window.location.hash;
   if (!hash || hash.length < 2) return null;
 
-  // Format: #zoom/lat/lng
+  // Format: #lat/lng
   const parts = hash.substring(1).split('/');
-  if (parts.length !== 3) return null;
+  if (parts.length !== 2) return null;
 
-  const zoom = parseFloat(parts[0]);
-  const lat = parseFloat(parts[1]);
-  const lng = parseFloat(parts[2]);
+  const lat = parseFloat(parts[0]);
+  const lng = parseFloat(parts[1]);
 
   // Validate values
-  if (isNaN(zoom) || isNaN(lat) || isNaN(lng)) return null;
+  if (isNaN(lat) || isNaN(lng)) return null;
   if (lat < -90 || lat > 90) return null;
   if (lng < -180 || lng > 180) return null;
 
@@ -54,34 +52,17 @@ function parseLocationFromHash(): { lat: number; lng: number } | null {
 }
 
 /**
- * Get the centroid of a tile in lat/lng coordinates
- */
-function getTileCentroid(tileX: number, tileY: number, zoom: number): { lat: number; lng: number } {
-  const bounds = tileToBounds(tileX, tileY, zoom);
-  return {
-    lat: (bounds.north + bounds.south) / 2,
-    lng: (bounds.west + bounds.east) / 2
-  };
-}
-
-/**
- * Update URL hash with current tile location
- * Only updates if the tile has changed
+ * Update URL hash with current location
+ * Uses 2 decimal places (~1.1km precision) for stable URLs that don't spin constantly
+ * Note: When parsing, we accept any precision for shared URLs with more detail
  */
 function updateLocationHash(lng: number, lat: number): void {
-  const zoom = getTileZoom();
-  const [tileX, tileY] = lngLatToTile(lng, lat, zoom);
-  const newTileKey = `${zoom}/${tileX}/${tileY}`;
+  // 2 decimal places ≈ 1.1 km precision
+  const newHash = `#${lat.toFixed(2)}/${lng.toFixed(2)}`;
 
-  // Only update URL if tile has changed
-  if (newTileKey === currentTileKey) return;
-  currentTileKey = newTileKey;
-
-  // Get tile centroid for cleaner coordinates
-  const centroid = getTileCentroid(tileX, tileY, zoom);
-
-  // Format: #zoom/lat/lng with 4 decimal places (good enough precision)
-  const newHash = `#${zoom}/${centroid.lat.toFixed(4)}/${centroid.lng.toFixed(4)}`;
+  // Only update URL if position has changed meaningfully
+  if (newHash === lastLocationHash) return;
+  lastLocationHash = newHash;
 
   // Use replaceState to avoid polluting browser history
   history.replaceState(null, '', newHash);
@@ -313,8 +294,8 @@ function handlePlayerLeft(id: string): void {
  * Handle teleport action
  */
 async function handleTeleport(lat: number, lng: number): Promise<void> {
-  // Reset tile tracking so URL updates after teleport
-  currentTileKey = null;
+  // Reset location tracking so URL updates after teleport
+  lastLocationHash = null;
 
   // Update origin for new location
   setOrigin(lng, lat);
