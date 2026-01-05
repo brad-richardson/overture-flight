@@ -92,8 +92,8 @@ const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loa
 const waterPolygonCache = new Map<string, ParsedFeature[]>();
 
 // Tile loading settings (aggressive performance tuning)
-const TILE_ZOOM = 15; // Zoom level for tile loading (z15 for more detail)
-const TILE_RADIUS = 2; // Load tiles within this radius of center (5x5 grid at z15)
+const TILE_ZOOM = 14; // Zoom level for tile loading
+const TILE_RADIUS = 2; // Load tiles within this radius of center (5x5 grid)
 const PREDICTIVE_TILES = 2; // Max tiles ahead to load based on heading (reduced from 4 for perf)
 const SPEED_THRESHOLD = 10; // m/s (~22 mph) - lowered to trigger predictive loading at slower speeds
 // Speed divisor to calculate tiles ahead: tilesAhead = speed / SPEED_TO_TILES_DIVISOR
