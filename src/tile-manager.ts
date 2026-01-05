@@ -272,12 +272,21 @@ export async function loadBuildingTile(
   y: number,
   zoom: number = TILE_ZOOM
 ): Promise<ParsedFeature[]> {
-  if (!buildingsPMTiles) return [];
+  console.log(`[Buildings] Loading tile z${zoom}/${x}/${y}`);
+  if (!buildingsPMTiles) {
+    console.warn('[Buildings] PMTiles not initialized');
+    return [];
+  }
 
   const data = await getTileData(buildingsPMTiles, zoom, x, y);
-  if (!data) return [];
+  if (!data) {
+    console.log(`[Buildings] No data for z${zoom}/${x}/${y}`);
+    return [];
+  }
 
-  return parseMVT(data, x, y, zoom, 'building');
+  const features = parseMVT(data, x, y, zoom, 'building');
+  console.log(`[Buildings] Loaded ${features.length} features from z${zoom}/${x}/${y}`);
+  return features;
 }
 
 /**
@@ -440,18 +449,22 @@ export async function loadTransportationTile(
   y: number,
   zoom: number = TILE_ZOOM
 ): Promise<ParsedFeature[]> {
+  console.log(`[Transportation] Loading tile z${zoom}/${x}/${y}`);
   if (!transportationPMTiles) {
-    console.warn('Transportation PMTiles not initialized');
+    console.warn('[Transportation] PMTiles not initialized');
     return [];
   }
 
   const data = await getTileData(transportationPMTiles, zoom, x, y);
   if (!data) {
+    console.log(`[Transportation] No data for z${zoom}/${x}/${y}`);
     return [];
   }
 
   // Transportation PMTiles has layers: segment, connector
-  return parseMVT(data, x, y, zoom);
+  const features = parseMVT(data, x, y, zoom);
+  console.log(`[Transportation] Loaded ${features.length} features from z${zoom}/${x}/${y}`);
+  return features;
 }
 
 /**
