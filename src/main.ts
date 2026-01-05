@@ -1,4 +1,4 @@
-import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin, updateSkySystem } from './scene.js';
+import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin, updateSkySystem, updatePropellerAnimation } from './scene.js';
 import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane, setMobileInput, setPlaneAltitude, PlaneState } from './plane.js';
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection, Connection, WelcomeMessage } from './network.js';
@@ -156,8 +156,16 @@ function gameLoop(time: number): void {
   // Update local plane mesh
   if (localId) {
     updatePlaneMesh(planeState, localId, localColor);
+    updatePropellerAnimation(localId, planeState.speed, cappedDelta);
     players.set(localId, planeState);
     updatePlayerList(players, localId);
+  }
+
+  // Update propeller animations for other players
+  for (const [id, player] of players) {
+    if (id !== localId) {
+      updatePropellerAnimation(id, player.speed, cappedDelta);
+    }
   }
 
   // Update HUD

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
-import { PLANE_MODEL_URL, PLANE_RENDER, DEFAULT_LOCATION } from './constants.js';
+import { PLANE_MODEL_URL, PLANE_RENDER, DEFAULT_LOCATION, FLIGHT } from './constants.js';
 import { isMobileDevice } from './mobile-controls.js';
 import { initSkySystem, updateSky } from './sky.js';
 
@@ -172,6 +172,18 @@ let camera: THREE.PerspectiveCamera | null = null;
 let renderer: THREE.WebGLRenderer | null = null;
 let planeModel: THREE.Group | null = null;
 const planeMeshes = new Map<string, THREE.Object3D>(); // id -> mesh
+
+// Propeller animation tracking
+// Stores propeller mesh references and current rotation for each plane
+interface PropellerState {
+  meshes: THREE.Object3D[];
+  rotation: number;
+}
+const propellerStates = new Map<string, PropellerState>();
+
+// Propeller animation constants
+const PROPELLER_MAX_RPS = 25; // Max rotations per second at full speed
+const PROPELLER_MIN_RPS = 5;  // Min rotations per second at stall speed
 
 // World origin (for geo to world conversion)
 let originLng: number = DEFAULT_LOCATION.lng;
@@ -519,11 +531,20 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
   // Apply enhanced materials to the plane
   const wingParts = ['wing', 'tail', 'stabilizer', 'tip', 'flap', 'aileron'];
   const accentParts = ['engine', 'nacelle', 'prop', 'spinner'];
+  const propellerParts = ['prop', 'propeller', 'blade'];
+
+  // Collect propeller meshes for animation
+  const propellerMeshes: THREE.Object3D[] = [];
 
   mesh.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const meshChild = child as THREE.Mesh;
       const name = meshChild.name.toLowerCase();
+
+      // Track propeller meshes for animation
+      if (propellerParts.some(part => name.includes(part))) {
+        propellerMeshes.push(meshChild);
+      }
 
       // Determine which material to use based on mesh name
       if (accentParts.some(part => name.includes(part))) {
@@ -537,6 +558,12 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
         meshChild.material = materials.fuselage;
       }
     }
+  });
+
+  // Store propeller state for animation
+  propellerStates.set(id, {
+    meshes: propellerMeshes,
+    rotation: 0
   });
 
   if (scene) {
@@ -579,6 +606,37 @@ export function updatePlaneMesh(planeState: PlaneState, id: string, color: strin
 }
 
 /**
+ * Update propeller animation for a plane based on its speed
+ * Call this each frame to animate the propeller spinning
+ */
+export function updatePropellerAnimation(id: string, speed: number, deltaTime: number): void {
+  const state = propellerStates.get(id);
+  if (!state || state.meshes.length === 0) return;
+
+  // Calculate rotation speed based on plane speed
+  // Lerp between min and max RPS based on speed
+  const speedRatio = Math.max(0, Math.min(1,
+    (speed - FLIGHT.MIN_SPEED) / (FLIGHT.MAX_SPEED - FLIGHT.MIN_SPEED)
+  ));
+  const rps = PROPELLER_MIN_RPS + speedRatio * (PROPELLER_MAX_RPS - PROPELLER_MIN_RPS);
+
+  // Update rotation (in radians)
+  const rotationDelta = rps * Math.PI * 2 * deltaTime;
+  state.rotation += rotationDelta;
+
+  // Keep rotation within bounds to prevent floating point issues
+  if (state.rotation > Math.PI * 2) {
+    state.rotation -= Math.PI * 2;
+  }
+
+  // Apply rotation to all propeller meshes
+  // Propellers typically spin around the X axis (pointing forward)
+  for (const propMesh of state.meshes) {
+    propMesh.rotation.x = state.rotation;
+  }
+}
+
+/**
  * Remove a plane mesh
  */
 export function removePlaneMesh(id: string): void {
@@ -587,6 +645,8 @@ export function removePlaneMesh(id: string): void {
     scene.remove(mesh);
     planeMeshes.delete(id);
   }
+  // Clean up propeller state
+  propellerStates.delete(id);
 }
 
 /**
