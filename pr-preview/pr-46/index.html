@@ -387,6 +387,22 @@
 
     #player-list {
       list-style: none;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    #player-list::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    #player-list::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+    }
+
+    #player-list::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 2px;
     }
 
     #player-list li {
