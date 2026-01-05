@@ -185,6 +185,56 @@ const propellerStates = new Map<string, PropellerState>();
 const PROPELLER_MAX_RPS = 25; // Max rotations per second at full speed
 const PROPELLER_MIN_RPS = 5;  // Min rotations per second at stall speed
 
+/**
+ * Create a procedural propeller mesh
+ * Returns a group containing propeller blades that can be rotated
+ */
+function createPropeller(color: string): THREE.Group {
+  const propGroup = new THREE.Group();
+  propGroup.name = 'propeller';
+
+  // Propeller material - metallic with player accent color
+  const bladeMaterial = new THREE.MeshStandardMaterial({
+    color: color,
+    roughness: 0.3,
+    metalness: 0.8,
+  });
+
+  // Create 3 propeller blades
+  const bladeCount = 3;
+  const bladeLength = 12; // Length of each blade
+  const bladeWidth = 1.5;
+  const bladeThickness = 0.3;
+
+  for (let i = 0; i < bladeCount; i++) {
+    const bladeGeometry = new THREE.BoxGeometry(bladeThickness, bladeWidth, bladeLength);
+    // Offset geometry so it rotates from the hub
+    bladeGeometry.translate(0, 0, bladeLength / 2);
+
+    const blade = new THREE.Mesh(bladeGeometry, bladeMaterial);
+    // Rotate each blade evenly around the hub
+    blade.rotation.x = (i * Math.PI * 2) / bladeCount;
+    // Add slight pitch to blades for realism
+    blade.rotation.y = 0.2;
+
+    propGroup.add(blade);
+  }
+
+  // Add a hub/spinner in the center
+  const hubGeometry = new THREE.ConeGeometry(1.5, 3, 8);
+  hubGeometry.rotateZ(-Math.PI / 2); // Point forward
+  const hubMaterial = new THREE.MeshStandardMaterial({
+    color: color,
+    roughness: 0.2,
+    metalness: 0.9,
+  });
+  const hub = new THREE.Mesh(hubGeometry, hubMaterial);
+  hub.position.x = 1; // Slightly in front
+  propGroup.add(hub);
+
+  return propGroup;
+}
+
 // World origin (for geo to world conversion)
 let originLng: number = DEFAULT_LOCATION.lng;
 let originLat: number = DEFAULT_LOCATION.lat;
@@ -531,20 +581,11 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
   // Apply enhanced materials to the plane
   const wingParts = ['wing', 'tail', 'stabilizer', 'tip', 'flap', 'aileron'];
   const accentParts = ['engine', 'nacelle', 'prop', 'spinner'];
-  const propellerParts = ['prop', 'propeller', 'blade'];
-
-  // Collect propeller meshes for animation
-  const propellerMeshes: THREE.Object3D[] = [];
 
   mesh.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const meshChild = child as THREE.Mesh;
       const name = meshChild.name.toLowerCase();
-
-      // Track propeller meshes for animation
-      if (propellerParts.some(part => name.includes(part))) {
-        propellerMeshes.push(meshChild);
-      }
 
       // Determine which material to use based on mesh name
       if (accentParts.some(part => name.includes(part))) {
@@ -560,9 +601,16 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
     }
   });
 
+  // Create and attach a procedural propeller at the nose of the plane
+  const propeller = createPropeller(color || '#3b82f6');
+  // Position at the front of the plane (nose)
+  // The plane model faces +X direction, so propeller goes at positive X
+  propeller.position.set(48, 0, 0); // Adjust based on model size
+  mesh.add(propeller);
+
   // Store propeller state for animation
   propellerStates.set(id, {
-    meshes: propellerMeshes,
+    meshes: [propeller],
     rotation: 0
   });
 
