@@ -118,7 +118,13 @@ export async function initTileManager(): Promise<InitStatus> {
 
   // Get metadata to verify sources are working with retry
   try {
-    await retryWithBackoff(() => buildingsPMTiles!.getHeader(), 3, 1000);
+    const header = await retryWithBackoff(() => buildingsPMTiles!.getHeader(), 3, 1000);
+    console.log('[Buildings] PMTiles header:', {
+      minZoom: header.minZoom,
+      maxZoom: header.maxZoom,
+      tileType: header.tileType,
+      numTiles: header.numAddressedTiles
+    });
   } catch (e) {
     const error = e as Error;
     const msg = `Failed to load buildings data: ${error.message || 'Network error'}`;
@@ -138,7 +144,13 @@ export async function initTileManager(): Promise<InitStatus> {
   }
 
   try {
-    await retryWithBackoff(() => transportationPMTiles!.getHeader(), 3, 1000);
+    const header = await retryWithBackoff(() => transportationPMTiles!.getHeader(), 3, 1000);
+    console.log('[Transportation] PMTiles header:', {
+      minZoom: header.minZoom,
+      maxZoom: header.maxZoom,
+      tileType: header.tileType,
+      numTiles: header.numAddressedTiles
+    });
   } catch (e) {
     const error = e as Error;
     const msg = `Failed to load transportation data: ${error.message || 'Network error'}`;
