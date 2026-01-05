@@ -31,21 +31,21 @@ let lastHashUpdateTime = 0;
 const HASH_UPDATE_INTERVAL = 1000; // Only check/update URL every 1 second
 
 /**
- * Parse location from URL hash in format #lat/lng
+ * Parse location from URL hash in format #z/lat/lng (compatible with explore site)
  * Returns null if hash is invalid or not present
  */
 function parseLocationFromHash(): { lat: number; lng: number } | null {
   const hash = window.location.hash;
   if (!hash || hash.length < 2) return null;
 
-  // Format: #lat/lng
+  // Format: #z/lat/lng
   const parts = hash.substring(1).split('/');
-  if (parts.length !== 2) return null;
+  if (parts.length !== 3) return null;
 
-  const lat = parseFloat(parts[0]);
-  const lng = parseFloat(parts[1]);
+  const lat = parseFloat(parts[1]);
+  const lng = parseFloat(parts[2]);
 
-  // Validate values
+  // Validate values (zoom is ignored, we always use z14)
   if (isNaN(lat) || isNaN(lng)) return null;
   if (lat < -90 || lat > 90) return null;
   if (lng < -180 || lng > 180) return null;
@@ -55,6 +55,7 @@ function parseLocationFromHash(): { lat: number; lng: number } | null {
 
 /**
  * Update URL hash with current location
+ * Format: #z/lat/lng (compatible with explore site, z is always 14)
  * Uses 2 decimal places (~1.1km precision) for stable URLs that don't spin constantly
  * Note: When parsing, we accept any precision for shared URLs with more detail
  * Throttled to avoid unnecessary work every frame
@@ -65,8 +66,8 @@ function updateLocationHash(lng: number, lat: number): void {
   if (now - lastHashUpdateTime < HASH_UPDATE_INTERVAL) return;
   lastHashUpdateTime = now;
 
-  // 2 decimal places ≈ 1.1 km precision
-  const newHash = `#${lat.toFixed(2)}/${lng.toFixed(2)}`;
+  // Format: #z/lat/lng with z fixed at 14, 2 decimal places for lat/lng
+  const newHash = `#14/${lat.toFixed(2)}/${lng.toFixed(2)}`;
 
   // Only update URL if position has changed meaningfully
   if (newHash === lastLocationHash) return;
