@@ -36,6 +36,12 @@ const LIMITS = {
   SPEED_MAX: 500,
 };
 
+// Rate limiting constants
+const RATE_LIMIT = {
+  MIN_INTERVAL_MS: 30,  // Minimum ms between position messages
+  MAX_VIOLATIONS: 10,   // Max violations before warning
+};
+
 /**
  * Validate and clamp position data
  */
@@ -55,10 +61,17 @@ function validatePositionData(data: Partial<PlaneState>): Partial<PlaneState> | 
   };
 }
 
+// Rate limit tracking per connection
+interface RateLimitInfo {
+  lastMessageTime: number;
+  violations: number;
+}
+
 export default class FlightServer implements Party.Server {
   options: Party.ServerOptions = { hibernate: true };
   planes: Map<string, PlaneState> = new Map();
   colorIndex: number = 0;
+  rateLimits: Map<string, RateLimitInfo> = new Map();
 
   constructor(readonly room: Party.Room) {}
 
@@ -66,6 +79,9 @@ export default class FlightServer implements Party.Server {
     const color = COLORS[this.colorIndex % COLORS.length];
     this.colorIndex++;
     const id = conn.id;
+
+    // Initialize rate limiting for this connection
+    this.rateLimits.set(id, { lastMessageTime: 0, violations: 0 });
 
     // Create initial plane state
     const initialPlane: PlaneState = {
@@ -102,6 +118,31 @@ export default class FlightServer implements Party.Server {
   onMessage(message: string, sender: Party.Connection) {
     try {
       const msg = JSON.parse(message);
+
+      // Rate limiting for position updates
+      if (msg.type === 'position') {
+        const now = Date.now();
+        const rateInfo = this.rateLimits.get(sender.id);
+
+        if (rateInfo) {
+          const elapsed = now - rateInfo.lastMessageTime;
+
+          if (elapsed < RATE_LIMIT.MIN_INTERVAL_MS) {
+            rateInfo.violations++;
+            if (rateInfo.violations === RATE_LIMIT.MAX_VIOLATIONS) {
+              console.warn(`Rate limit violations from ${sender.id}: ${rateInfo.violations}`);
+            }
+            // Drop the message if sent too fast
+            return;
+          }
+
+          // Reset violations on valid message timing
+          if (rateInfo.violations > 0 && elapsed >= RATE_LIMIT.MIN_INTERVAL_MS * 2) {
+            rateInfo.violations = Math.max(0, rateInfo.violations - 1);
+          }
+          rateInfo.lastMessageTime = now;
+        }
+      }
 
       if (msg.type === 'position') {
         const validated = validatePositionData(msg.data);
@@ -156,6 +197,7 @@ export default class FlightServer implements Party.Server {
 
   onClose(conn: Party.Connection) {
     this.planes.delete(conn.id);
+    this.rateLimits.delete(conn.id);
     this.room.broadcast(
       JSON.stringify({
         type: 'playerLeft',

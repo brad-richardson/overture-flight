@@ -2,6 +2,43 @@ import { getGroundHeight } from './collision.js';
 import type { PlaneState } from './plane.js';
 
 let crashMessageTimeout: ReturnType<typeof setTimeout> | null = null;
+let connectionStatus: 'connected' | 'disconnected' | 'connecting' = 'connecting';
+
+/**
+ * Update connection status indicator
+ */
+export function updateConnectionStatus(status: 'connected' | 'disconnected' | 'connecting'): void {
+  connectionStatus = status;
+  const indicator = document.getElementById('connection-status');
+  if (!indicator) return;
+
+  const dot = indicator.querySelector('.status-dot') as HTMLElement;
+  const text = indicator.querySelector('.status-text') as HTMLElement;
+
+  if (dot && text) {
+    switch (status) {
+      case 'connected':
+        dot.style.background = '#22c55e';
+        text.textContent = 'Online';
+        break;
+      case 'disconnected':
+        dot.style.background = '#ef4444';
+        text.textContent = 'Offline';
+        break;
+      case 'connecting':
+        dot.style.background = '#f97316';
+        text.textContent = 'Connecting...';
+        break;
+    }
+  }
+}
+
+/**
+ * Get current connection status
+ */
+export function getConnectionStatus(): 'connected' | 'disconnected' | 'connecting' {
+  return connectionStatus;
+}
 
 /**
  * Update HUD display with current plane state

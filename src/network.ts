@@ -1,5 +1,6 @@
 import PartySocket from 'partysocket';
 import { PARTYKIT_HOST, NETWORK } from './constants.js';
+import { updateConnectionStatus } from './ui.js';
 import type { PlaneState } from './plane.js';
 
 // WebSocket readyState constants (not available in ES modules)
@@ -8,6 +9,7 @@ const WS_OPEN = 1;
 let socket: PartySocket | null = null;
 let lastSendTime = 0;
 let isConnected = false;
+let hasEverConnected = false;
 
 /**
  * Welcome message from server
@@ -82,9 +84,16 @@ export function createConnection(roomId: string, callbacks: NetworkCallbacks): C
   socket.addEventListener('open', () => {
     const wasConnected = isConnected;
     isConnected = true;
-    if (wasConnected === false && callbacks.onReconnect) {
+    updateConnectionStatus('connected');
+
+    // Update CSS class for animation
+    const indicator = document.getElementById('connection-status');
+    if (indicator) indicator.classList.add('connected');
+
+    if (wasConnected === false && hasEverConnected && callbacks.onReconnect) {
       callbacks.onReconnect();
     }
+    hasEverConnected = true;
   });
 
   socket.addEventListener('message', (event) => {
@@ -113,6 +122,12 @@ export function createConnection(roomId: string, callbacks: NetworkCallbacks): C
   socket.addEventListener('close', () => {
     const wasConnected = isConnected;
     isConnected = false;
+    updateConnectionStatus('connecting'); // Will auto-reconnect
+
+    // Update CSS class for animation
+    const indicator = document.getElementById('connection-status');
+    if (indicator) indicator.classList.remove('connected');
+
     if (wasConnected && callbacks.onDisconnect) {
       callbacks.onDisconnect();
     }
@@ -182,6 +197,9 @@ export function createConnection(roomId: string, callbacks: NetworkCallbacks): C
  * Create a disconnected interface for when server is not configured
  */
 function createDisconnectedInterface(): Connection {
+  // Update UI to show offline status
+  updateConnectionStatus('disconnected');
+
   return {
     sendPosition: (): void => {},
     sendTeleport: (): void => {},

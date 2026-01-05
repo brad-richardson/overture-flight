@@ -80,11 +80,15 @@ export const CAMERA: CameraConfig = {
 export interface NetworkConfig {
   UPDATE_RATE: number;
   INTERPOLATION_DELAY: number;
+  INTERPOLATION_SPEED: number;
+  SERVER_RATE_LIMIT: number;
 }
 
 export const NETWORK: NetworkConfig = {
-  UPDATE_RATE: 50,      // ms between position updates (20Hz)
+  UPDATE_RATE: 50,         // ms between position updates (20Hz)
   INTERPOLATION_DELAY: 100, // ms delay for smooth interpolation
+  INTERPOLATION_SPEED: 10,  // interpolation speed factor (higher = faster)
+  SERVER_RATE_LIMIT: 30,    // minimum ms between server messages per client
 };
 
 // Location definition
