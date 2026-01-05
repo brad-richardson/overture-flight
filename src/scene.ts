@@ -188,6 +188,7 @@ const PROPELLER_MIN_RPS = 5;  // Min rotations per second at stall speed
 /**
  * Create a procedural propeller mesh
  * Returns a group containing propeller blades that can be rotated
+ * Propeller is oriented to spin around the Z axis (plane's forward direction)
  */
 function createPropeller(color: string): THREE.Group {
   const propGroup = new THREE.Group();
@@ -200,36 +201,37 @@ function createPropeller(color: string): THREE.Group {
     metalness: 0.8,
   });
 
-  // Create 3 propeller blades
+  // Create 3 propeller blades in the XY plane (perpendicular to Z/forward axis)
   const bladeCount = 3;
   const bladeLength = 12; // Length of each blade
   const bladeWidth = 1.5;
   const bladeThickness = 0.3;
 
   for (let i = 0; i < bladeCount; i++) {
-    const bladeGeometry = new THREE.BoxGeometry(bladeThickness, bladeWidth, bladeLength);
+    // Create blade extending along Y axis (up/down when unrotated)
+    const bladeGeometry = new THREE.BoxGeometry(bladeThickness, bladeLength, bladeWidth);
     // Offset geometry so it rotates from the hub
-    bladeGeometry.translate(0, 0, bladeLength / 2);
+    bladeGeometry.translate(0, bladeLength / 2, 0);
 
     const blade = new THREE.Mesh(bladeGeometry, bladeMaterial);
-    // Rotate each blade evenly around the hub
-    blade.rotation.x = (i * Math.PI * 2) / bladeCount;
+    // Rotate each blade evenly around the Z axis (forward axis)
+    blade.rotation.z = (i * Math.PI * 2) / bladeCount;
     // Add slight pitch to blades for realism
-    blade.rotation.y = 0.2;
+    blade.rotation.x = 0.15;
 
     propGroup.add(blade);
   }
 
-  // Add a hub/spinner in the center
+  // Add a hub/spinner in the center pointing forward (+Z)
   const hubGeometry = new THREE.ConeGeometry(1.5, 3, 8);
-  hubGeometry.rotateZ(-Math.PI / 2); // Point forward
+  hubGeometry.rotateX(Math.PI / 2); // Point forward along +Z
   const hubMaterial = new THREE.MeshStandardMaterial({
     color: color,
     roughness: 0.2,
     metalness: 0.9,
   });
   const hub = new THREE.Mesh(hubGeometry, hubMaterial);
-  hub.position.x = 1; // Slightly in front
+  hub.position.z = 1.5; // Slightly in front
   propGroup.add(hub);
 
   return propGroup;
@@ -604,8 +606,8 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
   // Create and attach a procedural propeller at the nose of the plane
   const propeller = createPropeller(color || '#3b82f6');
   // Position at the front of the plane (nose)
-  // The plane model faces +X direction, so propeller goes at positive X
-  propeller.position.set(48, 0, 0); // Adjust based on model size
+  // The plane model faces +Z direction in local space
+  propeller.position.set(0, 0, 48); // At the nose
   mesh.add(propeller);
 
   // Store propeller state for animation
@@ -678,9 +680,9 @@ export function updatePropellerAnimation(id: string, speed: number, deltaTime: n
   }
 
   // Apply rotation to all propeller meshes
-  // Propellers typically spin around the X axis (pointing forward)
+  // Propellers spin around the Z axis (plane's forward direction)
   for (const propMesh of state.meshes) {
-    propMesh.rotation.x = state.rotation;
+    propMesh.rotation.z = state.rotation;
   }
 }
 
