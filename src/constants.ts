@@ -96,6 +96,7 @@ export interface Location {
 
 // Starting locations with good building data
 export const LOCATIONS: Record<string, Location> = {
+  FLORENCE: { lat: 43.7680, lng: 11.2531, name: 'Florence' },
   BOSTON: { lat: 42.3541, lng: -71.0704, name: 'Boston' },
   NYC: { lat: 40.7580, lng: -73.9855, name: 'New York City (Midtown)' },
   SF: { lat: 37.7749, lng: -122.4194, name: 'San Francisco' },
@@ -105,7 +106,7 @@ export const LOCATIONS: Record<string, Location> = {
   CHICAGO: { lat: 41.8781, lng: -87.6298, name: 'Chicago' },
 };
 
-export const DEFAULT_LOCATION: Location = LOCATIONS.BOSTON;
+export const DEFAULT_LOCATION: Location = LOCATIONS.FLORENCE;
 
 // Player colors for multiplayer
 export const PLAYER_COLORS: string[] = [
