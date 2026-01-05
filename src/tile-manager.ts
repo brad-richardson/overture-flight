@@ -92,8 +92,8 @@ const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loa
 const waterPolygonCache = new Map<string, ParsedFeature[]>();
 
 // Tile loading settings (aggressive performance tuning)
-const TILE_ZOOM = 14; // Zoom level for tile loading
-const TILE_RADIUS = 1; // Load tiles within this radius of center (reduced from 2 for perf)
+const TILE_ZOOM = 14; // Zoom level for tile loading (max available in PMTiles)
+const TILE_RADIUS = 1; // Load tiles within this radius of center (3x3 grid)
 const PREDICTIVE_TILES = 2; // Max tiles ahead to load based on heading (reduced from 4 for perf)
 const SPEED_THRESHOLD = 10; // m/s (~22 mph) - lowered to trigger predictive loading at slower speeds
 // Speed divisor to calculate tiles ahead: tilesAhead = speed / SPEED_TO_TILES_DIVISOR
@@ -440,15 +440,10 @@ export async function loadTransportationTile(
   y: number,
   zoom: number = TILE_ZOOM
 ): Promise<ParsedFeature[]> {
-  if (!transportationPMTiles) {
-    console.warn('Transportation PMTiles not initialized');
-    return [];
-  }
+  if (!transportationPMTiles) return [];
 
   const data = await getTileData(transportationPMTiles, zoom, x, y);
-  if (!data) {
-    return [];
-  }
+  if (!data) return [];
 
   // Transportation PMTiles has layers: segment, connector
   return parseMVT(data, x, y, zoom);

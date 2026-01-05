@@ -46,6 +46,7 @@ const players = new Map<string, PlaneState>();
 const tileMeshes = new Map<string, TileMeshes>(); // key -> { buildings: Group, base: Group, transportation: Group }
 const loadingTiles = new Set<string>(); // Track tiles currently being loaded
 
+
 /**
  * Load tiles around the current position with predictive loading
  */

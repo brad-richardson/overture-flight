@@ -24,7 +24,7 @@ const BUILDING_TERRAIN_OFFSET = 0.5;
 // LOD (Level of Detail) settings (aggressive performance tuning)
 const LOD_NEAR_DISTANCE = 300; // meters - full detail (reduced from 500)
 const LOD_MEDIUM_DISTANCE = 800; // meters - reduced detail (reduced from 2000)
-const MIN_BUILDING_AREA_FAR = 150; // m² - skip small buildings at far distances (increased from 100)
+const MIN_BUILDING_AREA_FAR = 50; // m² - skip small buildings at far distances (lowered to show suburban homes)
 
 // LOD levels
 export enum LODLevel {
