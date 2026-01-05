@@ -149,8 +149,8 @@ export default class FlightServer implements Party.Server {
             return;
           }
 
-          // Reset violations on valid message timing
-          if (rateInfo.violations > 0 && elapsed >= RATE_LIMIT.MIN_INTERVAL_MS * 2) {
+          // Decrement violations on valid message timing
+          if (rateInfo.violations > 0) {
             rateInfo.violations = Math.max(0, rateInfo.violations - 1);
           }
           rateInfo.lastMessageTime = now;

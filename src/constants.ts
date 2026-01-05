@@ -77,18 +77,17 @@ export const CAMERA: CameraConfig = {
 };
 
 // Network constants
+// Note: Client UPDATE_RATE (50ms) must be >= server rate limit (30ms in party/index.ts)
+// to avoid messages being dropped. Server limit is intentionally lower to allow
+// for network jitter while still protecting against flooding attacks.
 export interface NetworkConfig {
   UPDATE_RATE: number;
-  INTERPOLATION_DELAY: number;
   INTERPOLATION_SPEED: number;
-  SERVER_RATE_LIMIT: number;
 }
 
 export const NETWORK: NetworkConfig = {
   UPDATE_RATE: 50,         // ms between position updates (20Hz)
-  INTERPOLATION_DELAY: 100, // ms delay for smooth interpolation
-  INTERPOLATION_SPEED: 10,  // interpolation speed factor (higher = faster)
-  SERVER_RATE_LIMIT: 30,    // minimum ms between server messages per client
+  INTERPOLATION_SPEED: 10, // interpolation speed factor (higher = faster)
 };
 
 // Location definition

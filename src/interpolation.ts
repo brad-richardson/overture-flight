@@ -7,7 +7,6 @@ import type { PlaneState } from './plane.js';
 interface InterpolatedPlayer {
   current: PlaneState;
   target: PlaneState;
-  lastUpdateTime: number;
 }
 
 // Store interpolated states for remote players
@@ -52,13 +51,11 @@ export function setPlayerTarget(id: string, target: PlaneState): void {
   if (existing) {
     // Update target, keep current position for smooth interpolation
     existing.target = { ...target };
-    existing.lastUpdateTime = Date.now();
   } else {
     // New player, start at target position
     interpolatedPlayers.set(id, {
       current: { ...target },
       target: { ...target },
-      lastUpdateTime: Date.now(),
     });
   }
 }

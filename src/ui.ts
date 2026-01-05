@@ -15,6 +15,13 @@ export function updateConnectionStatus(status: 'connected' | 'disconnected' | 'c
   const dot = indicator.querySelector('.status-dot') as HTMLElement;
   const text = indicator.querySelector('.status-text') as HTMLElement;
 
+  // Update CSS class for animation state
+  if (status === 'connected') {
+    indicator.classList.add('connected');
+  } else {
+    indicator.classList.remove('connected');
+  }
+
   if (dot && text) {
     switch (status) {
       case 'connected':

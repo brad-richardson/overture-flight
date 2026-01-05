@@ -86,10 +86,6 @@ export function createConnection(roomId: string, callbacks: NetworkCallbacks): C
     isConnected = true;
     updateConnectionStatus('connected');
 
-    // Update CSS class for animation
-    const indicator = document.getElementById('connection-status');
-    if (indicator) indicator.classList.add('connected');
-
     if (wasConnected === false && hasEverConnected && callbacks.onReconnect) {
       callbacks.onReconnect();
     }
@@ -123,10 +119,6 @@ export function createConnection(roomId: string, callbacks: NetworkCallbacks): C
     const wasConnected = isConnected;
     isConnected = false;
     updateConnectionStatus('connecting'); // Will auto-reconnect
-
-    // Update CSS class for animation
-    const indicator = document.getElementById('connection-status');
-    if (indicator) indicator.classList.remove('connected');
 
     if (wasConnected && callbacks.onDisconnect) {
       callbacks.onDisconnect();
