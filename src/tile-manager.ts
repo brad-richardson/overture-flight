@@ -103,9 +103,9 @@ const MIN_FALLBACK_ZOOM = 6; // Minimum zoom level for base tile fallback
 const WATER_POLYGON_ZOOM_LEVELS = [10, 8, 6]; // Lower zoom levels to check for larger water polygons
 
 // High-zoom building tile settings
-// These are loaded dynamically when the plane is close to get more detailed building data
-const HIGH_ZOOM_BUILDING_LEVELS = [15]; // Higher zoom level for dense urban areas (z15 is max for Overture buildings)
-const HIGH_ZOOM_BUILDING_RADIUS = 1; // Only load high-zoom tiles within this radius (immediate area)
+// Buildings are loaded at z15 for more detail in dense urban areas
+const HIGH_ZOOM_BUILDING_LEVELS = [15]; // z15 for buildings (more detail than z14)
+const HIGH_ZOOM_BUILDING_RADIUS = 4; // Load z15 tiles within this radius (9x9 grid = 81 tiles)
 
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
@@ -567,7 +567,7 @@ export function getHighZoomBuildingTilesToLoad(
 export function getHighZoomBuildingTilesToUnload(
   lng: number,
   lat: number,
-  maxDistance: number = 2
+  maxDistance: number = 6
 ): string[] {
   const toUnload: string[] = [];
 

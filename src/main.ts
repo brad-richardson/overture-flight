@@ -71,7 +71,8 @@ async function updateTiles(
 
     loadingTiles.add(tile.key);
 
-    // Load base layer, buildings, transportation, and trees in parallel
+    // Load base layer, transportation, and trees in parallel
+    // Buildings are now loaded separately at z15 for more detail in dense areas
     // Wrap tree creation to isolate failures - trees are optional, other layers are critical
     const safeCreateTrees = async () => {
       try {
@@ -84,7 +85,7 @@ async function updateTiles(
 
     Promise.all([
       createBaseLayerForTile(tile.x, tile.y, tile.z),
-      createBuildingsForTile(tile.x, tile.y, tile.z),
+      Promise.resolve(null), // Buildings loaded at z15 separately
       createTransportationForTile(tile.x, tile.y, tile.z),
       safeCreateTrees()
     ]).then(([baseGroup, buildingsGroup, transportationGroup, treesGroup]) => {
