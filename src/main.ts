@@ -27,6 +27,8 @@ interface TileMeshes {
 
 // URL location tracking - store last hash to detect meaningful changes
 let lastLocationHash: string | null = null;
+let lastHashUpdateTime = 0;
+const HASH_UPDATE_INTERVAL = 1000; // Only check/update URL every 1 second
 
 /**
  * Parse location from URL hash in format #lat/lng
@@ -55,8 +57,14 @@ function parseLocationFromHash(): { lat: number; lng: number } | null {
  * Update URL hash with current location
  * Uses 2 decimal places (~1.1km precision) for stable URLs that don't spin constantly
  * Note: When parsing, we accept any precision for shared URLs with more detail
+ * Throttled to avoid unnecessary work every frame
  */
 function updateLocationHash(lng: number, lat: number): void {
+  // Throttle: only check every HASH_UPDATE_INTERVAL ms
+  const now = performance.now();
+  if (now - lastHashUpdateTime < HASH_UPDATE_INTERVAL) return;
+  lastHashUpdateTime = now;
+
   // 2 decimal places ≈ 1.1 km precision
   const newHash = `#${lat.toFixed(2)}/${lng.toFixed(2)}`;
 
@@ -296,6 +304,7 @@ function handlePlayerLeft(id: string): void {
 async function handleTeleport(lat: number, lng: number): Promise<void> {
   // Reset location tracking so URL updates after teleport
   lastLocationHash = null;
+  lastHashUpdateTime = 0;
 
   // Update origin for new location
   setOrigin(lng, lat);
