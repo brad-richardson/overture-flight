@@ -42,6 +42,9 @@ const RATE_LIMIT = {
   MAX_VIOLATIONS: 10,   // Max violations before warning
 };
 
+// Connection limits
+const MAX_CONNECTIONS = 10;
+
 /**
  * Validate and clamp position data
  */
@@ -76,6 +79,16 @@ export default class FlightServer implements Party.Server {
   constructor(readonly room: Party.Room) {}
 
   onConnect(conn: Party.Connection) {
+    // Check if room is full
+    if (this.planes.size >= MAX_CONNECTIONS) {
+      conn.send(JSON.stringify({
+        type: 'error',
+        message: 'Room is full. Please try again later.',
+      }));
+      conn.close();
+      return;
+    }
+
     const color = COLORS[this.colorIndex % COLORS.length];
     this.colorIndex++;
     const id = conn.id;
