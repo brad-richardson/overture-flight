@@ -66,7 +66,6 @@ async function updateTiles(
     }
 
     loadingTiles.add(tile.key);
-    console.log(`[Tiles] Loading tile ${tile.key} (z${tile.z}/${tile.x}/${tile.y})`);
 
     // Load base layer, buildings, transportation, and trees in parallel
     // Wrap tree creation to isolate failures - trees are optional, other layers are critical
