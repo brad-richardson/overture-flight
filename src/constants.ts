@@ -96,7 +96,7 @@ export interface Location {
 
 // Starting locations with good building data
 export const LOCATIONS: Record<string, Location> = {
-  FLORENCE: { lat: 43.7696, lng: 11.2558, name: 'Florence' },
+  FLORENCE: { lat: 43.7680, lng: 11.2531, name: 'Florence' },
   BOSTON: { lat: 42.3541, lng: -71.0704, name: 'Boston' },
   NYC: { lat: 40.7580, lng: -73.9855, name: 'New York City (Midtown)' },
   SF: { lat: 37.7749, lng: -122.4194, name: 'San Francisco' },
