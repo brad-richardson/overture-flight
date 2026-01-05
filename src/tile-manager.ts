@@ -92,8 +92,8 @@ const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loa
 const waterPolygonCache = new Map<string, ParsedFeature[]>();
 
 // Tile loading settings (aggressive performance tuning)
-const TILE_ZOOM = 14; // Zoom level for tile loading
-const TILE_RADIUS = 1; // Load tiles within this radius of center (reduced from 2 for perf)
+const TILE_ZOOM = 15; // Zoom level for tile loading (z15 for more detail)
+const TILE_RADIUS = 2; // Load tiles within this radius of center (5x5 grid at z15)
 const PREDICTIVE_TILES = 2; // Max tiles ahead to load based on heading (reduced from 4 for perf)
 const SPEED_THRESHOLD = 10; // m/s (~22 mph) - lowered to trigger predictive loading at slower speeds
 // Speed divisor to calculate tiles ahead: tilesAhead = speed / SPEED_TO_TILES_DIVISOR
@@ -101,11 +101,6 @@ const SPEED_THRESHOLD = 10; // m/s (~22 mph) - lowered to trigger predictive loa
 const SPEED_TO_TILES_DIVISOR = 25;
 const MIN_FALLBACK_ZOOM = 6; // Minimum zoom level for base tile fallback
 const WATER_POLYGON_ZOOM_LEVELS = [10, 8, 6]; // Lower zoom levels to check for larger water polygons
-
-// High-zoom building tile settings
-// Buildings are loaded at z15 for more detail in dense urban areas
-const HIGH_ZOOM_BUILDING_LEVELS = [15]; // z15 for buildings (more detail than z14)
-const HIGH_ZOOM_BUILDING_RADIUS = 4; // Load z15 tiles within this radius (9x9 grid = 81 tiles)
 
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
@@ -522,73 +517,6 @@ export function getTilesToLoad(
   }
 
   return tiles;
-}
-
-/**
- * Get high-zoom building tiles to load for dense urban areas
- * Only loads tiles in the immediate vicinity (within HIGH_ZOOM_BUILDING_RADIUS)
- * Returns tiles at zoom levels 15 and 16 for more detailed building data
- */
-export function getHighZoomBuildingTilesToLoad(
-  lng: number,
-  lat: number
-): TileInfo[] {
-  const tiles: TileInfo[] = [];
-  const addedTiles = new Set<string>();
-
-  // Helper to add tile if not already added
-  const addTile = (x: number, y: number, z: number) => {
-    const key = `${z}/${x}/${y}`;
-    if (!addedTiles.has(key)) {
-      addedTiles.add(key);
-      tiles.push({ x, y, z, key });
-    }
-  };
-
-  // Load high-zoom tiles only in immediate area
-  for (const zoom of HIGH_ZOOM_BUILDING_LEVELS) {
-    const [centerX, centerY] = lngLatToTile(lng, lat, zoom);
-
-    // Load tiles in radius around current position at this zoom level
-    for (let dx = -HIGH_ZOOM_BUILDING_RADIUS; dx <= HIGH_ZOOM_BUILDING_RADIUS; dx++) {
-      for (let dy = -HIGH_ZOOM_BUILDING_RADIUS; dy <= HIGH_ZOOM_BUILDING_RADIUS; dy++) {
-        addTile(centerX + dx, centerY + dy, zoom);
-      }
-    }
-  }
-
-  return tiles;
-}
-
-/**
- * Get keys of high-zoom building tiles that should be unloaded
- * Unloads tiles that are more than maxDistance away from current position
- */
-export function getHighZoomBuildingTilesToUnload(
-  lng: number,
-  lat: number,
-  maxDistance: number = 6
-): string[] {
-  const toUnload: string[] = [];
-
-  for (const [key] of loadedTiles) {
-    const parts = key.split('/');
-    const z = Number(parts[0]);
-
-    // Only consider high-zoom building tiles (z15)
-    if (!HIGH_ZOOM_BUILDING_LEVELS.includes(z)) continue;
-
-    const x = Number(parts[1]);
-    const y = Number(parts[2]);
-    const [centerX, centerY] = lngLatToTile(lng, lat, z);
-    const distance = Math.max(Math.abs(x - centerX), Math.abs(y - centerY));
-
-    if (distance > maxDistance) {
-      toUnload.push(key);
-    }
-  }
-
-  return toUnload;
 }
 
 /**
