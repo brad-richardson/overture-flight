@@ -132,6 +132,7 @@ export async function createBuildingsForTile(
   }
 
   const features = await loadBuildingTile(tileX, tileY, tileZ);
+  console.log(`[Buildings] Tile ${tileZ}/${tileX}/${tileY}: ${features.length} raw features`);
   if (features.length === 0) {
     return null;
   }
