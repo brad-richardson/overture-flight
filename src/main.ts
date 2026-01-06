@@ -232,12 +232,6 @@ function handleWelcome(msg: WelcomeMessage): void {
  * Handle sync message from server
  */
 function handleSync(planes: Record<string, PlaneState>): void {
-  // Debug: log sync received
-  const otherPlayers = Object.entries(planes).filter(([id]) => id !== localId);
-  if (otherPlayers.length > 0) {
-    console.log('Sync received:', otherPlayers.length, 'other players', otherPlayers.map(([id, p]) => ({ id: id.slice(-4), lat: p.lat.toFixed(4), lng: p.lng.toFixed(4) })));
-  }
-
   // Update players map and set interpolation targets
   for (const [id, plane] of Object.entries(planes)) {
     if (id !== localId) {
