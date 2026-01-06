@@ -2,6 +2,50 @@ import { getGroundHeight } from './collision.js';
 import type { PlaneState } from './plane.js';
 
 let crashMessageTimeout: ReturnType<typeof setTimeout> | null = null;
+let connectionStatus: 'connected' | 'disconnected' | 'connecting' = 'connecting';
+
+/**
+ * Update connection status indicator
+ */
+export function updateConnectionStatus(status: 'connected' | 'disconnected' | 'connecting'): void {
+  connectionStatus = status;
+  const indicator = document.getElementById('connection-status');
+  if (!indicator) return;
+
+  const dot = indicator.querySelector('.status-dot') as HTMLElement;
+  const text = indicator.querySelector('.status-text') as HTMLElement;
+
+  // Update CSS class for animation state
+  if (status === 'connected') {
+    indicator.classList.add('connected');
+  } else {
+    indicator.classList.remove('connected');
+  }
+
+  if (dot && text) {
+    switch (status) {
+      case 'connected':
+        dot.style.background = '#22c55e';
+        text.textContent = 'Online';
+        break;
+      case 'disconnected':
+        dot.style.background = '#ef4444';
+        text.textContent = 'Offline';
+        break;
+      case 'connecting':
+        dot.style.background = '#f97316';
+        text.textContent = 'Connecting...';
+        break;
+    }
+  }
+}
+
+/**
+ * Get current connection status
+ */
+export function getConnectionStatus(): 'connected' | 'disconnected' | 'connecting' {
+  return connectionStatus;
+}
 
 /**
  * Update HUD display with current plane state
@@ -38,6 +82,16 @@ export function updateHUD(planeState: PlaneState): void {
   }
 }
 
+// Callback for teleporting to a player's location
+let teleportToPlayerCallback: ((lat: number, lng: number) => void) | null = null;
+
+/**
+ * Set the callback for teleporting to a player's location
+ */
+export function setTeleportToPlayerCallback(callback: (lat: number, lng: number) => void): void {
+  teleportToPlayerCallback = callback;
+}
+
 /**
  * Update player list display
  */
@@ -49,20 +103,45 @@ export function updatePlayerList(players: Map<string, PlaneState>, localId: stri
 
   for (const [id, player] of players) {
     const li = document.createElement('li');
-    li.innerHTML = `
-      <span class="color-dot" style="background: ${player.color}"></span>
-      <span>${player.name || (id === localId ? 'You' : `Player ${id.slice(0, 4)}`)}</span>
-    `;
+    const isLocal = id === localId;
+    const shortId = id.slice(-4);
+    const displayName = player.name || (isLocal ? `You (${shortId})` : `Player ${shortId}`);
+
+    // Create color dot
+    const colorDot = document.createElement('span');
+    colorDot.className = 'color-dot';
+    colorDot.style.background = player.color;
+
+    // Create name span
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = displayName;
+
+    // Make non-local players clickable to teleport
+    if (!isLocal) {
+      li.className = 'clickable-player';
+      li.title = `Click to teleport to ${displayName}`;
+      li.addEventListener('click', () => {
+        if (teleportToPlayerCallback) {
+          teleportToPlayerCallback(player.lat, player.lng);
+        }
+      });
+    }
+
+    li.appendChild(colorDot);
+    li.appendChild(nameSpan);
     list.appendChild(li);
   }
 
   // Show at least "1 player" if no one else
   if (players.size === 0) {
     const li = document.createElement('li');
-    li.innerHTML = `
-      <span class="color-dot" style="background: #3b82f6"></span>
-      <span>You</span>
-    `;
+    const colorDot = document.createElement('span');
+    colorDot.className = 'color-dot';
+    colorDot.style.background = '#3b82f6';
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = 'You';
+    li.appendChild(colorDot);
+    li.appendChild(nameSpan);
     list.appendChild(li);
   }
 }

@@ -41,6 +41,7 @@ jobs:
         run: npm run build
         env:
           VITE_BASE_PATH: /overture-flight/
+          VITE_PARTYKIT_HOST: flight-sim.brad-richardson.partykit.dev
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
@@ -75,6 +76,7 @@ jobs:
         run: npm run build
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.number }}/
+          VITE_PARTYKIT_HOST: flight-sim.brad-richardson.partykit.dev
 
       - name: Deploy PR Preview
         if: github.event.action == 'closed' || success()

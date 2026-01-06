@@ -353,8 +353,57 @@
       text-transform: uppercase;
     }
 
+    /* Connection status indicator */
+    #connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    #connection-status .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #f97316;
+      animation: pulse-status 2s ease-in-out infinite;
+    }
+
+    #connection-status.connected .status-dot {
+      animation: none;
+    }
+
+    #connection-status .status-text {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.7);
+    }
+
+    @keyframes pulse-status {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
     #player-list {
       list-style: none;
+      max-height: 150px;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    #player-list::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    #player-list::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+    }
+
+    #player-list::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 2px;
     }
 
     #player-list li {
@@ -363,11 +412,26 @@
       align-items: center;
     }
 
+    #player-list li.clickable-player {
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.15s;
+    }
+
+    #player-list li.clickable-player:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    #player-list li.clickable-player:hover span:last-child {
+      text-decoration: underline;
+    }
+
     #player-list .color-dot {
       width: 10px;
       height: 10px;
       border-radius: 50%;
       margin-right: 8px;
+      flex-shrink: 0;
     }
 
     #controls-help {
@@ -896,6 +960,10 @@
   </div>
 
   <div id="players">
+    <div id="connection-status">
+      <span class="status-dot"></span>
+      <span class="status-text">Connecting...</span>
+    </div>
     <h3>Players Online</h3>
     <ul id="player-list"></ul>
   </div>

@@ -3,7 +3,7 @@ import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPla
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection, Connection, WelcomeMessage } from './network.js';
 import { checkCollision } from './collision.js';
-import { updateHUD, updatePlayerList, showCrashMessage } from './ui.js';
+import { updateHUD, updatePlayerList, showCrashMessage, setTeleportToPlayerCallback } from './ui.js';
 import { initMinimap, updateMinimap } from './minimap.js';
 import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile, clearDistantWaterPolygonCache } from './tile-manager.js';
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
@@ -15,6 +15,7 @@ import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT } from
 import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
 import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
 import { initFeatureModal, showFeatureModal } from './feature-modal.js';
+import { setPlayerTarget, updateInterpolation, getInterpolatedState, removeInterpolatedPlayer } from './interpolation.js';
 import * as THREE from 'three';
 
 // Tile meshes type
@@ -231,6 +232,19 @@ function gameLoop(time: number): void {
   // Update camera to follow plane
   followPlane(planeState);
 
+  // Update interpolation for remote players
+  updateInterpolation(cappedDelta);
+
+  // Update remote player meshes with interpolated positions
+  for (const [id] of players) {
+    if (id !== localId) {
+      const interpolated = getInterpolatedState(id);
+      if (interpolated) {
+        updatePlaneMesh(interpolated, id, interpolated.color);
+      }
+    }
+  }
+
   // Update local plane mesh
   if (localId) {
     updatePlaneMesh(planeState, localId, localColor);
@@ -287,6 +301,8 @@ function handleWelcome(msg: WelcomeMessage): void {
     for (const [id, plane] of Object.entries(msg.planes)) {
       players.set(id, plane);
       if (id !== localId) {
+        // Initialize interpolation for existing player
+        setPlayerTarget(id, plane);
         updatePlaneMesh(plane, id, plane.color);
       }
     }
@@ -297,11 +313,12 @@ function handleWelcome(msg: WelcomeMessage): void {
  * Handle sync message from server
  */
 function handleSync(planes: Record<string, PlaneState>): void {
-  // Update players map and plane meshes
+  // Update players map and set interpolation targets
   for (const [id, plane] of Object.entries(planes)) {
     if (id !== localId) {
       players.set(id, plane);
-      updatePlaneMesh(plane, id, plane.color);
+      // Set target for interpolation instead of directly updating mesh
+      setPlayerTarget(id, plane);
     }
   }
 }
@@ -312,6 +329,8 @@ function handleSync(planes: Record<string, PlaneState>): void {
 function handlePlayerJoined(player: PlaneState): void {
   console.log('Player joined:', player.id);
   players.set(player.id, player);
+  // Initialize interpolation for new player
+  setPlayerTarget(player.id, player);
   updatePlaneMesh(player, player.id, player.color);
 }
 
@@ -321,6 +340,7 @@ function handlePlayerJoined(player: PlaneState): void {
 function handlePlayerLeft(id: string): void {
   console.log('Player left:', id);
   players.delete(id);
+  removeInterpolatedPlayer(id);
   removePlaneMesh(id);
   updatePlayerList(players, localId);
 }
@@ -476,6 +496,9 @@ async function init(): Promise<void> {
 
     // Initialize minimap
     initMinimap(handleTeleport);
+
+    // Set up teleport-to-player callback for the player list UI
+    setTeleportToPlayerCallback(handleTeleport);
 
     // Initialize feature picker and modal (click on features to see properties)
     initFeatureModal();
