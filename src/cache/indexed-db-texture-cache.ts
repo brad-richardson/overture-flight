@@ -158,8 +158,12 @@ function updateTimestamp(key: string): void {
         store.put(entry);
       }
     };
-  } catch {
-    // Ignore timestamp update errors
+
+    request.onerror = () => {
+      console.warn('[TextureCache] Failed to update timestamp:', request.error);
+    };
+  } catch (error) {
+    console.warn('[TextureCache] Timestamp update error:', error);
   }
 }
 
@@ -236,6 +240,11 @@ function evictIfNeeded(database: IDBDatabase): void {
     const store = transaction.objectStore(TEXTURE_CACHE.STORE_NAME);
     const countRequest = store.count();
 
+    // Handle transaction errors
+    transaction.onerror = () => {
+      console.warn('[TextureCache] Eviction transaction error:', transaction.error);
+    };
+
     countRequest.onsuccess = () => {
       const count = countRequest.result;
       if (count > TEXTURE_CACHE.MAX_ENTRIES) {
@@ -248,15 +257,24 @@ function evictIfNeeded(database: IDBDatabase): void {
         cursorRequest.onsuccess = () => {
           const cursor = cursorRequest.result;
           if (cursor && removed < entriesToRemove) {
+            // Delete is synchronous within cursor iteration - transaction stays open
             store.delete(cursor.primaryKey);
             removed++;
             cursor.continue();
           }
         };
+
+        cursorRequest.onerror = () => {
+          console.warn('[TextureCache] Eviction cursor error:', cursorRequest.error);
+        };
       }
     };
-  } catch {
-    // Ignore eviction errors
+
+    countRequest.onerror = () => {
+      console.warn('[TextureCache] Eviction count error:', countRequest.error);
+    };
+  } catch (error) {
+    console.warn('[TextureCache] Eviction error:', error);
   }
 }
 
@@ -337,8 +355,10 @@ export async function getCacheStats(): Promise<{
       const countRequest = store.count();
 
       let totalSize = 0;
+      let entryCount = 0;
       const cursorRequest = store.openCursor();
 
+      // Accumulate size from cursor iteration
       cursorRequest.onsuccess = () => {
         const cursor = cursorRequest.result;
         if (cursor) {
@@ -348,17 +368,22 @@ export async function getCacheStats(): Promise<{
         }
       };
 
+      // Store count when available
       countRequest.onsuccess = () => {
-        transaction.oncomplete = () => {
-          resolve({
-            enabled: true,
-            count: countRequest.result,
-            sizeBytes: totalSize,
-          });
-        };
+        entryCount = countRequest.result;
       };
 
-      countRequest.onerror = () => {
+      // Resolve only when transaction completes (both cursor and count are done)
+      transaction.oncomplete = () => {
+        resolve({
+          enabled: true,
+          count: entryCount,
+          sizeBytes: totalSize,
+        });
+      };
+
+      transaction.onerror = () => {
+        console.warn('[TextureCache] Stats transaction error:', transaction.error);
         resolve({ enabled: true, count: 0, sizeBytes: 0 });
       };
     } catch (error) {
