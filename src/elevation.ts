@@ -7,7 +7,8 @@
  */
 
 import { lngLatToTile, tileToBounds, TileBounds } from './tile-manager.js';
-import { ELEVATION } from './constants.js';
+import { ELEVATION, WORKERS } from './constants.js';
+import { ElevationWorkerPool } from './workers/index.js';
 
 // Types
 interface ElevationCacheEntry {
@@ -25,6 +26,31 @@ const elevationCache = new Map<string, ElevationCacheEntry>();
 
 // Pending load promises to avoid duplicate fetches
 const pendingLoads = new Map<string, Promise<Float32Array>>();
+
+// Singleton elevation worker pool (lazy initialized)
+let elevationWorkerPool: ElevationWorkerPool | null = null;
+let workerPoolChecked = false;
+
+/**
+ * Get the elevation worker pool (lazy initialization)
+ */
+async function getElevationWorkerPool(): Promise<ElevationWorkerPool | null> {
+  if (!WORKERS.ELEVATION_ENABLED) {
+    return null;
+  }
+
+  if (!workerPoolChecked) {
+    workerPoolChecked = true;
+    elevationWorkerPool = new ElevationWorkerPool();
+    const supported = await elevationWorkerPool.initialize();
+    if (!supported) {
+      console.warn('Elevation workers not supported, falling back to main thread');
+      elevationWorkerPool = null;
+    }
+  }
+
+  return elevationWorkerPool;
+}
 
 /**
  * Decode Terrarium RGB values to height in meters
@@ -45,6 +71,32 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
     img.src = url;
   });
+}
+
+/**
+ * Decode elevation tile on main thread (fallback when workers unavailable)
+ */
+async function decodeElevationMainThread(url: string): Promise<Float32Array> {
+  const img = await loadImage(url);
+
+  // Draw to canvas to extract pixel data
+  const canvas = document.createElement('canvas');
+  canvas.width = ELEVATION.TILE_SIZE;
+  canvas.height = ELEVATION.TILE_SIZE;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, 0, 0, ELEVATION.TILE_SIZE, ELEVATION.TILE_SIZE);
+
+  const imageData = ctx.getImageData(0, 0, ELEVATION.TILE_SIZE, ELEVATION.TILE_SIZE);
+  const heights = new Float32Array(ELEVATION.TILE_SIZE * ELEVATION.TILE_SIZE);
+
+  for (let i = 0; i < ELEVATION.TILE_SIZE * ELEVATION.TILE_SIZE; i++) {
+    const r = imageData.data[i * 4];
+    const g = imageData.data[i * 4 + 1];
+    const b = imageData.data[i * 4 + 2];
+    heights[i] = decodeTerrarium(r, g, b);
+  }
+
+  return heights;
 }
 
 /**
@@ -116,23 +168,20 @@ async function loadElevationTile(x: number, y: number, z: number): Promise<Float
         .replace('{x}', x.toString())
         .replace('{y}', y.toString());
 
-      const img = await loadImage(url);
+      // Try worker-based decoding first
+      const workerPool = await getElevationWorkerPool();
+      let heights: Float32Array;
 
-      // Draw to canvas to extract pixel data
-      const canvas = document.createElement('canvas');
-      canvas.width = ELEVATION.TILE_SIZE;
-      canvas.height = ELEVATION.TILE_SIZE;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0, ELEVATION.TILE_SIZE, ELEVATION.TILE_SIZE);
-
-      const imageData = ctx.getImageData(0, 0, ELEVATION.TILE_SIZE, ELEVATION.TILE_SIZE);
-      const heights = new Float32Array(ELEVATION.TILE_SIZE * ELEVATION.TILE_SIZE);
-
-      for (let i = 0; i < ELEVATION.TILE_SIZE * ELEVATION.TILE_SIZE; i++) {
-        const r = imageData.data[i * 4];
-        const g = imageData.data[i * 4 + 1];
-        const b = imageData.data[i * 4 + 2];
-        heights[i] = decodeTerrarium(r, g, b);
+      if (workerPool) {
+        // Use worker for decoding (offloads CPU work from main thread)
+        heights = await workerPool.decodeElevation(
+          url,
+          ELEVATION.TILE_SIZE,
+          ELEVATION.TERRARIUM_OFFSET
+        );
+      } else {
+        // Fallback to main thread decoding
+        heights = await decodeElevationMainThread(url);
       }
 
       // Cache the result
