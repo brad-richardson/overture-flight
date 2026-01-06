@@ -17,6 +17,29 @@ export interface PlaneState {
 }
 
 /**
+ * Crash recovery configuration
+ */
+export const CRASH_RECOVERY = {
+  PAUSE_DURATION: 1500,      // ms to pause after crash
+  MIN_RESPAWN_HEIGHT: 100,   // minimum meters above terrain
+  MAX_RESPAWN_HEIGHT: 200,   // maximum meters above terrain (randomized)
+};
+
+/**
+ * Autopilot configuration
+ */
+export const AUTOPILOT = {
+  IDLE_THRESHOLD: 30000,     // ms of no input before autopilot engages
+  MIN_ALTITUDE: 100,         // meters above terrain - target minimum
+  MAX_ALTITUDE: 1000,        // meters above terrain - target maximum
+  ADJUSTMENT_RATE: 5,        // meters per second altitude adjustment
+  TARGET_ALTITUDE: 300,      // preferred cruising altitude above terrain
+};
+
+// Track last input time for autopilot
+let lastInputTime = performance.now();
+
+/**
  * Joystick input interface
  */
 export interface JoystickInput {
@@ -67,6 +90,11 @@ const mobileInput = {
  * Set mobile joystick input
  */
 export function setMobileInput(joystick: JoystickInput, throttle: ThrottleInput): void {
+  // Track any mobile input as activity
+  if (Math.abs(joystick.x) > 0.1 || Math.abs(joystick.y) > 0.1 || throttle.up || throttle.down) {
+    lastInputTime = performance.now();
+  }
+
   // X = roll (left/right), Y = pitch (up/down but inverted - push forward = dive)
   mobileInput.roll = joystick.x;
   mobileInput.pitch = -joystick.y; // Invert: pushing joystick up = nose down
@@ -91,6 +119,11 @@ export function initControls(): void {
  * Handle key state changes
  */
 function handleKeyChange(code: string, pressed: boolean): void {
+  // Track any key press as input activity
+  if (pressed) {
+    lastInputTime = performance.now();
+  }
+
   switch (code) {
     case 'KeyW':
     case 'ArrowUp':
@@ -243,4 +276,88 @@ export function resetPlane(): void {
  */
 export function setPlaneAltitude(altitude: number): void {
   planeState.altitude = Math.max(FLIGHT.MIN_ALTITUDE, Math.min(FLIGHT.MAX_ALTITUDE, altitude));
+}
+
+/**
+ * Reset plane after crash with terrain-aware altitude
+ * Spawns 100-200m above the current terrain level
+ */
+export function resetPlaneWithTerrainAwareness(terrainHeight: number): void {
+  // Randomize respawn height between MIN and MAX for variety
+  const respawnOffset = CRASH_RECOVERY.MIN_RESPAWN_HEIGHT +
+    Math.random() * (CRASH_RECOVERY.MAX_RESPAWN_HEIGHT - CRASH_RECOVERY.MIN_RESPAWN_HEIGHT);
+
+  const newAltitude = terrainHeight + respawnOffset;
+
+  planeState.altitude = Math.max(FLIGHT.MIN_ALTITUDE, Math.min(FLIGHT.MAX_ALTITUDE, newAltitude));
+  planeState.pitch = 0;
+  planeState.roll = 0;
+  planeState.speed = FLIGHT.DEFAULT_SPEED;
+
+  // Reset input time so autopilot doesn't immediately engage
+  lastInputTime = performance.now();
+}
+
+/**
+ * Check if autopilot should be active (no input for threshold duration)
+ */
+export function isAutopilotActive(): boolean {
+  return (performance.now() - lastInputTime) >= AUTOPILOT.IDLE_THRESHOLD;
+}
+
+/**
+ * Get time since last input in milliseconds
+ */
+export function getTimeSinceLastInput(): number {
+  return performance.now() - lastInputTime;
+}
+
+/**
+ * Apply autopilot altitude adjustment
+ * Gradually adjusts altitude to stay within safe range above terrain
+ */
+export function applyAutopilot(deltaTime: number, terrainHeight: number): void {
+  const currentAltitudeAboveTerrain = planeState.altitude - terrainHeight;
+
+  // Calculate target based on current position relative to safe range
+  let targetAltitudeAboveTerrain = AUTOPILOT.TARGET_ALTITUDE;
+
+  // If too low, climb
+  if (currentAltitudeAboveTerrain < AUTOPILOT.MIN_ALTITUDE) {
+    targetAltitudeAboveTerrain = AUTOPILOT.TARGET_ALTITUDE;
+  }
+  // If too high, descend gently
+  else if (currentAltitudeAboveTerrain > AUTOPILOT.MAX_ALTITUDE) {
+    targetAltitudeAboveTerrain = AUTOPILOT.TARGET_ALTITUDE;
+  }
+  // If in safe range, maintain (no adjustment needed)
+  else {
+    return;
+  }
+
+  const targetAltitude = terrainHeight + targetAltitudeAboveTerrain;
+  const altitudeDiff = targetAltitude - planeState.altitude;
+
+  // Apply gradual adjustment
+  const maxAdjustment = AUTOPILOT.ADJUSTMENT_RATE * deltaTime;
+  const adjustment = Math.sign(altitudeDiff) * Math.min(Math.abs(altitudeDiff), maxAdjustment);
+
+  planeState.altitude = Math.max(
+    FLIGHT.MIN_ALTITUDE,
+    Math.min(FLIGHT.MAX_ALTITUDE, planeState.altitude + adjustment)
+  );
+
+  // Also gently level the plane if autopilot is adjusting altitude
+  if (Math.abs(adjustment) > 0.01) {
+    // Pitch slightly up when climbing, down when descending
+    const targetPitch = adjustment > 0 ? 5 : -3;
+    planeState.pitch += (targetPitch - planeState.pitch) * 0.02;
+  }
+}
+
+/**
+ * Reset the last input time (used after crash recovery)
+ */
+export function resetInputTime(): void {
+  lastInputTime = performance.now();
 }

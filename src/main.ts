@@ -1,9 +1,22 @@
 import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin, updateSkySystem } from './scene.js';
-import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPlane, resetPlane, setMobileInput, setPlaneAltitude, PlaneState } from './plane.js';
+import {
+  initControls,
+  updatePlane,
+  getPlaneState,
+  setPlaneIdentity,
+  teleportPlane,
+  setMobileInput,
+  setPlaneAltitude,
+  resetPlaneWithTerrainAwareness,
+  isAutopilotActive,
+  applyAutopilot,
+  CRASH_RECOVERY,
+  PlaneState
+} from './plane.js';
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection, Connection, WelcomeMessage } from './network.js';
-import { checkCollision } from './collision.js';
-import { updateHUD, updatePlayerList, showCrashMessage, setTeleportToPlayerCallback } from './ui.js';
+import { checkCollision, getGroundHeight } from './collision.js';
+import { updateHUD, updatePlayerList, showCrashMessage, setTeleportToPlayerCallback, updateAutopilotIndicator } from './ui.js';
 import { initMinimap, updateMinimap } from './minimap.js';
 import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile, clearDistantWaterPolygonCache } from './tile-manager.js';
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
@@ -119,6 +132,11 @@ let localId = '';
 let localColor = '#3b82f6';
 let lastTime = 0;
 let isRunning = false;
+
+// Crash recovery state
+let isCrashRecovering = false;
+let crashRecoveryStartTime = 0;
+let pendingCrashTerrainHeight = 0;
 
 // FPS counter (development only)
 let fpsElement: HTMLDivElement | null = null;
@@ -328,6 +346,37 @@ function gameLoop(time: number): void {
   // Cap delta time to avoid physics issues
   const cappedDelta = Math.min(deltaTime, 0.1);
 
+  // Handle crash recovery pause
+  if (isCrashRecovering) {
+    const elapsedSinceCrash = time - crashRecoveryStartTime;
+
+    if (elapsedSinceCrash >= CRASH_RECOVERY.PAUSE_DURATION) {
+      // Recovery period complete - respawn above terrain
+      resetPlaneWithTerrainAwareness(pendingCrashTerrainHeight);
+      isCrashRecovering = false;
+    } else {
+      // Still in recovery pause - only update camera and render, skip physics
+      const planeState = getPlaneState();
+      followPlane(planeState);
+
+      // Keep updating remote players and rendering during pause
+      updateInterpolation(cappedDelta);
+      for (const [id] of players) {
+        if (id !== localId) {
+          const interpolated = getInterpolatedState(id);
+          if (interpolated) {
+            updatePlaneMesh(interpolated, id, interpolated.color);
+          }
+        }
+      }
+
+      updateSkySystem(cappedDelta);
+      render();
+      requestAnimationFrame(gameLoop);
+      return;
+    }
+  }
+
   // Update touch/button input each frame
   // Always update throttle button state (works on desktop too)
   // Joystick state will be 0 on desktop (no joystick created)
@@ -339,11 +388,27 @@ function gameLoop(time: number): void {
   // Get current state
   const planeState = getPlaneState();
 
+  // Get current terrain height for collision and autopilot
+  const terrainHeight = getGroundHeight(planeState.lng, planeState.lat);
+
   // Check for collisions
   if (checkCollision(planeState)) {
     showCrashMessage();
-    resetPlane();
+    // Start crash recovery pause instead of immediately resetting
+    isCrashRecovering = true;
+    crashRecoveryStartTime = time;
+    pendingCrashTerrainHeight = terrainHeight;
+    // Continue to next frame - recovery will be handled above
+    requestAnimationFrame(gameLoop);
+    return;
   }
+
+  // Apply autopilot if no input for threshold duration
+  const autopilotActive = isAutopilotActive();
+  if (autopilotActive) {
+    applyAutopilot(cappedDelta, terrainHeight);
+  }
+  updateAutopilotIndicator(autopilotActive);
 
   // Update camera to follow plane
   followPlane(planeState);

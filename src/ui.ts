@@ -3,6 +3,7 @@ import type { PlaneState } from './plane.js';
 
 let crashMessageTimeout: ReturnType<typeof setTimeout> | null = null;
 let connectionStatus: 'connected' | 'disconnected' | 'connecting' = 'connecting';
+let autopilotIndicator: HTMLDivElement | null = null;
 
 /**
  * Update connection status indicator
@@ -162,5 +163,45 @@ export function showCrashMessage(): void {
   crashMessageTimeout = setTimeout(() => {
     msg.style.display = 'none';
   }, 1500);
+}
+
+/**
+ * Initialize autopilot indicator
+ */
+function initAutopilotIndicator(): void {
+  if (autopilotIndicator) return;
+
+  autopilotIndicator = document.createElement('div');
+  autopilotIndicator.id = 'autopilot-indicator';
+  autopilotIndicator.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(34, 197, 94, 0.85);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 1000;
+    display: none;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  `;
+  autopilotIndicator.textContent = '✈ AUTOPILOT';
+  document.body.appendChild(autopilotIndicator);
+}
+
+/**
+ * Update autopilot indicator visibility
+ */
+export function updateAutopilotIndicator(isActive: boolean): void {
+  if (!autopilotIndicator) {
+    initAutopilotIndicator();
+  }
+  if (autopilotIndicator) {
+    autopilotIndicator.style.display = isActive ? 'block' : 'none';
+  }
 }
 
