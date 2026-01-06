@@ -349,8 +349,8 @@ export async function loadBaseTile(
     return [];
   }
 
-  // Check deduplication cache - key includes source and layer (null = all layers)
-  const dedupeKey = `base:${zoom}/${x}/${y}:null`;
+  // Check deduplication cache - key includes source and layer (__ALL__ = all layers)
+  const dedupeKey = `base:${zoom}/${x}/${y}:__ALL__`;
   const existingRequest = inFlightRequests.get(dedupeKey);
   if (existingRequest) {
     return existingRequest;

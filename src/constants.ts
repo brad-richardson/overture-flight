@@ -256,9 +256,11 @@ export interface TileConcurrencyConfig {
 }
 
 const defaultTileConcurrency = IS_MOBILE ? 2 : 3;
+const tileConcurrencyEnv = import.meta.env.VITE_TILE_CONCURRENCY;
+const parsedTileConcurrency = tileConcurrencyEnv ? parseInt(tileConcurrencyEnv, 10) : NaN;
 export const TILE_CONCURRENCY: TileConcurrencyConfig = {
-  ENABLED: import.meta.env.VITE_TILE_CONCURRENCY !== '0',
-  MAX_CONCURRENT: parseInt(import.meta.env.VITE_TILE_CONCURRENCY || '0', 10) || defaultTileConcurrency,
+  ENABLED: tileConcurrencyEnv !== '0',
+  MAX_CONCURRENT: Number.isNaN(parsedTileConcurrency) ? defaultTileConcurrency : parsedTileConcurrency,
 };
 
 // Network fetch concurrency settings
@@ -270,9 +272,11 @@ export interface FetchConcurrencyConfig {
 }
 
 const defaultFetchConcurrency = IS_MOBILE ? 4 : 6;
+const fetchConcurrencyEnv = import.meta.env.VITE_FETCH_CONCURRENCY;
+const parsedFetchConcurrency = fetchConcurrencyEnv ? parseInt(fetchConcurrencyEnv, 10) : NaN;
 export const FETCH_CONCURRENCY: FetchConcurrencyConfig = {
-  ENABLED: import.meta.env.VITE_FETCH_CONCURRENCY !== '0',
-  MAX_CONCURRENT: parseInt(import.meta.env.VITE_FETCH_CONCURRENCY || '0', 10) || defaultFetchConcurrency,
+  ENABLED: fetchConcurrencyEnv !== '0',
+  MAX_CONCURRENT: Number.isNaN(parsedFetchConcurrency) ? defaultFetchConcurrency : parsedFetchConcurrency,
 };
 
 // Performance profiling settings

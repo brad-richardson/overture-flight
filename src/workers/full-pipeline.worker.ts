@@ -72,13 +72,22 @@ type WorkerRequest = FullPipelineRequest | InitRequest | CapabilityRequest;
  * Initialize PMTiles sources (called once, lazy)
  */
 async function initializePMTiles(baseUrl: string, transportUrl: string): Promise<void> {
+  // Already initialized with matching URLs
   if (pmtilesInitialized && basePMTilesUrl === baseUrl && transportationPMTilesUrl === transportUrl) {
     return;
   }
 
+  // If there's a pending init, check if URLs match before awaiting
   if (pmtilesInitPromise) {
-    await pmtilesInitPromise;
-    return;
+    // URLs changed during pending init - wait for current to finish, then re-init
+    if (basePMTilesUrl !== baseUrl || transportationPMTilesUrl !== transportUrl) {
+      await pmtilesInitPromise;
+      // Reset and fall through to re-initialize with new URLs
+      pmtilesInitialized = false;
+    } else {
+      await pmtilesInitPromise;
+      return;
+    }
   }
 
   pmtilesInitPromise = (async () => {
@@ -350,10 +359,15 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       }
 
       default: {
+        // Safe extraction of id and type from unknown request
+        const unknownRequest = request as Record<string, unknown>;
+        const requestId = typeof unknownRequest.id === 'string' ? unknownRequest.id : 'unknown';
+        const requestType = typeof unknownRequest.type === 'string' ? unknownRequest.type : 'undefined';
+
         const response: WorkerResponse = {
           type: 'ERROR',
-          id: (request as { id?: string }).id || 'unknown',
-          error: `Unknown request type: ${(request as { type?: string }).type}`,
+          id: requestId,
+          error: `Unknown request type: ${requestType}`,
         };
         self.postMessage(response);
       }

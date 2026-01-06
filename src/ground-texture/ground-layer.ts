@@ -6,7 +6,7 @@ import { TerrainQuad } from './terrain-quad.js';
 import { loadBaseTile, loadTransportationTile, loadWaterPolygonsFromLowerZooms, tileToBounds } from '../tile-manager.js';
 import { getTerrainHeight } from '../elevation.js';
 import { getScene } from '../scene.js';
-import { GROUND_TEXTURE, ELEVATION, WORKERS, PROCESS_CHAINING, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
+import { GROUND_TEXTURE, ELEVATION, WORKERS, PROCESS_CHAINING, PROFILING, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
 import { storeFeatures, removeStoredFeatures } from '../feature-picker.js';
 import type { StoredFeature } from '../feature-picker.js';
 import { getWorkerPool, getFullPipelineWorkerPool } from '../workers/index.js';
@@ -288,7 +288,12 @@ async function createGroundForTileInner(
       // Use BUILDINGS priority (lowest) to avoid competing with critical Z14 tiles
       if (fastWaterMode) {
         loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ, TilePriority.BUILDINGS, false)
-          .catch(() => { /* ignore background load errors */ });
+          .catch((error) => {
+            // Log in dev/profiling mode for debugging
+            if (PROFILING.ENABLED || import.meta.env.DEV) {
+              console.warn(`[GroundLayer] Background z8/z6 water load failed for ${tileX}/${tileY}:`, error);
+            }
+          });
       }
 
       // Merge all features - lower zoom features go first (background)

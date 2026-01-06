@@ -1471,6 +1471,7 @@ export class FullPipelineWorkerPool {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private pmtilesInitialized = false;
+  private recoveringWorkers = new Set<number>(); // Prevent concurrent recovery of same worker
 
   constructor(private poolSize: number = getOptimalPoolSize()) {}
 
@@ -1533,6 +1534,12 @@ export class FullPipelineWorkerPool {
       };
 
       for (const state of this.workers) {
+        // Check if worker already signaled ready (race condition: READY arrived before this loop)
+        if (state.ready) {
+          checkReady();
+          continue;
+        }
+
         const originalHandler = state.worker.onmessage;
         state.worker.onmessage = (event) => {
           if (event.data.type === 'READY') {
@@ -1592,11 +1599,14 @@ export class FullPipelineWorkerPool {
   /**
    * Handle message from worker
    */
-  private handleMessage(_workerIndex: number, event: MessageEvent): void {
+  private handleMessage(workerIndex: number, event: MessageEvent): void {
     const response = event.data;
 
-    // Ignore READY signals in message handler (handled during init)
+    // Handle READY signals - mark worker as ready (may arrive before init waiting loop)
     if (response?.type === 'READY') {
+      if (this.workers[workerIndex]) {
+        this.workers[workerIndex].ready = true;
+      }
       return;
     }
 
@@ -1640,6 +1650,12 @@ export class FullPipelineWorkerPool {
     const state = this.workers[workerIndex];
     if (!state) return;
 
+    // Prevent concurrent recovery of the same worker
+    if (this.recoveringWorkers.has(workerIndex)) {
+      return;
+    }
+    this.recoveringWorkers.add(workerIndex);
+
     try {
       state.worker.terminate();
 
@@ -1659,18 +1675,23 @@ export class FullPipelineWorkerPool {
       };
 
       // Re-initialize PMTiles in the new worker if URLs are cached
-      if (this.pmtilesInitialized && this.cachedBasePMTilesUrl && this.cachedTransportationPMTilesUrl) {
+      // Capture URLs atomically to prevent partial reads during concurrent access
+      const baseUrl = this.cachedBasePMTilesUrl;
+      const transportUrl = this.cachedTransportationPMTilesUrl;
+      if (this.pmtilesInitialized && baseUrl && transportUrl) {
         newWorker.postMessage({
           type: 'INIT_PMTILES',
           id: crypto.randomUUID(),
           payload: {
-            basePMTilesUrl: this.cachedBasePMTilesUrl,
-            transportationPMTilesUrl: this.cachedTransportationPMTilesUrl,
+            basePMTilesUrl: baseUrl,
+            transportationPMTilesUrl: transportUrl,
           },
         });
       }
     } catch (error) {
       console.error(`Failed to recover full pipeline worker ${workerIndex}:`, error);
+    } finally {
+      this.recoveringWorkers.delete(workerIndex);
     }
   }
 
