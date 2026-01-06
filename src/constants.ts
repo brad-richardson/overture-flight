@@ -176,7 +176,7 @@ export interface GroundTextureConfig {
 }
 
 export const GROUND_TEXTURE: GroundTextureConfig = {
-  TEXTURE_SIZE: 2048,             // ~0.75m per pixel at z14 tiles (higher res)
+  TEXTURE_SIZE: 2048,             // ~1.2m/pixel at equator, ~0.85m/pixel at 45° latitude (z14 tiles)
   CACHE_MAX_SIZE: 100,            // 100 tiles = ~1.6GB GPU memory (increased for high-velocity turns)
   CACHE_DISPOSE_THRESHOLD: 80,    // Start evicting at 80 tiles
   TERRAIN_QUAD_SEGMENTS: 16,      // 16x16 subdivisions for elevation
@@ -201,6 +201,6 @@ export const LOW_DETAIL_TERRAIN: LowDetailTerrainConfig = {
   TILE_RADIUS: 2,                 // 5x5 grid = ~120km x 120km coverage
   TEXTURE_SIZE: 1024,             // Lower resolution (half of Z14)
   TERRAIN_QUAD_SEGMENTS: 8,       // Fewer subdivisions for performance
-  Y_OFFSET: -5,                   // 5m below Z14 layer
+  Y_OFFSET: -0.5,                 // 0.5m below Z14 layer (small offset, stencil does the real masking)
   UNLOAD_DISTANCE: 4,             // Chebyshev distance for unloading
 };

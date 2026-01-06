@@ -332,7 +332,6 @@ export function renderTileTexture(
   const waterLineFeatures: ParsedFeature[] = [];
   const waterBodyFeatures: ParsedFeature[] = [];
   const oceanFeatures: ParsedFeature[] = [];
-  const bathymetryFeatures: ParsedFeature[] = [];
 
   // Ocean/sea subtypes that indicate coastal water
   const OCEAN_SUBTYPES = ['ocean', 'sea', 'bay', 'strait', 'gulf', 'sound', 'harbour', 'harbor'];
@@ -369,10 +368,8 @@ export function renderTileTexture(
           waterBodyFeatures.push(feature);
         }
       }
-    } else if (layer === 'bathymetry') {
-      // Disable bathymetry for now - it covers inland areas incorrectly
-      // TODO: Figure out proper bathymetry handling for coastal areas
     }
+    // Note: bathymetry layer intentionally skipped - covers inland areas incorrectly
   }
 
   // Detect if this is an open ocean tile (has ocean features but minimal land)
@@ -449,18 +446,6 @@ export function renderTileTexture(
   // Draw inland water bodies on top (lakes, ponds, rivers)
   for (const feature of waterBodyFeatures) {
     const color = getColorForFeature('water', feature.properties);
-    ctx.fillStyle = hexToCSS(color);
-    drawPolygon(ctx, feature.coordinates as number[][][] | number[][][][], feature.type, geoToCanvas);
-    ctx.fill('evenodd');
-  }
-  ctx.restore();
-
-  // === Layer 5b: Bathymetry (ocean depths) ===
-  ctx.save();
-  for (const feature of bathymetryFeatures) {
-    if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') continue;
-
-    const color = getColorForFeature('bathymetry', feature.properties);
     ctx.fillStyle = hexToCSS(color);
     drawPolygon(ctx, feature.coordinates as number[][][] | number[][][][], feature.type, geoToCanvas);
     ctx.fill('evenodd');

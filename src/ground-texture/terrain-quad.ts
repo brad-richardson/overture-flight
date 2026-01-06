@@ -10,6 +10,9 @@ export class TerrainQuad {
   private geometry: THREE.PlaneGeometry;
   private material: THREE.MeshStandardMaterial;
   private mesh: THREE.Mesh;
+  private overlap: number;
+  private originalWidth: number;
+  private originalHeight: number;
 
   constructor(bounds: TileBounds, segments: number = GROUND_TEXTURE.TERRAIN_QUAD_SEGMENTS) {
     // Calculate world dimensions
@@ -19,13 +22,17 @@ export class TerrainQuad {
     const width = se.x - nw.x;
     const height = se.z - nw.z; // Note: z increases going south
 
+    // Store original dimensions for UV calculation
+    this.originalWidth = Math.abs(width);
+    this.originalHeight = Math.abs(height);
+
     // Add small overlap (2 meters) to prevent gaps between tiles
-    const overlap = 2.0;
+    this.overlap = 2.0;
 
     // Create subdivided plane with overlap
     this.geometry = new THREE.PlaneGeometry(
-      Math.abs(width) + overlap * 2,
-      Math.abs(height) + overlap * 2,
+      this.originalWidth + this.overlap * 2,
+      this.originalHeight + this.overlap * 2,
       segments,
       segments
     );
@@ -50,17 +57,34 @@ export class TerrainQuad {
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;
 
-    // Store UV mapping for texture coordinates
+    // Adjust UV mapping for overlap
     this.setupUVs();
   }
 
   /**
    * Set up UV coordinates for the quad
+   * Adjusts UVs so the texture maps to the original tile bounds,
+   * with overlap region using clamped edge pixels
    */
   private setupUVs(): void {
     const uvs = this.geometry.attributes.uv;
-    // PlaneGeometry already has UVs from 0-1, which is what we want
-    // Just ensure they're correct after rotation
+    const expandedWidth = this.originalWidth + this.overlap * 2;
+    const expandedHeight = this.originalHeight + this.overlap * 2;
+
+    // Calculate UV offset and scale to map original bounds to 0-1
+    // Overlap areas will have UVs slightly outside 0-1, clamped to edge pixels
+    const uScale = expandedWidth / this.originalWidth;
+    const vScale = expandedHeight / this.originalHeight;
+    const uOffset = this.overlap / this.originalWidth;
+    const vOffset = this.overlap / this.originalHeight;
+
+    for (let i = 0; i < uvs.count; i++) {
+      const u = uvs.getX(i);
+      const v = uvs.getY(i);
+      // Remap: original 0-1 spans the expanded geometry
+      // We want the center (original tile) to map to 0-1
+      uvs.setXY(i, u * uScale - uOffset, v * vScale - vOffset);
+    }
     uvs.needsUpdate = true;
   }
 

@@ -13,6 +13,9 @@ import type { StoredFeature } from '../feature-picker.js';
 // Active ground tiles
 const activeTiles = new Map<string, GroundTileData>();
 
+// Track tiles currently being loaded to prevent race conditions
+const loadingTiles = new Set<string>();
+
 // Texture cache (initialized lazily)
 let textureCache: TileTextureCache | null = null;
 
@@ -46,10 +49,18 @@ export async function createGroundForTile(
 
   const key = `ground-${tileZ}/${tileX}/${tileY}`;
 
-  // Check if already loading or loaded
+  // Check if already loaded
   if (activeTiles.has(key)) {
     return activeTiles.get(key)!.group;
   }
+
+  // Check if currently loading (prevent race condition)
+  if (loadingTiles.has(key)) {
+    return null;
+  }
+
+  // Mark as loading
+  loadingTiles.add(key);
 
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const cache = getCache();
@@ -147,7 +158,8 @@ export async function createGroundForTile(
   // Mark texture as in-use so it won't be evicted while bound to this tile
   cache.markInUse(key);
 
-  // Enable stencil writing so Z10 tiles are masked where Z14 exists
+  // Enable stencil writing: Z14 high-detail tiles write to stencil buffer,
+  // which masks Z10 low-detail tiles from rendering in the same area
   quad.enableStencilWrite();
 
   // Create group
@@ -166,6 +178,9 @@ export async function createGroundForTile(
 
   // Add to scene
   scene.add(group);
+
+  // Mark loading complete
+  loadingTiles.delete(key);
 
   return group;
 }

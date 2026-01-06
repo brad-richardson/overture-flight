@@ -19,6 +19,9 @@ interface TileInfo {
 // Active low-detail ground tiles
 const activeLowDetailTiles = new Map<string, GroundTileData>();
 
+// Track tiles currently being loaded to prevent race conditions
+const loadingLowDetailTiles = new Set<string>();
+
 // Texture cache for low-detail tiles (separate from high-detail)
 let lowDetailTextureCache: TileTextureCache | null = null;
 
@@ -52,10 +55,18 @@ export async function createLowDetailGroundForTile(
 
   const key = `lowdetail-${tileZ}/${tileX}/${tileY}`;
 
-  // Check if already loading or loaded
+  // Check if already loaded
   if (activeLowDetailTiles.has(key)) {
     return activeLowDetailTiles.get(key)!.group;
   }
+
+  // Check if currently loading (prevent race condition)
+  if (loadingLowDetailTiles.has(key)) {
+    return null;
+  }
+
+  // Mark as loading
+  loadingLowDetailTiles.add(key);
 
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const cache = getLowDetailCache();
@@ -129,6 +140,9 @@ export async function createLowDetailGroundForTile(
 
   // Add to scene
   scene.add(group);
+
+  // Mark loading complete
+  loadingLowDetailTiles.delete(key);
 
   return group;
 }

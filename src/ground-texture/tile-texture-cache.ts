@@ -158,9 +158,10 @@ export class TileTextureCache {
       index++;
     }
 
-    if (evicted > 0) {
-      console.log(`TileTextureCache: Evicted ${evicted} textures (LRU), ${this.inUseTextures.size} protected`);
-    }
+    // Debug logging removed for production - uncomment for debugging cache behavior
+    // if (evicted > 0) {
+    //   console.log(`TileTextureCache: Evicted ${evicted} textures (LRU), ${this.inUseTextures.size} protected`);
+    // }
   }
 }
 
@@ -169,10 +170,12 @@ let cacheInstance: TileTextureCache | null = null;
 
 /**
  * Get the shared texture cache instance
+ * NOTE: Prefer using initTextureCache() first to set proper config values.
+ * This fallback uses defaults that may not match GROUND_TEXTURE constants.
  */
 export function getTextureCache(): TileTextureCache {
   if (!cacheInstance) {
-    // Import will be done in ground-layer.ts after constants are available
+    console.warn('TileTextureCache: Using default values. Call initTextureCache() first for proper config.');
     cacheInstance = new TileTextureCache({
       maxSize: 100,
       disposeThreshold: 80,
