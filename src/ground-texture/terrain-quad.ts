@@ -172,7 +172,11 @@ export class TerrainQuad {
     this.material.stencilRef = 1;
     this.material.stencilFunc = THREE.AlwaysStencilFunc;
     this.material.stencilFail = THREE.KeepStencilOp;
-    this.material.stencilZFail = THREE.KeepStencilOp;
+    // Use ReplaceStencilOp for stencilZFail to write stencil even when depth test fails.
+    // This is critical for steep terrain where overlapping Z14 tiles may fail depth
+    // tests against each other in the overlap region, but we still need stencil=1
+    // written to prevent Z10 low-detail tiles from showing through.
+    this.material.stencilZFail = THREE.ReplaceStencilOp;
     this.material.stencilZPass = THREE.ReplaceStencilOp;
   }
 
