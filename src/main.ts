@@ -9,9 +9,10 @@ import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile, clearDis
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
+import { createGroundForTile, removeGroundGroup, clearAllGroundTiles } from './ground-texture/index.js';
 import { createTreesForTile, removeTreesGroup } from './tree-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
-import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT } from './constants.js';
+import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE } from './constants.js';
 import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
 import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
 import { initFeatureModal, showFeatureModal } from './feature-modal.js';
@@ -24,6 +25,7 @@ interface TileMeshes {
   base: THREE.Group | null;
   transportation: THREE.Group | null;
   trees: THREE.Group | null;
+  ground: THREE.Group | null; // New texture-based ground rendering
 }
 
 // URL location tracking - store last hash to detect meaningful changes
@@ -111,6 +113,44 @@ let localColor = '#3b82f6';
 let lastTime = 0;
 let isRunning = false;
 
+// FPS counter (development only)
+let fpsElement: HTMLDivElement | null = null;
+let frameCount = 0;
+let fpsLastTime = 0;
+
+function initFpsCounter(): void {
+  if (!import.meta.env.DEV) return;
+
+  fpsElement = document.createElement('div');
+  fpsElement.style.cssText = `
+    position: fixed;
+    top: 8px;
+    right: 8px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #0f0;
+    font-family: monospace;
+    font-size: 14px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    z-index: 9999;
+  `;
+  document.body.appendChild(fpsElement);
+}
+
+function updateFpsCounter(time: number): void {
+  if (!fpsElement) return;
+
+  frameCount++;
+  const elapsed = time - fpsLastTime;
+
+  if (elapsed >= 1000) {
+    const fps = Math.round((frameCount * 1000) / elapsed);
+    fpsElement.textContent = `${fps} FPS`;
+    frameCount = 0;
+    fpsLastTime = time;
+  }
+}
+
 /**
  * Generate a unique local ID for offline/single-player mode
  */
@@ -146,7 +186,7 @@ async function updateTiles(
 
     loadingTiles.add(tile.key);
 
-    // Load base layer, buildings, transportation, and trees in parallel
+    // Load layers in parallel
     // Wrap tree creation to isolate failures - trees are optional, other layers are critical
     const safeCreateTrees = async () => {
       try {
@@ -157,23 +197,46 @@ async function updateTiles(
       }
     };
 
-    Promise.all([
-      createBaseLayerForTile(tile.x, tile.y, tile.z),
-      createBuildingsForTile(tile.x, tile.y, tile.z),
-      createTransportationForTile(tile.x, tile.y, tile.z),
-      safeCreateTrees()
-    ]).then(([baseGroup, buildingsGroup, transportationGroup, treesGroup]) => {
-      tileMeshes.set(tile.key, {
-        base: baseGroup,
-        buildings: buildingsGroup,
-        transportation: transportationGroup,
-        trees: treesGroup
+    // Use new texture-based ground rendering if enabled
+    if (GROUND_TEXTURE.ENABLED) {
+      Promise.all([
+        createGroundForTile(tile.x, tile.y, tile.z),
+        createBuildingsForTile(tile.x, tile.y, tile.z),
+        safeCreateTrees()
+      ]).then(([groundGroup, buildingsGroup, treesGroup]) => {
+        tileMeshes.set(tile.key, {
+          ground: groundGroup,
+          base: null,
+          transportation: null,
+          buildings: buildingsGroup,
+          trees: treesGroup
+        });
+        loadingTiles.delete(tile.key);
+      }).catch(e => {
+        console.warn(`Failed to load tile ${tile.key}:`, e);
+        loadingTiles.delete(tile.key);
       });
-      loadingTiles.delete(tile.key);
-    }).catch(e => {
-      console.warn(`Failed to load tile ${tile.key}:`, e);
-      loadingTiles.delete(tile.key);
-    });
+    } else {
+      // Legacy polygon-based rendering
+      Promise.all([
+        createBaseLayerForTile(tile.x, tile.y, tile.z),
+        createBuildingsForTile(tile.x, tile.y, tile.z),
+        createTransportationForTile(tile.x, tile.y, tile.z),
+        safeCreateTrees()
+      ]).then(([baseGroup, buildingsGroup, transportationGroup, treesGroup]) => {
+        tileMeshes.set(tile.key, {
+          ground: null,
+          base: baseGroup,
+          buildings: buildingsGroup,
+          transportation: transportationGroup,
+          trees: treesGroup
+        });
+        loadingTiles.delete(tile.key);
+      }).catch(e => {
+        console.warn(`Failed to load tile ${tile.key}:`, e);
+        loadingTiles.delete(tile.key);
+      });
+    }
   }
 
   // Unload distant tiles
@@ -181,9 +244,13 @@ async function updateTiles(
   for (const key of tilesToUnload) {
     const meshes = tileMeshes.get(key);
     if (meshes) {
+      // New texture-based ground
+      if (meshes.ground) removeGroundGroup(meshes.ground);
+      // Legacy polygon-based rendering
       if (meshes.base) removeBaseLayerGroup(meshes.base);
-      if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
       if (meshes.transportation) removeTransportationGroup(meshes.transportation);
+      // Common to both
+      if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
       if (meshes.trees) removeTreesGroup(meshes.trees);
       tileMeshes.delete(key);
     }
@@ -204,6 +271,9 @@ async function updateTiles(
  */
 function gameLoop(time: number): void {
   if (!isRunning) return;
+
+  // Update FPS counter (development only)
+  updateFpsCounter(time);
 
   // Calculate delta time
   const deltaTime = lastTime ? (time - lastTime) / 1000 : 0.016;
@@ -362,9 +432,13 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
     if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
     if (meshes.transportation) removeTransportationGroup(meshes.transportation);
     if (meshes.trees) removeTreesGroup(meshes.trees);
+    if (meshes.ground) removeGroundGroup(meshes.ground);
     removeTile(key);
   }
   tileMeshes.clear();
+
+  // Clear ground texture tiles and cache
+  clearAllGroundTiles();
 
   // Clear stored features for click picking
   clearAllFeatures();
@@ -464,6 +538,9 @@ async function init(): Promise<void> {
 
     // Initialize Three.js scene
     await initScene();
+
+    // Initialize FPS counter (development only)
+    initFpsCounter();
 
     // Initialize tile manager (PMTiles sources)
     const tileStatus = await initTileManager();

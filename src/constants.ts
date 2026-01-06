@@ -164,3 +164,21 @@ export const ELEVATION: ElevationConfig = {
   TERRAIN_ENABLED: true,      // Enable/disable terrain elevation
   VERTICAL_EXAGGERATION: 1.0, // Multiply elevation values (1.0 = realistic)
 };
+
+// Ground texture rendering settings
+// Renders vector tiles (land, water, roads) to cached textures
+export interface GroundTextureConfig {
+  TEXTURE_SIZE: number;           // Texture resolution (width and height in pixels)
+  CACHE_MAX_SIZE: number;         // Maximum number of textures to cache
+  CACHE_DISPOSE_THRESHOLD: number; // Start evicting when cache reaches this size
+  TERRAIN_QUAD_SEGMENTS: number;  // Subdivisions for terrain-following quads
+  ENABLED: boolean;               // Enable/disable texture-based ground rendering
+}
+
+export const GROUND_TEXTURE: GroundTextureConfig = {
+  TEXTURE_SIZE: 2048,             // ~0.75m per pixel at z14 tiles (higher res)
+  CACHE_MAX_SIZE: 50,             // 50 tiles = ~800MB GPU memory (larger textures)
+  CACHE_DISPOSE_THRESHOLD: 40,    // Start evicting at 40 tiles
+  TERRAIN_QUAD_SEGMENTS: 16,      // 16x16 subdivisions for elevation
+  ENABLED: true,                  // Toggle between new/old rendering
+};
