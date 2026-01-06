@@ -30,10 +30,12 @@ export const CRASH_RECOVERY = {
  */
 export const AUTOPILOT = {
   IDLE_THRESHOLD: 30000,     // ms of no input before autopilot engages
-  MIN_ALTITUDE: 100,         // meters above terrain - target minimum
+  MIN_ALTITUDE: 150,         // meters above terrain - target minimum (increased for safety)
   MAX_ALTITUDE: 1000,        // meters above terrain - target maximum
-  ADJUSTMENT_RATE: 5,        // meters per second altitude adjustment
+  ADJUSTMENT_RATE: 15,       // meters per second altitude adjustment (increased for faster response)
+  EMERGENCY_RATE: 30,        // meters per second when dangerously low
   TARGET_ALTITUDE: 300,      // preferred cruising altitude above terrain
+  DANGER_THRESHOLD: 100,     // below this triggers emergency climb
 };
 
 // Track last input time for autopilot
@@ -315,22 +317,33 @@ export function getTimeSinceLastInput(): number {
 /**
  * Apply autopilot altitude adjustment
  * Gradually adjusts altitude to stay within safe range above terrain
+ * Uses emergency rate when dangerously close to terrain
  */
 export function applyAutopilot(deltaTime: number, terrainHeight: number): void {
   const currentAltitudeAboveTerrain = planeState.altitude - terrainHeight;
 
-  // Calculate target based on current position relative to safe range
+  // Determine if we need to adjust and how urgently
   let targetAltitudeAboveTerrain = AUTOPILOT.TARGET_ALTITUDE;
+  let adjustmentRate = AUTOPILOT.ADJUSTMENT_RATE;
+  let targetPitch = 0;
 
-  // If too low, climb
-  if (currentAltitudeAboveTerrain < AUTOPILOT.MIN_ALTITUDE) {
+  // Emergency climb - dangerously low
+  if (currentAltitudeAboveTerrain < AUTOPILOT.DANGER_THRESHOLD) {
     targetAltitudeAboveTerrain = AUTOPILOT.TARGET_ALTITUDE;
+    adjustmentRate = AUTOPILOT.EMERGENCY_RATE;
+    targetPitch = 15; // Aggressive pitch up
   }
-  // If too high, descend gently
+  // Normal climb - below minimum safe altitude
+  else if (currentAltitudeAboveTerrain < AUTOPILOT.MIN_ALTITUDE) {
+    targetAltitudeAboveTerrain = AUTOPILOT.TARGET_ALTITUDE;
+    targetPitch = 8; // Moderate pitch up
+  }
+  // Descend - too high
   else if (currentAltitudeAboveTerrain > AUTOPILOT.MAX_ALTITUDE) {
     targetAltitudeAboveTerrain = AUTOPILOT.TARGET_ALTITUDE;
+    targetPitch = -5; // Gentle pitch down
   }
-  // If in safe range, maintain (no adjustment needed)
+  // In safe range - no adjustment needed
   else {
     return;
   }
@@ -338,8 +351,8 @@ export function applyAutopilot(deltaTime: number, terrainHeight: number): void {
   const targetAltitude = terrainHeight + targetAltitudeAboveTerrain;
   const altitudeDiff = targetAltitude - planeState.altitude;
 
-  // Apply gradual adjustment
-  const maxAdjustment = AUTOPILOT.ADJUSTMENT_RATE * deltaTime;
+  // Apply adjustment based on urgency
+  const maxAdjustment = adjustmentRate * deltaTime;
   const adjustment = Math.sign(altitudeDiff) * Math.min(Math.abs(altitudeDiff), maxAdjustment);
 
   planeState.altitude = Math.max(
@@ -347,11 +360,11 @@ export function applyAutopilot(deltaTime: number, terrainHeight: number): void {
     Math.min(FLIGHT.MAX_ALTITUDE, planeState.altitude + adjustment)
   );
 
-  // Also gently level the plane if autopilot is adjusting altitude
+  // Adjust pitch based on climb/descend needs
   if (Math.abs(adjustment) > 0.01) {
-    // Pitch slightly up when climbing, down when descending
-    const targetPitch = adjustment > 0 ? 5 : -3;
-    planeState.pitch += (targetPitch - planeState.pitch) * 0.02;
+    // Faster pitch response when in emergency mode
+    const pitchRate = currentAltitudeAboveTerrain < AUTOPILOT.DANGER_THRESHOLD ? 0.08 : 0.03;
+    planeState.pitch += (targetPitch - planeState.pitch) * pitchRate;
   }
 }
 
