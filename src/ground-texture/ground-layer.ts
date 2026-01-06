@@ -7,6 +7,8 @@ import { loadBaseTile, loadTransportationTile, loadWaterPolygonsFromLowerZooms, 
 import { getTerrainHeight } from '../elevation.js';
 import { getScene } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
+import { storeFeatures, removeStoredFeatures } from '../feature-picker.js';
+import type { StoredFeature } from '../feature-picker.js';
 
 // Active ground tiles
 const activeTiles = new Map<string, GroundTileData>();
@@ -55,11 +57,34 @@ export async function createGroundForTile(
   // Try to get texture from cache
   let texture = cache.get(key);
 
+  // Always load features for the current tile (needed for click picking)
+  // Even if texture is cached, we need features for interaction
+  const [currentTileBase, currentTileTransport] = await Promise.all([
+    loadBaseTile(tileX, tileY, tileZ),
+    loadTransportationTile(tileX, tileY, tileZ),
+  ]);
+
+  // Store features for click picking (only from current tile, not neighbors)
+  const pickableFeatures = [...currentTileBase, ...currentTileTransport];
+  const storedFeatures: StoredFeature[] = pickableFeatures
+    .filter(f => f.type === 'Polygon' || f.type === 'MultiPolygon' ||
+                 f.type === 'LineString' || f.type === 'MultiLineString')
+    .map(f => ({
+      type: f.type as StoredFeature['type'],
+      coordinates: f.coordinates as StoredFeature['coordinates'],
+      properties: f.properties || {},
+      layer: f.layer || 'unknown',
+      tileKey: key
+    }));
+  storeFeatures(key, storedFeatures);
+
   if (!texture) {
-    // Load features from current tile AND surrounding tiles (3x3 grid)
+    // Load features from surrounding tiles (3x3 grid) for texture rendering
     const neighborOffsets: [number, number][] = [];
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
+        // Skip center tile - already loaded above
+        if (dx === 0 && dy === 0) continue;
         neighborOffsets.push([dx, dy]);
       }
     }
@@ -84,7 +109,7 @@ export async function createGroundForTile(
     // Load water polygons from even lower zoom levels (z8-z10) for ocean coverage
     const lowerZoomWaterPromise = loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ);
 
-    const [allResults, lowerZoomFeatures, lowerZoomWater] = await Promise.all([
+    const [neighborResults, lowerZoomFeatures, lowerZoomWater] = await Promise.all([
       Promise.all(loadPromises),
       lowerZoomPromise,
       lowerZoomWaterPromise,
@@ -95,9 +120,13 @@ export async function createGroundForTile(
     const baseFeatures = [
       ...lowerZoomWater,
       ...lowerZoomFeatures,
-      ...allResults.flatMap(([base]) => base),
+      ...currentTileBase,
+      ...neighborResults.flatMap(([base]) => base),
     ];
-    const transportFeatures = allResults.flatMap(([, transport]) => transport);
+    const transportFeatures = [
+      ...currentTileTransport,
+      ...neighborResults.flatMap(([, transport]) => transport),
+    ];
 
     // Render to texture (canvas will clip features outside bounds)
     texture = renderTileTexture(baseFeatures, transportFeatures, bounds);
@@ -152,6 +181,9 @@ export function removeGroundGroup(group: THREE.Group): void {
     // Unmark texture as in-use so it can be evicted if needed
     const cache = getCache();
     cache.unmarkInUse(key);
+
+    // Remove stored features for click picking
+    removeStoredFeatures(key);
 
     // Dispose quad resources (but not texture - it's cached)
     const mesh = group.children[0] as THREE.Mesh;
