@@ -301,13 +301,18 @@ function drawSingleLine(
 
 /**
  * Render all features for a tile to a canvas texture
+ * @param baseFeatures - Base layer features (land, water, etc.)
+ * @param transportFeatures - Transportation features (roads, etc.)
+ * @param bounds - Tile bounds
+ * @param textureSize - Optional texture size (defaults to GROUND_TEXTURE.TEXTURE_SIZE)
  */
 export function renderTileTexture(
   baseFeatures: ParsedFeature[],
   transportFeatures: ParsedFeature[],
-  bounds: TileBounds
+  bounds: TileBounds,
+  textureSize?: number
 ): THREE.CanvasTexture {
-  const size = GROUND_TEXTURE.TEXTURE_SIZE;
+  const size = textureSize ?? GROUND_TEXTURE.TEXTURE_SIZE;
 
   // Create canvas
   const canvas = document.createElement('canvas');

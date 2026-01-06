@@ -11,6 +11,23 @@ export {
   getGroundCacheStats,
 } from './ground-layer.js';
 
+export {
+  queueExpandedTile,
+  createExpandedGroundForTile,
+  removeExpandedTile,
+  removeExpandedGroundGroup,
+  promoteExpandedToCore,
+  demoteFromCore,
+  getExpandedTilesToLoad,
+  getExpandedTilesToUnload,
+  pruneExpandedQueue,
+  hasExpandedTile,
+  getActiveExpandedTileCount,
+  getExpandedQueueLength,
+  clearAllExpandedTiles,
+  getExpandedCacheStats,
+} from './expanded-ground-layer.js';
+
 export { TileTextureCache, getTextureCache, initTextureCache } from './tile-texture-cache.js';
 export { renderTileTexture } from './tile-texture-renderer.js';
 export { TerrainQuad, createElevationTexture } from './terrain-quad.js';

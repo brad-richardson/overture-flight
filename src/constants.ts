@@ -213,6 +213,29 @@ export const LOW_DETAIL_TERRAIN: LowDetailTerrainConfig = {
   UNLOAD_DISTANCE: 4,             // Chebyshev distance for unloading
 };
 
+// Expanded terrain settings (Z14 terrain-only outer ring)
+// Loads a larger area of terrain/texture without buildings for extended visibility
+// Helps avoid "edge of world" when flying
+export interface ExpandedTerrainConfig {
+  ENABLED: boolean;               // Enable/disable expanded terrain loading
+  TILE_RADIUS: number;            // Radius for expanded terrain (4 = 9x9 grid total)
+  CORE_RADIUS: number;            // Core radius with buildings (1 = 3x3 grid)
+  MAX_CONCURRENT: number;         // Max expanded tiles to process at once
+  UNLOAD_DISTANCE: number;        // Chebyshev distance for unloading expanded tiles
+  CACHE_MAX_SIZE: number;         // Dedicated cache size for expanded tiles
+  TEXTURE_SIZE: number;           // Texture resolution for expanded tiles
+}
+
+export const EXPANDED_TERRAIN: ExpandedTerrainConfig = {
+  ENABLED: true,
+  TILE_RADIUS: 4,                 // 9x9 grid total (2*4+1 = 9)
+  CORE_RADIUS: 1,                 // 3x3 core with buildings (2*1+1 = 3)
+  MAX_CONCURRENT: 1,              // Process only 1 expanded tile at a time
+  UNLOAD_DISTANCE: 6,             // Slightly beyond load radius for hysteresis
+  CACHE_MAX_SIZE: IS_MOBILE ? 40 : 80, // Dedicated cache for expanded tiles
+  TEXTURE_SIZE: IS_MOBILE ? 512 : 1024, // Lower resolution for distant tiles
+};
+
 // Web Worker settings for tile rendering
 // Offloads CPU-intensive work to background threads
 export interface WorkersConfig {

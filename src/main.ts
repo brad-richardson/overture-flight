@@ -22,7 +22,17 @@ import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile, clearDis
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
-import { createGroundForTile, removeGroundGroup, clearAllGroundTiles } from './ground-texture/index.js';
+import {
+  createGroundForTile,
+  removeGroundGroup,
+  clearAllGroundTiles,
+  queueExpandedTile,
+  getExpandedTilesToLoad,
+  getExpandedTilesToUnload,
+  pruneExpandedQueue,
+  removeExpandedTile,
+  clearAllExpandedTiles,
+} from './ground-texture/index.js';
 import {
   createLowDetailGroundForTile,
   removeLowDetailGroundGroup,
@@ -32,7 +42,7 @@ import {
 } from './ground-texture/low-detail-ground-layer.js';
 import { createTreesForTile, removeTreesGroup } from './tree-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
-import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE, LOW_DETAIL_TERRAIN } from './constants.js';
+import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE, LOW_DETAIL_TERRAIN, EXPANDED_TERRAIN } from './constants.js';
 import { getLoadingGate } from './loading-gate.js';
 import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
 import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
@@ -141,10 +151,15 @@ let crashRecoveryStartTime = 0;
 // Autopilot indicator state (track previous state to avoid unnecessary DOM updates)
 let wasAutopilotActive = false;
 
-// FPS counter (development only)
+// FPS tracking (always active for performance gating, display only in dev)
 let fpsElement: HTMLDivElement | null = null;
 let frameCount = 0;
 let fpsLastTime = 0;
+let currentFps = 60; // Start optimistic, will converge quickly
+
+// FPS thresholds for performance gating
+const EXPANDED_TERRAIN_MIN_FPS = 30;  // Don't load expanded terrain below this
+const CRITICAL_FPS_THRESHOLD = 15;    // Throttle core tile loading below this
 
 function initFpsCounter(): void {
   if (!import.meta.env.DEV) return;
@@ -165,15 +180,22 @@ function initFpsCounter(): void {
   document.body.appendChild(fpsElement);
 }
 
-function updateFpsCounter(time: number): void {
-  if (!fpsElement) return;
+function updateFpsTracking(time: number): void {
+  // Initialize on first call to avoid incorrect FPS calculation
+  // Without this, elapsed would be huge (time since page load) causing very low FPS
+  if (fpsLastTime === 0) {
+    fpsLastTime = time;
+    return;
+  }
 
   frameCount++;
   const elapsed = time - fpsLastTime;
 
   if (elapsed >= 1000) {
-    const fps = Math.round((frameCount * 1000) / elapsed);
-    fpsElement.textContent = `${fps} FPS`;
+    currentFps = Math.round((frameCount * 1000) / elapsed);
+    if (fpsElement) {
+      fpsElement.textContent = `${currentFps} FPS`;
+    }
     frameCount = 0;
     fpsLastTime = time;
   }
@@ -209,10 +231,20 @@ async function updateTiles(
 ): Promise<void> {
   const tilesToLoad = getTilesToLoad(lng, lat, heading, speed);
 
+  // Throttle core tile loading when FPS is critically low
+  // This helps prevent a "death spiral" where loading causes more FPS drop
+  const shouldThrottleCoreTiles = currentFps < CRITICAL_FPS_THRESHOLD && currentFps > 0;
+
   // Load new tiles
   for (const tile of tilesToLoad) {
     // Skip if already loaded or currently loading
     if (tileMeshes.has(tile.key) || loadingTiles.has(tile.key)) {
+      continue;
+    }
+
+    // When FPS is critical, skip loading new tiles to let system recover
+    // Existing tiles remain visible, and loading resumes when FPS recovers
+    if (shouldThrottleCoreTiles) {
       continue;
     }
 
@@ -301,6 +333,31 @@ async function updateTiles(
   // Clean up distant water polygon cache
   clearDistantWaterPolygonCache(lat, lng);
 
+  // === Expanded terrain loading (Z14 outer ring, no buildings) ===
+  // Loads terrain + roads for a larger area to avoid "edge of world"
+  // Only load when FPS is above threshold to avoid adding load when struggling
+  if (EXPANDED_TERRAIN.ENABLED && GROUND_TEXTURE.ENABLED && currentFps >= EXPANDED_TERRAIN_MIN_FPS) {
+    // Build set of core tile keys (tiles that get full processing with buildings)
+    const coreTileKeys = new Set(tilesToLoad.map(t => t.key));
+
+    // Get expanded tiles (outer ring excluding core)
+    const expandedTilesToLoad = getExpandedTilesToLoad(lng, lat, coreTileKeys);
+
+    // Queue expanded tiles for background loading (1 at a time, lowest priority)
+    for (const tile of expandedTilesToLoad) {
+      queueExpandedTile(tile);
+    }
+
+    // Unload distant expanded tiles
+    const expandedTilesToUnload = getExpandedTilesToUnload(lng, lat);
+    for (const key of expandedTilesToUnload) {
+      removeExpandedTile(key);
+    }
+
+    // Prune queue of out-of-range tiles to avoid unnecessary work
+    pruneExpandedQueue(lng, lat);
+  }
+
   // === Low-detail (Z10) tile loading for distant terrain ===
   if (LOW_DETAIL_TERRAIN.ENABLED && GROUND_TEXTURE.ENABLED) {
     // Load new Z10 tiles
@@ -308,6 +365,11 @@ async function updateTiles(
     for (const tile of z10TilesToLoad) {
       // Skip if already loaded or currently loading
       if (lowDetailTileMeshes.has(tile.key) || loadingLowDetailTiles.has(tile.key)) {
+        continue;
+      }
+
+      // Skip loading when FPS is critical (same as core tiles)
+      if (shouldThrottleCoreTiles) {
         continue;
       }
 
@@ -343,8 +405,8 @@ async function updateTiles(
 function gameLoop(time: number): void {
   if (!isRunning) return;
 
-  // Update FPS counter (development only)
-  updateFpsCounter(time);
+  // Update FPS tracking (used for performance gating)
+  updateFpsTracking(time);
 
   // Calculate delta time
   const deltaTime = lastTime ? (time - lastTime) / 1000 : 0.016;
@@ -563,6 +625,7 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
 
   // Clear ground texture tiles and cache
   clearAllGroundTiles();
+  clearAllExpandedTiles();
   clearAllLowDetailGroundTiles();
   lowDetailTileMeshes.clear();
 

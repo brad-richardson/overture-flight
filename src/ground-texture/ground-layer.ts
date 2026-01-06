@@ -19,6 +19,7 @@ import {
   blobToImageBitmap,
   isTextureCacheEnabled,
 } from '../cache/indexed-db-texture-cache.js';
+import { promoteExpandedToCore, demoteFromCore } from './expanded-ground-layer.js';
 
 // Active ground tiles
 const activeTiles = new Map<string, GroundTileData>();
@@ -407,6 +408,10 @@ async function createGroundForTileInner(
   // Add to scene
   scene.add(group);
 
+  // Promote: remove any expanded tile at this position (expanded tiles are terrain-only)
+  // Core tiles have full features (buildings, etc), so they take precedence
+  promoteExpandedToCore(tileX, tileY, tileZ);
+
   // Mark loading complete
   loadingTiles.delete(key);
 
@@ -430,6 +435,9 @@ export function removeGroundGroup(group: THREE.Group): void {
 
     // Remove stored features for click picking
     removeStoredFeatures(key);
+
+    // Clear promoted status so this position can become an expanded tile again
+    demoteFromCore(tileData.x, tileData.y, tileData.z);
 
     // Dispose quad resources (but not texture - it's cached)
     const mesh = group.children[0] as THREE.Mesh;

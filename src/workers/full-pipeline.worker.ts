@@ -6,6 +6,13 @@
  * - No structured clone for feature arrays (they never leave the worker)
  * - Only ImageBitmap transferred back (zero-copy)
  * - PMTiles fetch happens in worker thread (no main thread blocking)
+ *
+ * Known Limitations (experimental feature, disabled by default):
+ * - Does NOT support fallback zoom levels when requested zoom has no data
+ * - Does NOT load low-zoom water polygons (z10/z8/z6) for ocean coverage
+ * - May have gaps in ocean/land_cover coverage compared to main-thread path
+ *
+ * TODO: Add loadWaterPolygonsFromLowerZooms equivalent for feature parity
  */
 
 import { PMTiles } from 'pmtiles';
@@ -109,13 +116,19 @@ async function initializePMTiles(baseUrl: string, transportUrl: string): Promise
       console.error('[FullPipelineWorker] Failed to initialize PMTiles:', error);
       basePMTiles = null;
       transportationPMTiles = null;
+      basePMTilesUrl = null;
+      transportationPMTilesUrl = null;
       pmtilesInitialized = false;
       throw error;
     }
   })();
 
-  await pmtilesInitPromise;
-  pmtilesInitPromise = null;
+  try {
+    await pmtilesInitPromise;
+  } finally {
+    // Always clear promise to allow retries after transient failures
+    pmtilesInitPromise = null;
+  }
 }
 
 /**

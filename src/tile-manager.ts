@@ -95,8 +95,13 @@ const waterPolygonCache = new Map<string, ParsedFeature[]>();
 
 // In-flight request deduplication cache
 // Key format: "source:z/x/y:layerName" to prevent cross-contamination between different layer requests
-// For example: "base:14/1234/5678:null" vs "base:14/1234/5678:water"
-const inFlightRequests = new Map<string, Promise<ParsedFeature[]>>();
+// For example: "base:14/1234/5678:__ALL__" vs "base:14/1234/5678:water"
+// Tracks both promise and priority - higher priority requests skip dedupe to avoid being delayed
+interface InFlightRequest {
+  promise: Promise<ParsedFeature[]>;
+  priority: TilePriority;
+}
+const inFlightRequests = new Map<string, InFlightRequest>();
 
 // Tile loading settings (aggressive performance tuning)
 const TILE_ZOOM = 14; // Zoom level for tile loading (max available in PMTiles)
@@ -351,9 +356,11 @@ export async function loadBaseTile(
 
   // Check deduplication cache - key includes source and layer (__ALL__ = all layers)
   const dedupeKey = `base:${zoom}/${x}/${y}:__ALL__`;
-  const existingRequest = inFlightRequests.get(dedupeKey);
-  if (existingRequest) {
-    return existingRequest;
+  const existing = inFlightRequests.get(dedupeKey);
+  // Only dedupe if existing request has same or higher priority (lower number)
+  // Higher priority requests skip dedupe to avoid being delayed by lower priority ones
+  if (existing && existing.priority <= priority) {
+    return existing.promise;
   }
 
   // Create the loading promise
@@ -381,9 +388,13 @@ export async function loadBaseTile(
   })();
 
   // Store in deduplication cache and clean up when done
-  inFlightRequests.set(dedupeKey, loadPromise);
+  inFlightRequests.set(dedupeKey, { promise: loadPromise, priority });
   loadPromise.finally(() => {
-    inFlightRequests.delete(dedupeKey);
+    // Only delete if this is still our request (higher priority may have replaced it)
+    const current = inFlightRequests.get(dedupeKey);
+    if (current?.promise === loadPromise) {
+      inFlightRequests.delete(dedupeKey);
+    }
   });
 
   return loadPromise;
@@ -469,8 +480,9 @@ export async function loadWaterPolygonsFromLowerZooms(
       waterPolygons.push(feature);
     }
 
-    // If we found water polygons at this zoom level, we can stop
-    if (waterPolygons.length > 0) {
+    // In fast mode, stop early if we found water (optimization for rendering)
+    // In non-fast mode (background cache warming), continue to populate all zoom level caches
+    if (fastMode && waterPolygons.length > 0) {
       break;
     }
   }
@@ -526,10 +538,11 @@ export async function loadTransportationTile(
   if (!transportationPMTiles) return [];
 
   // Check deduplication cache
-  const dedupeKey = `transport:${zoom}/${x}/${y}:null`;
-  const existingRequest = inFlightRequests.get(dedupeKey);
-  if (existingRequest) {
-    return existingRequest;
+  const dedupeKey = `transport:${zoom}/${x}/${y}:__ALL__`;
+  const existing = inFlightRequests.get(dedupeKey);
+  // Only dedupe if existing request has same or higher priority (lower number)
+  if (existing && existing.priority <= priority) {
+    return existing.promise;
   }
 
   // Create the loading promise
@@ -542,9 +555,13 @@ export async function loadTransportationTile(
   })();
 
   // Store in deduplication cache and clean up when done
-  inFlightRequests.set(dedupeKey, loadPromise);
+  inFlightRequests.set(dedupeKey, { promise: loadPromise, priority });
   loadPromise.finally(() => {
-    inFlightRequests.delete(dedupeKey);
+    // Only delete if this is still our request (higher priority may have replaced it)
+    const current = inFlightRequests.get(dedupeKey);
+    if (current?.promise === loadPromise) {
+      inFlightRequests.delete(dedupeKey);
+    }
   });
 
   return loadPromise;
