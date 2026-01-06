@@ -90,16 +90,6 @@ const BATHYMETRY_COLORS = [
  */
 const LINEAR_WATER_TYPES = ['river', 'stream', 'canal', 'drain', 'ditch', 'waterway'];
 
-/**
- * Ocean water types to skip (covered by bathymetry)
- */
-const OCEAN_WATER_TYPES = ['ocean', 'sea', 'bay', 'strait', 'gulf', 'sound'];
-
-/**
- * Water polygon types to actually render (lakes, ponds, reservoirs)
- * Be explicit about what we want rather than trying to exclude everything else
- */
-const WATER_POLYGON_TYPES = ['lake', 'pond', 'reservoir', 'basin', 'lagoon', 'pool'];
 
 /**
  * Convert hex color to CSS string
@@ -336,17 +326,27 @@ export function renderTileTexture(
   const metersPerPixel = tileSizeMeters / size;
 
   // Separate features by layer first to determine base color
+  const landFeatures: ParsedFeature[] = [];
   const landUseFeatures: ParsedFeature[] = [];
   const landCoverFeatures: ParsedFeature[] = [];
   const waterLineFeatures: ParsedFeature[] = [];
   const waterBodyFeatures: ParsedFeature[] = [];
+  const oceanFeatures: ParsedFeature[] = [];
   const bathymetryFeatures: ParsedFeature[] = [];
+
+  // Ocean/sea subtypes that indicate coastal water
+  const OCEAN_SUBTYPES = ['ocean', 'sea', 'bay', 'strait', 'gulf', 'sound', 'harbour', 'harbor'];
 
   for (const feature of baseFeatures) {
     const layer = feature.layer;
     const subtype = ((feature.properties.subtype || feature.properties.class || '') as string).toLowerCase();
 
-    if (layer === 'land_use') {
+    if (layer === 'land') {
+      // Collect land polygons for proper coastal rendering
+      if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
+        landFeatures.push(feature);
+      }
+    } else if (layer === 'land_use') {
       landUseFeatures.push(feature);
     } else if (layer === 'land_cover') {
       landCoverFeatures.push(feature);
@@ -357,25 +357,15 @@ export function renderTileTexture(
           waterLineFeatures.push(feature);
         }
       } else if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
-        // Skip generic "water" subtype - these often cover areas incorrectly
-        if (subtype === 'water' || subtype === '') {
-          continue;
-        }
+        // Check if this is from lower zoom (loaded for ocean coverage)
+        const isFromLowerZoom = feature.properties._fromLowerZoom === true;
 
-        // Include ocean/sea types
-        if (OCEAN_WATER_TYPES.includes(subtype)) {
-          waterBodyFeatures.push(feature);
-        }
-        // Include known water body types (lakes, ponds, reservoirs)
-        if (WATER_POLYGON_TYPES.includes(subtype)) {
-          waterBodyFeatures.push(feature);
-        }
-        // Include river/stream polygons
-        if (LINEAR_WATER_TYPES.includes(subtype)) {
-          waterBodyFeatures.push(feature);
-        }
-        // Include human_made water features (pools, fountains)
-        if (subtype === 'human_made') {
+        // Separate ocean from inland water bodies
+        // Lower zoom water features are treated as ocean (they provide coastal coverage)
+        if (OCEAN_SUBTYPES.includes(subtype) || isFromLowerZoom) {
+          oceanFeatures.push(feature);
+        } else {
+          // Lakes, rivers, ponds, etc.
           waterBodyFeatures.push(feature);
         }
       }
@@ -385,9 +375,32 @@ export function renderTileTexture(
     }
   }
 
-  // === Layer 1: Land fill (base) ===
-  ctx.fillStyle = hexToCSS(COLORS.land);
-  ctx.fillRect(0, 0, size, size);
+  // Detect if this is an open ocean tile (has ocean features but minimal land)
+  // Only fill with water first for tiles that are mostly ocean
+  const isOpenOceanTile = oceanFeatures.length > 0 && landFeatures.length < 10;
+
+  // === Layer 0: Base fill ===
+  // For open ocean tiles (mostly water), fill with water first
+  // For all other tiles, fill with land color
+  if (isOpenOceanTile) {
+    ctx.fillStyle = hexToCSS(COLORS.water);
+    ctx.fillRect(0, 0, size, size);
+  } else {
+    ctx.fillStyle = hexToCSS(COLORS.land);
+    ctx.fillRect(0, 0, size, size);
+  }
+
+  // === Layer 1: Land polygons (for open ocean tiles) ===
+  // Draw explicit land polygons on top of water base
+  if (isOpenOceanTile && landFeatures.length > 0) {
+    ctx.save();
+    ctx.fillStyle = hexToCSS(COLORS.land);
+    for (const feature of landFeatures) {
+      drawPolygon(ctx, feature.coordinates as number[][][] | number[][][][], feature.type, geoToCanvas);
+      ctx.fill('evenodd');
+    }
+    ctx.restore();
+  }
 
   // === Layer 2: Land use ===
   ctx.save();
@@ -425,8 +438,15 @@ export function renderTileTexture(
   }
   ctx.restore();
 
-  // === Layer 5: Water bodies ===
+  // === Layer 5: Water bodies (ocean + inland) ===
   ctx.save();
+  // Draw ocean features first (may have specific shapes)
+  for (const feature of oceanFeatures) {
+    ctx.fillStyle = hexToCSS(COLORS.water);
+    drawPolygon(ctx, feature.coordinates as number[][][] | number[][][][], feature.type, geoToCanvas);
+    ctx.fill('evenodd');
+  }
+  // Draw inland water bodies on top (lakes, ponds, rivers)
   for (const feature of waterBodyFeatures) {
     const color = getColorForFeature('water', feature.properties);
     ctx.fillStyle = hexToCSS(color);

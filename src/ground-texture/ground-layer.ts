@@ -3,7 +3,7 @@ import type { GroundTileData } from './types.js';
 import { TileTextureCache, initTextureCache } from './tile-texture-cache.js';
 import { renderTileTexture } from './tile-texture-renderer.js';
 import { TerrainQuad } from './terrain-quad.js';
-import { loadBaseTile, loadTransportationTile, tileToBounds } from '../tile-manager.js';
+import { loadBaseTile, loadTransportationTile, loadWaterPolygonsFromLowerZooms, tileToBounds } from '../tile-manager.js';
 import { getTerrainHeight } from '../elevation.js';
 import { getScene } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
@@ -81,13 +81,19 @@ export async function createGroundForTile(
     // Load lower zoom base features for background land_cover
     const lowerZoomPromise = loadBaseTile(lowerX, lowerY, lowerZoom);
 
-    const [allResults, lowerZoomFeatures] = await Promise.all([
+    // Load water polygons from even lower zoom levels (z8-z10) for ocean coverage
+    const lowerZoomWaterPromise = loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ);
+
+    const [allResults, lowerZoomFeatures, lowerZoomWater] = await Promise.all([
       Promise.all(loadPromises),
       lowerZoomPromise,
+      lowerZoomWaterPromise,
     ]);
 
     // Merge all features - lower zoom features go first (background)
+    // Lower zoom water goes first so it provides ocean coverage behind everything
     const baseFeatures = [
+      ...lowerZoomWater,
       ...lowerZoomFeatures,
       ...allResults.flatMap(([base]) => base),
     ];
