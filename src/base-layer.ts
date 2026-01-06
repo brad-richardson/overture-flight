@@ -1,10 +1,12 @@
 import * as THREE from 'three';
-import { getScene, geoToWorld, worldToGeo, BufferGeometryUtils } from './scene.js';
+import { getScene, geoToWorld, worldToGeo, BufferGeometryUtils, getSceneOriginForWorker } from './scene.js';
 import { loadBaseTile, loadWaterPolygonsFromLowerZooms } from './tile-manager.js';
 import { getTerrainHeight } from './elevation.js';
-import { ELEVATION } from './constants.js';
+import { ELEVATION, WORKERS } from './constants.js';
 import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
 import type { StoredFeature } from './feature-picker.js';
+import { getGeometryWorkerPool } from './workers/index.js';
+import type { GeometryBufferGroup, LineGeometryBufferGroup } from './workers/types.js';
 
 // Types
 interface ParsedFeature {
@@ -338,63 +340,68 @@ export async function createBaseLayerForTile(
   storeFeatures(tileKey, storedFeatures);
 
   if (features.length > 0) {
-    // Group polygon features by color AND layer for proper z-fighting prevention
-    // Key format: "color-layer" to separate water from land even if same color
-    const featuresByColorAndLayer = new Map<string, FeatureGroup>();
-    // Group line features (rivers, streams) by color
-    const lineFeaturesByColor = new Map<number, ParsedFeature[]>();
+    // Try worker-based geometry creation first (better parallelism)
+    const workerHandled = await tryWorkerGeometry(features, group, tileX, tileY, tileZ);
 
-    for (const feature of features) {
-      const layer = feature.layer || 'default';
+    if (!workerHandled) {
+      // Fallback: Main thread geometry creation
+      // Group polygon features by color AND layer for proper z-fighting prevention
+      // Key format: "color-layer" to separate water from land even if same color
+      const featuresByColorAndLayer = new Map<string, FeatureGroup>();
+      // Group line features (rivers, streams) by color
+      const lineFeaturesByColor = new Map<number, ParsedFeature[]>();
 
-      // Skip layers that are redundant with terrain mesh
-      if (SKIP_LAYERS.includes(layer)) {
-        continue;
-      }
+      for (const feature of features) {
+        const layer = feature.layer || 'default';
 
-      const color = getColorForFeature(layer, feature.properties);
-
-      if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
-        // Skip ocean-type water features - bathymetry layer already covers these areas
-        // Also skip river/stream polygons - we render these as lines instead to avoid double-render
-        // Keep all other water types (including unknown subtypes) to ensure inland water renders
-        if (layer === 'water') {
-          const subtype = String(feature.properties?.subtype || feature.properties?.class || '').toLowerCase();
-          // Skip only explicitly ocean types (covered by bathymetry)
-          if (OCEAN_WATER_TYPES.includes(subtype)) {
-            continue;
-          }
-          // Skip river/stream polygons UNLESS they come from lower zoom levels
-          // Lower zoom polygons represent the actual water body extent (bank to bank)
-          // while high-zoom river polygons are often just centerline buffers
-          const isFromLowerZoom = feature.properties?._fromLowerZoom === true;
-          if (LINEAR_WATER_TYPES.includes(subtype) && !isFromLowerZoom) {
-            continue;
-          }
-          // All other water types (lakes, ponds, unknown subtypes, untyped) are kept
-          // as are river polygons from lower zoom levels (full water body extent)
+        // Skip layers that are redundant with terrain mesh
+        if (SKIP_LAYERS.includes(layer)) {
+          continue;
         }
 
-        const key = `${color}-${layer}`;
-        if (!featuresByColorAndLayer.has(key)) {
-          featuresByColorAndLayer.set(key, { color, layer, features: [] });
-        }
-        featuresByColorAndLayer.get(key)!.features.push(feature);
-      } else if (feature.type === 'LineString' || feature.type === 'MultiLineString') {
-        // Process line features for water - only rivers, streams, and canals
-        // Skip coastlines and shorelines which create artifacts around islands
-        // Also skip if we have covering water polygons from lower zoom levels
-        if (layer === 'water' && !hasLowerZoomWaterPolygons) {
-          const subtype = String(feature.properties?.subtype || feature.properties?.class || '').toLowerCase();
-          if (LINEAR_WATER_TYPES.includes(subtype)) {
-            if (!lineFeaturesByColor.has(color)) {
-              lineFeaturesByColor.set(color, []);
+        const color = getColorForFeature(layer, feature.properties);
+
+        if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
+          // Skip ocean-type water features - bathymetry layer already covers these areas
+          // Also skip river/stream polygons - we render these as lines instead to avoid double-render
+          // Keep all other water types (including unknown subtypes) to ensure inland water renders
+          if (layer === 'water') {
+            const subtype = String(feature.properties?.subtype || feature.properties?.class || '').toLowerCase();
+            // Skip only explicitly ocean types (covered by bathymetry)
+            if (OCEAN_WATER_TYPES.includes(subtype)) {
+              continue;
             }
-            lineFeaturesByColor.get(color)!.push(feature);
+            // Skip river/stream polygons UNLESS they come from lower zoom levels
+            // Lower zoom polygons represent the actual water body extent (bank to bank)
+            // while high-zoom river polygons are often just centerline buffers
+            const isFromLowerZoom = feature.properties?._fromLowerZoom === true;
+            if (LINEAR_WATER_TYPES.includes(subtype) && !isFromLowerZoom) {
+              continue;
+            }
+            // All other water types (lakes, ponds, unknown subtypes, untyped) are kept
+            // as are river polygons from lower zoom levels (full water body extent)
+          }
+
+          const key = `${color}-${layer}`;
+          if (!featuresByColorAndLayer.has(key)) {
+            featuresByColorAndLayer.set(key, { color, layer, features: [] });
+          }
+          featuresByColorAndLayer.get(key)!.features.push(feature);
+        } else if (feature.type === 'LineString' || feature.type === 'MultiLineString') {
+          // Process line features for water - only rivers, streams, and canals
+          // Skip coastlines and shorelines which create artifacts around islands
+          // Also skip if we have covering water polygons from lower zoom levels
+          if (layer === 'water' && !hasLowerZoomWaterPolygons) {
+            const subtype = String(feature.properties?.subtype || feature.properties?.class || '').toLowerCase();
+            if (LINEAR_WATER_TYPES.includes(subtype)) {
+              if (!lineFeaturesByColor.has(color)) {
+                lineFeaturesByColor.set(color, []);
+              }
+              lineFeaturesByColor.get(color)!.push(feature);
+            }
           }
         }
       }
-    }
 
     // Layers that should NOT be merged (render individually to prevent z-fighting artifacts)
     // Only water and bathymetry need individual rendering (overlapping ocean polygons)
@@ -523,6 +530,7 @@ export async function createBaseLayerForTile(
         }
       }
     }
+    } // end if (!workerHandled)
   }
 
   scene.add(group);
@@ -705,6 +713,125 @@ function calculatePolygonArea(points: THREE.Vector2[]): number {
     area += (points[j].x + points[i].x) * (points[j].y - points[i].y);
   }
   return area / 2;
+}
+
+/**
+ * Create mesh from worker geometry buffer group
+ * Handles terrain-following by applying elevation on main thread
+ */
+function createMeshFromWorkerGeometry(
+  bufferGroup: GeometryBufferGroup,
+  group: THREE.Group
+): void {
+  const geometry = new THREE.BufferGeometry();
+
+  // Set attributes from worker-provided arrays
+  geometry.setAttribute('position', new THREE.BufferAttribute(bufferGroup.positions, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(bufferGroup.normals, 3));
+  geometry.setIndex(new THREE.BufferAttribute(bufferGroup.indices, 1));
+
+  // Apply terrain elevation for terrain-following layers
+  if (bufferGroup.terrainFollowing && ELEVATION.TERRAIN_ENABLED) {
+    const positions = geometry.attributes.position;
+
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i);
+      const z = positions.getZ(i);
+
+      // Convert world position back to geographic coordinates
+      const geo = worldToGeo(x, 0, z);
+
+      // Get terrain height at this position
+      let terrainHeight = getTerrainHeight(geo.lng, geo.lat);
+      if (Number.isNaN(terrainHeight)) {
+        terrainHeight = 0;
+      }
+      terrainHeight *= ELEVATION.VERTICAL_EXAGGERATION;
+
+      // Set Y position: terrain base + terrain height + layer offset
+      const y = LAYER_DEPTHS.terrain + terrainHeight + bufferGroup.yOffset;
+      positions.setY(i, y);
+    }
+
+    positions.needsUpdate = true;
+    geometry.computeVertexNormals();
+  }
+
+  // Create material and mesh
+  const material = getMaterial(bufferGroup.color, bufferGroup.layer);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.receiveShadow = true;
+  mesh.renderOrder = bufferGroup.renderOrder;
+  mesh.name = `worker-${bufferGroup.layer}`;
+
+  // Set Y position for non-terrain-following layers
+  if (!bufferGroup.terrainFollowing) {
+    mesh.position.y = bufferGroup.yOffset;
+  }
+
+  group.add(mesh);
+}
+
+/**
+ * Create line mesh from worker line geometry buffer group
+ */
+function createLineFromWorkerGeometry(
+  bufferGroup: LineGeometryBufferGroup,
+  group: THREE.Group
+): void {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(bufferGroup.positions, 3));
+
+  const line = new THREE.LineSegments(geometry, getLineMaterial(bufferGroup.color));
+  line.renderOrder = bufferGroup.renderOrder;
+  line.name = 'worker-water-lines';
+
+  group.add(line);
+}
+
+/**
+ * Try to use geometry workers for base layer creation
+ * Returns true if workers handled the geometry, false to fall back to main thread
+ */
+async function tryWorkerGeometry(
+  features: ParsedFeature[],
+  group: THREE.Group,
+  tileX: number,
+  tileY: number,
+  tileZ: number
+): Promise<boolean> {
+  if (!WORKERS.GEOMETRY_ENABLED) {
+    return false;
+  }
+
+  try {
+    const pool = getGeometryWorkerPool();
+    const isSupported = await pool.isWorkerSupported();
+
+    if (!isSupported) {
+      return false;
+    }
+
+    // Get scene origin for coordinate conversion in worker
+    const origin = getSceneOriginForWorker();
+
+    // Create geometry in worker
+    const result = await pool.createBaseGeometry(features, origin, tileX, tileY, tileZ);
+
+    // Create meshes from worker results
+    for (const polygonGroup of result.polygonGroups) {
+      createMeshFromWorkerGeometry(polygonGroup, group);
+    }
+
+    for (const lineGroup of result.lineGroups) {
+      createLineFromWorkerGeometry(lineGroup, group);
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Worker geometry creation failed, falling back to main thread:', error);
+    return false;
+  }
 }
 
 /**

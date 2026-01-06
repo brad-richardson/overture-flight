@@ -33,6 +33,7 @@ import {
 import { createTreesForTile, removeTreesGroup } from './tree-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
 import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE, LOW_DETAIL_TERRAIN } from './constants.js';
+import { getLoadingGate } from './loading-gate.js';
 import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
 import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
 import { initFeatureModal, showFeatureModal } from './feature-modal.js';
@@ -243,6 +244,8 @@ async function updateTiles(
           trees: treesGroup
         });
         loadingTiles.delete(tile.key);
+        // Notify loading gate that a tile is ready
+        getLoadingGate().onTileLoaded();
       }).catch(e => {
         console.warn(`Failed to load tile ${tile.key}:`, e);
         loadingTiles.delete(tile.key);
@@ -263,6 +266,8 @@ async function updateTiles(
           trees: treesGroup
         });
         loadingTiles.delete(tile.key);
+        // Notify loading gate that a tile is ready
+        getLoadingGate().onTileLoaded();
       }).catch(e => {
         console.warn(`Failed to load tile ${tile.key}:`, e);
         loadingTiles.delete(tile.key);
@@ -717,7 +722,11 @@ async function init(): Promise<void> {
       onPlayerLeft: handlePlayerLeft,
     });
 
-    // Start game loop
+    // Start loading gate indicator (non-blocking, just shows visual feedback)
+    const loadingGate = getLoadingGate();
+    loadingGate.start();
+
+    // Start game loop immediately (allows rendering while tiles load)
     isRunning = true;
     requestAnimationFrame(gameLoop);
 

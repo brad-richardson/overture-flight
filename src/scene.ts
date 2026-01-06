@@ -245,6 +245,24 @@ export function getOrigin(): { lng: number; lat: number } {
 }
 
 /**
+ * Get scene origin with conversion factors for geometry workers
+ * This provides all the info needed to convert geo coords to world coords in a worker
+ */
+export function getSceneOriginForWorker(): {
+  lng: number;
+  lat: number;
+  metersPerDegLng: number;
+  metersPerDegLat: number;
+} {
+  return {
+    lng: originLng,
+    lat: originLat,
+    metersPerDegLng: metersPerDegreeLng(originLat),
+    metersPerDegLat: METERS_PER_DEGREE_LAT,
+  };
+}
+
+/**
  * Initialize the Three.js scene
  */
 export async function initScene(): Promise<{

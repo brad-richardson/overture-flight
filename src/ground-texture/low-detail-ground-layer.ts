@@ -6,7 +6,9 @@ import { TerrainQuad } from './terrain-quad.js';
 import { loadBaseTile, loadWaterPolygonsFromLowerZooms, tileToBounds, lngLatToTile } from '../tile-manager.js';
 import { getTerrainHeight } from '../elevation.js';
 import { getScene } from '../scene.js';
-import { LOW_DETAIL_TERRAIN, ELEVATION } from '../constants.js';
+import { LOW_DETAIL_TERRAIN, ELEVATION, WORKERS } from '../constants.js';
+import { getWorkerPool } from '../workers/index.js';
+import { getTileSemaphore, TilePriority } from '../semaphore.js';
 
 // Tile info type
 interface TileInfo {
@@ -68,6 +70,31 @@ export async function createLowDetailGroundForTile(
   // Mark as loading
   loadingLowDetailTiles.add(key);
 
+  // Use shared semaphore to limit concurrent tile processing (maintains 60fps)
+  // Z10 tiles have second priority (after Z14)
+  const semaphore = getTileSemaphore();
+  if (semaphore) {
+    return semaphore.run(() => createLowDetailGroundForTileInner(tileX, tileY, tileZ, key), TilePriority.Z10_GROUND);
+  }
+
+  return createLowDetailGroundForTileInner(tileX, tileY, tileZ, key);
+}
+
+/**
+ * Inner implementation of low-detail tile creation (runs with semaphore permit)
+ */
+async function createLowDetailGroundForTileInner(
+  tileX: number,
+  tileY: number,
+  tileZ: number,
+  key: string
+): Promise<THREE.Group | null> {
+  const scene = getScene();
+  if (!scene) {
+    loadingLowDetailTiles.delete(key);
+    return null;
+  }
+
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const cache = getLowDetailCache();
 
@@ -86,11 +113,49 @@ export async function createLowDetailGroundForTile(
     const allBaseFeatures = [...lowerZoomWater, ...baseFeatures];
 
     // Render to texture with simplified renderer (no roads)
-    texture = renderLowDetailTileTexture(
-      allBaseFeatures,
-      bounds,
-      LOW_DETAIL_TERRAIN.TEXTURE_SIZE
-    );
+    // Use worker pool if enabled and supported, otherwise fall back to main thread
+    let useWorker = WORKERS.ENABLED;
+    if (useWorker) {
+      try {
+        const pool = getWorkerPool();
+        const isSupported = await pool.isWorkerSupported();
+        if (isSupported) {
+          // Render in worker, returns ImageBitmap
+          const bitmap = await pool.renderLowDetailTexture(
+            allBaseFeatures,
+            bounds,
+            LOW_DETAIL_TERRAIN.TEXTURE_SIZE
+          );
+
+          // Create texture from ImageBitmap
+          const workerTexture = new THREE.Texture(bitmap);
+          workerTexture.minFilter = THREE.LinearMipmapLinearFilter;
+          workerTexture.magFilter = THREE.LinearFilter;
+          workerTexture.generateMipmaps = true;
+          workerTexture.colorSpace = THREE.SRGBColorSpace;
+          workerTexture.needsUpdate = true;
+
+          // Cast to CanvasTexture for cache compatibility (works at runtime)
+          // Note: Don't close the bitmap - let Three.js/GC handle memory
+          texture = workerTexture as unknown as THREE.CanvasTexture;
+        } else {
+          useWorker = false;
+        }
+      } catch (error) {
+        console.warn('Worker rendering failed for low-detail tile, falling back to main thread:', error);
+        useWorker = false;
+      }
+    }
+
+    // Fallback to main thread rendering
+    if (!useWorker || !texture) {
+      texture = renderLowDetailTileTexture(
+        allBaseFeatures,
+        bounds,
+        LOW_DETAIL_TERRAIN.TEXTURE_SIZE
+      );
+    }
+
     cache.set(key, texture, bounds);
   }
 

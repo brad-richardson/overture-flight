@@ -205,3 +205,43 @@ export const LOW_DETAIL_TERRAIN: LowDetailTerrainConfig = {
   Y_OFFSET: -0.5,                 // 0.5m below Z14 layer (small offset, stencil does the real masking)
   UNLOAD_DISTANCE: 4,             // Chebyshev distance for unloading
 };
+
+// Web Worker settings for tile rendering
+// Offloads CPU-intensive work to background threads
+export interface WorkersConfig {
+  ENABLED: boolean;               // Enable/disable texture worker rendering
+  GEOMETRY_ENABLED: boolean;      // Enable/disable geometry worker creation
+  POOL_SIZE: number;              // Number of workers (0 = auto based on cores)
+}
+
+export const WORKERS: WorkersConfig = {
+  ENABLED: false,                 // Texture workers: Disabled (structured clone overhead negates benefit)
+  GEOMETRY_ENABLED: true,         // Geometry workers: Enabled (uses zero-copy ArrayBuffer transfer)
+  POOL_SIZE: 0,                   // 0 = auto (cores - 1, min 2, max 4)
+};
+
+// Loading gate settings for initial tile loading
+// Stalls plane movement until minimum tiles are rendered
+export interface LoadingGateConfig {
+  ENABLED: boolean;               // Enable/disable loading gate
+  MIN_TILES: number;              // Minimum tiles before starting
+  MAX_WAIT_MS: number;            // Maximum wait time (fallback timeout)
+}
+
+export const LOADING_GATE: LoadingGateConfig = {
+  ENABLED: true,
+  MIN_TILES: 1,                   // Wait for center tile only
+  MAX_WAIT_MS: 5000,              // 5 second timeout
+};
+
+// Tile loading concurrency settings
+// Limits parallel tile processing to maintain 60fps during loading
+export interface TileConcurrencyConfig {
+  ENABLED: boolean;               // Enable/disable concurrency limiter
+  MAX_CONCURRENT: number;         // Maximum tiles processing at once
+}
+
+export const TILE_CONCURRENCY: TileConcurrencyConfig = {
+  ENABLED: true,
+  MAX_CONCURRENT: 3,              // Process max 3 tiles at a time
+};
