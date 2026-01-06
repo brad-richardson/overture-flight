@@ -136,7 +136,9 @@ let isRunning = false;
 // Crash recovery state
 let isCrashRecovering = false;
 let crashRecoveryStartTime = 0;
-let pendingCrashTerrainHeight = 0;
+
+// Autopilot indicator state (track previous state to avoid unnecessary DOM updates)
+let wasAutopilotActive = false;
 
 // FPS counter (development only)
 let fpsElement: HTMLDivElement | null = null;
@@ -351,8 +353,11 @@ function gameLoop(time: number): void {
     const elapsedSinceCrash = time - crashRecoveryStartTime;
 
     if (elapsedSinceCrash >= CRASH_RECOVERY.PAUSE_DURATION) {
-      // Recovery period complete - respawn above terrain
-      resetPlaneWithTerrainAwareness(pendingCrashTerrainHeight);
+      // Recovery period complete - get fresh terrain height at current position
+      // (plane may have moved during crash, so recalculate instead of using cached value)
+      const planeState = getPlaneState();
+      const currentTerrainHeight = getGroundHeight(planeState.lng, planeState.lat);
+      resetPlaneWithTerrainAwareness(currentTerrainHeight);
       isCrashRecovering = false;
     } else {
       // Still in recovery pause - only update camera and render, skip physics
@@ -397,7 +402,6 @@ function gameLoop(time: number): void {
     // Start crash recovery pause instead of immediately resetting
     isCrashRecovering = true;
     crashRecoveryStartTime = time;
-    pendingCrashTerrainHeight = terrainHeight;
     // Continue to next frame - recovery will be handled above
     requestAnimationFrame(gameLoop);
     return;
@@ -408,7 +412,11 @@ function gameLoop(time: number): void {
   if (autopilotActive) {
     applyAutopilot(cappedDelta, terrainHeight);
   }
-  updateAutopilotIndicator(autopilotActive);
+  // Only update DOM when autopilot state changes to reduce unnecessary updates
+  if (autopilotActive !== wasAutopilotActive) {
+    updateAutopilotIndicator(autopilotActive);
+    wasAutopilotActive = autopilotActive;
+  }
 
   // Update camera to follow plane
   followPlane(planeState);
