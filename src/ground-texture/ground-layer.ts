@@ -76,8 +76,11 @@ export async function createGroundForTile(
   ]);
 
   // Store features for click picking (only from current tile, not neighbors)
+  // Only include layers that are actually rendered (exclude infrastructure, etc.)
+  const RENDERED_LAYERS = ['land', 'land_use', 'land_cover', 'water', 'segment'];
   const pickableFeatures = [...currentTileBase, ...currentTileTransport];
   const storedFeatures: StoredFeature[] = pickableFeatures
+    .filter(f => RENDERED_LAYERS.includes(f.layer || ''))
     .filter(f => f.type === 'Polygon' || f.type === 'MultiPolygon' ||
                  f.type === 'LineString' || f.type === 'MultiLineString')
     .map(f => ({
