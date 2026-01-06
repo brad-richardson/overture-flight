@@ -61,12 +61,12 @@ const COLORS: Record<string, number> = {
   commercial: 0x787878,
   industrial: 0x606060,
 
-  // Default land - warm neutral gray (allows land_cover/land_use to show through)
-  land: 0xe5e3e0,
-  default: 0xe5e3e0,
+  // Default land - greenish-gray that blends with forest/grass areas
+  land: 0x8fa880,
+  default: 0x8fa880,
 
-  // Terrain mesh base color - warm neutral gray
-  terrain: 0xe5e3e0
+  // Terrain mesh base color - greenish-gray that blends with forest/grass areas
+  terrain: 0x8fa880
 };
 
 // Layer depth configuration to prevent z-fighting
