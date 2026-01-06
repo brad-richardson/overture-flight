@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
-import { PLANE_MODEL_URL, PLANE_RENDER, DEFAULT_LOCATION } from './constants.js';
+import { PLANE_MODEL_URL, PLANE_RENDER, DEFAULT_LOCATION, FLIGHT } from './constants.js';
 import { isMobileDevice } from './mobile-controls.js';
 import { initSkySystem, updateSky } from './sky.js';
 
@@ -172,6 +172,70 @@ let camera: THREE.PerspectiveCamera | null = null;
 let renderer: THREE.WebGLRenderer | null = null;
 let planeModel: THREE.Group | null = null;
 const planeMeshes = new Map<string, THREE.Object3D>(); // id -> mesh
+
+// Propeller animation tracking
+// Stores propeller mesh references and current rotation for each plane
+interface PropellerState {
+  meshes: THREE.Object3D[];
+  rotation: number;
+}
+const propellerStates = new Map<string, PropellerState>();
+
+// Propeller animation constants
+const PROPELLER_MAX_RPS = 25; // Max rotations per second at full speed
+const PROPELLER_MIN_RPS = 5;  // Min rotations per second at stall speed
+
+/**
+ * Create a procedural propeller mesh
+ * Returns a group containing propeller blades that can be rotated
+ * Propeller is oriented to spin around the Z axis (plane's forward direction)
+ */
+function createPropeller(color: string): THREE.Group {
+  const propGroup = new THREE.Group();
+  propGroup.name = 'propeller';
+
+  // Propeller material - metallic with player accent color
+  const bladeMaterial = new THREE.MeshStandardMaterial({
+    color: color,
+    roughness: 0.3,
+    metalness: 0.8,
+  });
+
+  // Create 3 propeller blades in the XY plane (perpendicular to Z/forward axis)
+  const bladeCount = 3;
+  const bladeLength = 12; // Length of each blade
+  const bladeWidth = 1.5;
+  const bladeThickness = 0.3;
+
+  for (let i = 0; i < bladeCount; i++) {
+    // Create blade extending along Y axis (up/down when unrotated)
+    const bladeGeometry = new THREE.BoxGeometry(bladeThickness, bladeLength, bladeWidth);
+    // Offset geometry so it rotates from the hub
+    bladeGeometry.translate(0, bladeLength / 2, 0);
+
+    const blade = new THREE.Mesh(bladeGeometry, bladeMaterial);
+    // Rotate each blade evenly around the Z axis (forward axis)
+    blade.rotation.z = (i * Math.PI * 2) / bladeCount;
+    // Add slight pitch to blades for realism
+    blade.rotation.x = 0.15;
+
+    propGroup.add(blade);
+  }
+
+  // Add a hub/spinner in the center pointing forward (+Z)
+  const hubGeometry = new THREE.ConeGeometry(1.5, 3, 8);
+  hubGeometry.rotateX(Math.PI / 2); // Point forward along +Z
+  const hubMaterial = new THREE.MeshStandardMaterial({
+    color: color,
+    roughness: 0.2,
+    metalness: 0.9,
+  });
+  const hub = new THREE.Mesh(hubGeometry, hubMaterial);
+  hub.position.z = 1.5; // Slightly in front
+  propGroup.add(hub);
+
+  return propGroup;
+}
 
 // World origin (for geo to world conversion)
 let originLng: number = DEFAULT_LOCATION.lng;
@@ -539,6 +603,19 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
     }
   });
 
+  // Create and attach a procedural propeller at the nose of the plane
+  const propeller = createPropeller(color || '#3b82f6');
+  // Position at the front of the plane (nose)
+  // The plane model faces +Z direction in local space
+  propeller.position.set(0, 0, 48); // At the nose
+  mesh.add(propeller);
+
+  // Store propeller state for animation
+  propellerStates.set(id, {
+    meshes: [propeller],
+    rotation: 0
+  });
+
   if (scene) {
     scene.add(mesh);
   }
@@ -579,6 +656,37 @@ export function updatePlaneMesh(planeState: PlaneState, id: string, color: strin
 }
 
 /**
+ * Update propeller animation for a plane based on its speed
+ * Call this each frame to animate the propeller spinning
+ */
+export function updatePropellerAnimation(id: string, speed: number, deltaTime: number): void {
+  const state = propellerStates.get(id);
+  if (!state || state.meshes.length === 0) return;
+
+  // Calculate rotation speed based on plane speed
+  // Lerp between min and max RPS based on speed
+  const speedRatio = Math.max(0, Math.min(1,
+    (speed - FLIGHT.MIN_SPEED) / (FLIGHT.MAX_SPEED - FLIGHT.MIN_SPEED)
+  ));
+  const rps = PROPELLER_MIN_RPS + speedRatio * (PROPELLER_MAX_RPS - PROPELLER_MIN_RPS);
+
+  // Update rotation (in radians)
+  const rotationDelta = rps * Math.PI * 2 * deltaTime;
+  state.rotation += rotationDelta;
+
+  // Keep rotation within bounds to prevent floating point issues
+  if (state.rotation > Math.PI * 2) {
+    state.rotation -= Math.PI * 2;
+  }
+
+  // Apply rotation to all propeller meshes
+  // Propellers spin around the Z axis (plane's forward direction)
+  for (const propMesh of state.meshes) {
+    propMesh.rotation.z = state.rotation;
+  }
+}
+
+/**
  * Remove a plane mesh
  */
 export function removePlaneMesh(id: string): void {
@@ -587,6 +695,8 @@ export function removePlaneMesh(id: string): void {
     scene.remove(mesh);
     planeMeshes.delete(id);
   }
+  // Clean up propeller state
+  propellerStates.delete(id);
 }
 
 /**
