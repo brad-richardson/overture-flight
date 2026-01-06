@@ -111,6 +111,16 @@ export async function getCachedTexture(
       request.onsuccess = () => {
         const result = request.result as CachedTexture | undefined;
         if (result) {
+          // Check TTL - reject expired entries
+          if (TEXTURE_CACHE.TTL_MS > 0) {
+            const age = Date.now() - result.timestamp;
+            if (age > TEXTURE_CACHE.TTL_MS) {
+              // Entry expired - delete it and return null
+              deleteEntry(key);
+              resolve(null);
+              return;
+            }
+          }
           // Update timestamp for LRU (in separate transaction)
           updateTimestamp(key);
           resolve({ blob: result.blob, bounds: result.bounds });
@@ -150,6 +160,22 @@ function updateTimestamp(key: string): void {
     };
   } catch {
     // Ignore timestamp update errors
+  }
+}
+
+/**
+ * Delete a single entry (non-blocking)
+ * Used to remove expired entries
+ */
+function deleteEntry(key: string): void {
+  if (!db) return;
+
+  try {
+    const transaction = db.transaction(TEXTURE_CACHE.STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(TEXTURE_CACHE.STORE_NAME);
+    store.delete(key);
+  } catch {
+    // Ignore delete errors
   }
 }
 

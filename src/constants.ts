@@ -309,6 +309,7 @@ export interface TextureCacheConfig {
   STORE_NAME: string;             // Object store name for textures
   MAX_ENTRIES: number;            // Maximum cached textures (LRU eviction)
   VERSION: number;                // Cache version (increment to invalidate)
+  TTL_MS: number;                 // Time-to-live in milliseconds (0 = no expiry)
 }
 
 // Determine if caching should be enabled:
@@ -326,4 +327,5 @@ export const TEXTURE_CACHE: TextureCacheConfig = {
   STORE_NAME: 'textures',
   MAX_ENTRIES: IS_MOBILE ? 50 : 200,  // Fewer entries on mobile
   VERSION: 1,                         // Increment to invalidate cache
+  TTL_MS: 24 * 60 * 60 * 1000,        // 1 day (allows quick iteration on rendering bugs)
 };
