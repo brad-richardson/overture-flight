@@ -115,6 +115,9 @@ export async function createGroundForTile(
   // Apply ground texture
   quad.setTexture(texture);
 
+  // Mark texture as in-use so it won't be evicted while bound to this tile
+  cache.markInUse(key);
+
   // Enable stencil writing so Z10 tiles are masked where Z14 exists
   quad.enableStencilWrite();
 
@@ -146,6 +149,10 @@ export function removeGroundGroup(group: THREE.Group): void {
   const tileData = activeTiles.get(key);
 
   if (tileData) {
+    // Unmark texture as in-use so it can be evicted if needed
+    const cache = getCache();
+    cache.unmarkInUse(key);
+
     // Dispose quad resources (but not texture - it's cached)
     const mesh = group.children[0] as THREE.Mesh;
     if (mesh) {

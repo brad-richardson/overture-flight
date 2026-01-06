@@ -94,6 +94,9 @@ export async function createLowDetailGroundForTile(
   // Apply ground texture
   quad.setTexture(texture);
 
+  // Mark texture as in-use so it won't be evicted while bound to this tile
+  cache.markInUse(key);
+
   // Configure material for stencil masking (Z10 only renders where Z14 doesn't exist)
   const material = quad.getMaterial();
   material.stencilWrite = false;
@@ -138,6 +141,10 @@ export function removeLowDetailGroundGroup(group: THREE.Group): void {
   const tileData = activeLowDetailTiles.get(key);
 
   if (tileData) {
+    // Unmark texture as in-use so it can be evicted if needed
+    const cache = getLowDetailCache();
+    cache.unmarkInUse(key);
+
     // Dispose quad resources (but not texture - it's cached)
     const mesh = group.children[0] as THREE.Mesh;
     if (mesh) {

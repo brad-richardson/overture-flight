@@ -8,10 +8,35 @@ import type { CachedTexture, TileBounds } from './types.js';
 export class TileTextureCache {
   private cache = new Map<string, CachedTexture>();
   private disposeThreshold: number;
+  // Track textures that are currently bound to active tiles and should not be evicted
+  private inUseTextures = new Set<string>();
 
   constructor(config: { maxSize: number; disposeThreshold?: number }) {
     // Start evicting when we hit 80% of max size (or at specified threshold)
     this.disposeThreshold = config.disposeThreshold ?? Math.floor(config.maxSize * 0.8);
+  }
+
+  /**
+   * Mark a texture as in-use (bound to an active tile)
+   * In-use textures will not be evicted by LRU
+   */
+  markInUse(key: string): void {
+    this.inUseTextures.add(key);
+  }
+
+  /**
+   * Unmark a texture as in-use (tile has been removed)
+   * The texture can now be evicted by LRU if needed
+   */
+  unmarkInUse(key: string): void {
+    this.inUseTextures.delete(key);
+  }
+
+  /**
+   * Check if a texture is currently in use
+   */
+  isInUse(key: string): boolean {
+    return this.inUseTextures.has(key);
   }
 
   /**
@@ -109,25 +134,32 @@ export class TileTextureCache {
 
   /**
    * Evict least recently used entries until we're under threshold
+   * IMPORTANT: Never evicts textures that are marked as in-use
    */
   private evictLRU(): void {
     const targetSize = Math.floor(this.disposeThreshold * 0.75);
 
-    // Sort by last accessed time (oldest first)
+    // Sort by last accessed time (oldest first), filtering out in-use textures
     const entries = Array.from(this.cache.entries())
+      .filter(([key]) => !this.inUseTextures.has(key))
       .sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
 
-    // Evict oldest until we're at target size
+    // Evict oldest (non-in-use) until we're at target size
     let evicted = 0;
-    while (this.cache.size > targetSize && evicted < entries.length) {
-      const [key, cached] = entries[evicted];
-      cached.texture.dispose();
-      this.cache.delete(key);
-      evicted++;
+    let index = 0;
+    while (this.cache.size > targetSize && index < entries.length) {
+      const [key, cached] = entries[index];
+      // Double-check it's still not in use (defensive)
+      if (!this.inUseTextures.has(key)) {
+        cached.texture.dispose();
+        this.cache.delete(key);
+        evicted++;
+      }
+      index++;
     }
 
     if (evicted > 0) {
-      console.log(`TileTextureCache: Evicted ${evicted} textures (LRU)`);
+      console.log(`TileTextureCache: Evicted ${evicted} textures (LRU), ${this.inUseTextures.size} protected`);
     }
   }
 }
