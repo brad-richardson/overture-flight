@@ -411,11 +411,24 @@
       align-items: center;
     }
 
+    #player-list li.clickable-player {
+      cursor: pointer;
+      padding: 4px 6px;
+      margin: 0 -6px;
+      border-radius: 4px;
+      transition: background 0.15s;
+    }
+
+    #player-list li.clickable-player:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
     #player-list .color-dot {
       width: 10px;
       height: 10px;
       border-radius: 50%;
       margin-right: 8px;
+      flex-shrink: 0;
     }
 
     #controls-help {
@@ -862,7 +875,7 @@
       }
     }
   </style>
-  <script type="module" crossorigin src="/overture-flight/pr-preview/pr-46/assets/index-B93d0zgL.js"></script>
+  <script type="module" crossorigin src="/overture-flight/pr-preview/pr-46/assets/index-KhOcbTsw.js"></script>
 </head>
 <body>
   <div id="map"></div>
