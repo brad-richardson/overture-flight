@@ -3,7 +3,7 @@ import { initControls, updatePlane, getPlaneState, setPlaneIdentity, teleportPla
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection, Connection, WelcomeMessage } from './network.js';
 import { checkCollision } from './collision.js';
-import { updateHUD, updatePlayerList, showCrashMessage } from './ui.js';
+import { updateHUD, updatePlayerList, showCrashMessage, setTeleportToPlayerCallback } from './ui.js';
 import { initMinimap, updateMinimap } from './minimap.js';
 import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile, clearDistantWaterPolygonCache } from './tile-manager.js';
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
@@ -232,6 +232,12 @@ function handleWelcome(msg: WelcomeMessage): void {
  * Handle sync message from server
  */
 function handleSync(planes: Record<string, PlaneState>): void {
+  // Debug: log sync received
+  const otherPlayers = Object.entries(planes).filter(([id]) => id !== localId);
+  if (otherPlayers.length > 0) {
+    console.log('Sync received:', otherPlayers.length, 'other players', otherPlayers.map(([id, p]) => ({ id: id.slice(-4), lat: p.lat.toFixed(4), lng: p.lng.toFixed(4) })));
+  }
+
   // Update players map and set interpolation targets
   for (const [id, plane] of Object.entries(planes)) {
     if (id !== localId) {
@@ -402,6 +408,9 @@ async function init(): Promise<void> {
 
     // Initialize minimap
     initMinimap(handleTeleport);
+
+    // Set up teleport-to-player callback for the player list UI
+    setTeleportToPlayerCallback(handleTeleport);
 
     // Initialize feature picker and modal (click on features to see properties)
     initFeatureModal();
