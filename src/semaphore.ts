@@ -1,4 +1,4 @@
-import { TILE_CONCURRENCY } from './constants.js';
+import { TILE_CONCURRENCY, FETCH_CONCURRENCY } from './constants.js';
 
 /**
  * Priority levels for tile processing
@@ -116,4 +116,22 @@ export function getTileSemaphore(): PrioritySemaphore | null {
     tileSemaphore = new PrioritySemaphore(TILE_CONCURRENCY.MAX_CONCURRENT);
   }
   return tileSemaphore;
+}
+
+// Shared singleton for network fetch concurrency
+let fetchSemaphore: PrioritySemaphore | null = null;
+
+/**
+ * Get the shared network fetch semaphore
+ * Limits concurrent HTTP requests to prevent flooding
+ * Returns null if concurrency limiting is disabled
+ */
+export function getFetchSemaphore(): PrioritySemaphore | null {
+  if (!FETCH_CONCURRENCY.ENABLED) {
+    return null;
+  }
+  if (!fetchSemaphore) {
+    fetchSemaphore = new PrioritySemaphore(FETCH_CONCURRENCY.MAX_CONCURRENT);
+  }
+  return fetchSemaphore;
 }

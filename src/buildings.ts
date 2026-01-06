@@ -148,11 +148,16 @@ export async function createBuildingsForTile(
   // Use semaphore to limit concurrent tile processing (maintains 60fps)
   // Buildings have lowest priority - ground tiles load first
   const semaphore = getTileSemaphore();
-  if (semaphore) {
-    return semaphore.run(() => createBuildingsForTileInner(tileX, tileY, tileZ, tileKey), TilePriority.BUILDINGS);
+  try {
+    if (semaphore) {
+      return await semaphore.run(() => createBuildingsForTileInner(tileX, tileY, tileZ, tileKey), TilePriority.BUILDINGS);
+    }
+    return await createBuildingsForTileInner(tileX, tileY, tileZ, tileKey);
+  } catch (error) {
+    // Ensure cleanup on error to prevent permanently stuck entries
+    loadingBuildingTiles.delete(tileKey);
+    throw error;
   }
-
-  return createBuildingsForTileInner(tileX, tileY, tileZ, tileKey);
 }
 
 /**

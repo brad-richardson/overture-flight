@@ -46,14 +46,12 @@ export class LoadingGate {
    * Called when a tile finishes loading
    */
   onTileLoaded(): void {
-    console.log('[LoadingGate] onTileLoaded() called, isReady =', this.isReady, ', loadedTileCount =', this.loadedTileCount + 1);
     if (this.isReady) return;
 
     this.loadedTileCount++;
     this.updateLoadingProgress();
 
     if (this.loadedTileCount >= this.minTiles) {
-      console.log('[LoadingGate] Minimum tiles reached, calling setReady()');
       this.setReady();
     }
   }
@@ -62,7 +60,6 @@ export class LoadingGate {
    * Mark the loading gate as ready
    */
   private setReady(): void {
-    console.log('[LoadingGate] setReady() called');
     if (this.isReady) return;
 
     this.isReady = true;
@@ -151,7 +148,6 @@ export class LoadingGate {
 
     document.head.appendChild(this.styleElement);
     document.body.appendChild(this.loadingOverlay);
-    console.log('[LoadingGate] Indicator added to DOM:', this.loadingOverlay);
   }
 
   /**

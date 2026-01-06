@@ -160,10 +160,10 @@ function getColorForFeature(layer: string, properties: Record<string, unknown>):
   }
 
   if (layer === 'land_cover') {
-    return COLORS[type] || COLORS.grass;
+    return COLORS[type] ?? COLORS.grass;
   }
 
-  if (COLORS[type]) {
+  if (type in COLORS) {
     return COLORS[type];
   }
 
@@ -511,13 +511,22 @@ export function getTransferableBuffers(result: BaseGeometryResult): ArrayBuffer[
   const buffers: ArrayBuffer[] = [];
 
   for (const group of result.polygonGroups) {
-    buffers.push(group.positions.buffer as ArrayBuffer);
-    buffers.push(group.indices.buffer as ArrayBuffer);
-    buffers.push(group.normals.buffer as ArrayBuffer);
+    // Validate that buffer properties are actually ArrayBuffers before adding
+    if (group.positions.buffer instanceof ArrayBuffer) {
+      buffers.push(group.positions.buffer);
+    }
+    if (group.indices.buffer instanceof ArrayBuffer) {
+      buffers.push(group.indices.buffer);
+    }
+    if (group.normals.buffer instanceof ArrayBuffer) {
+      buffers.push(group.normals.buffer);
+    }
   }
 
   for (const group of result.lineGroups) {
-    buffers.push(group.positions.buffer as ArrayBuffer);
+    if (group.positions.buffer instanceof ArrayBuffer) {
+      buffers.push(group.positions.buffer);
+    }
   }
 
   return buffers;

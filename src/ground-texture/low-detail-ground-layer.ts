@@ -73,11 +73,16 @@ export async function createLowDetailGroundForTile(
   // Use shared semaphore to limit concurrent tile processing (maintains 60fps)
   // Z10 tiles have second priority (after Z14)
   const semaphore = getTileSemaphore();
-  if (semaphore) {
-    return semaphore.run(() => createLowDetailGroundForTileInner(tileX, tileY, tileZ, key), TilePriority.Z10_GROUND);
+  try {
+    if (semaphore) {
+      return await semaphore.run(() => createLowDetailGroundForTileInner(tileX, tileY, tileZ, key), TilePriority.Z10_GROUND);
+    }
+    return await createLowDetailGroundForTileInner(tileX, tileY, tileZ, key);
+  } catch (error) {
+    // Ensure cleanup on error to prevent permanently stuck entries
+    loadingLowDetailTiles.delete(key);
+    throw error;
   }
-
-  return createLowDetailGroundForTileInner(tileX, tileY, tileZ, key);
 }
 
 /**
@@ -104,10 +109,11 @@ async function createLowDetailGroundForTileInner(
   if (!texture) {
     // Load base features (land, water, land_cover) - no transportation
     // At Z10, polygons are large enough that we don't need neighbor tiles
-    const baseFeatures = await loadBaseTile(tileX, tileY, tileZ);
+    // Use Z10_GROUND priority (lower than Z14) for distant terrain
+    const baseFeatures = await loadBaseTile(tileX, tileY, tileZ, TilePriority.Z10_GROUND);
 
     // Also load water polygons from even lower zooms for ocean coverage
-    const lowerZoomWater = await loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ);
+    const lowerZoomWater = await loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ, TilePriority.Z10_GROUND);
 
     // Merge features - lower zoom water first
     const allBaseFeatures = [...lowerZoomWater, ...baseFeatures];

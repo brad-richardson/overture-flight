@@ -3,6 +3,7 @@ import { VectorTile } from '@mapbox/vector-tile';
 import Pbf from 'pbf';
 import { OVERTURE_BUILDINGS_PMTILES, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from './constants.js';
 import { getOrigin } from './scene.js';
+import { getFetchSemaphore, TilePriority } from './semaphore.js';
 
 // Types
 export interface TileBounds {
@@ -234,34 +235,45 @@ export function parseMVT(
 
 /**
  * Get tile data from PMTiles source with retry logic
+ * Uses priority-based fetch queue to prevent request flooding
  */
 async function getTileData(
   pmtiles: PMTiles | null,
   z: number,
   x: number,
-  y: number
+  y: number,
+  priority: TilePriority = TilePriority.BUILDINGS
 ): Promise<ArrayBuffer | null> {
   if (!pmtiles) {
     return null;
   }
 
-  try {
-    const result = await retryWithBackoff(
-      () => pmtiles.getZxy(z, x, y),
-      2, // fewer retries for individual tiles
-      500
-    );
-    if (result && result.data) {
-      return result.data;
+  // Use fetch semaphore to limit concurrent network requests
+  const semaphore = getFetchSemaphore();
+  const fetchFn = async (): Promise<ArrayBuffer | null> => {
+    try {
+      const result = await retryWithBackoff(
+        () => pmtiles.getZxy(z, x, y),
+        2, // fewer retries for individual tiles
+        500
+      );
+      if (result && result.data) {
+        return result.data;
+      }
+      return null;
+    } catch (e) {
+      // Only log occasionally to avoid spam
+      if (Math.random() < 0.1) {
+        console.warn(`PMTiles tile ${z}/${x}/${y} failed after retries:`, (e as Error).message);
+      }
+      return null;
     }
-    return null;
-  } catch (e) {
-    // Only log occasionally to avoid spam
-    if (Math.random() < 0.1) {
-      console.warn(`PMTiles tile ${z}/${x}/${y} failed after retries:`, (e as Error).message);
-    }
-    return null;
+  };
+
+  if (semaphore) {
+    return semaphore.run(fetchFn, priority);
   }
+  return fetchFn();
 }
 
 /**
@@ -274,7 +286,8 @@ export async function loadBuildingTile(
 ): Promise<ParsedFeature[]> {
   if (!buildingsPMTiles) return [];
 
-  const data = await getTileData(buildingsPMTiles, zoom, x, y);
+  // Buildings have lowest priority in fetch queue
+  const data = await getTileData(buildingsPMTiles, zoom, x, y, TilePriority.BUILDINGS);
   if (!data) return [];
 
   return parseMVT(data, x, y, zoom, 'building');
@@ -283,18 +296,20 @@ export async function loadBuildingTile(
 /**
  * Load base layer features for a tile (land, water, etc.)
  * Tries multiple fallback zoom levels if the requested zoom has no data
+ * @param priority - Fetch priority (Z14_GROUND for high-detail, Z10_GROUND for low-detail)
  */
 export async function loadBaseTile(
   x: number,
   y: number,
-  zoom: number = TILE_ZOOM
+  zoom: number = TILE_ZOOM,
+  priority: TilePriority = TilePriority.Z14_GROUND
 ): Promise<ParsedFeature[]> {
   if (!basePMTiles) {
     console.warn('Base PMTiles not initialized');
     return [];
   }
 
-  const data = await getTileData(basePMTiles, zoom, x, y);
+  const data = await getTileData(basePMTiles, zoom, x, y, priority);
   if (data) {
     // Base PMTiles has layers: water, land, land_use, land_cover, infrastructure
     return parseMVT(data, x, y, zoom);
@@ -307,7 +322,7 @@ export async function loadBaseTile(
     const fallbackX = Math.floor(x / scale);
     const fallbackY = Math.floor(y / scale);
 
-    const fallbackData = await getTileData(basePMTiles, fallbackZoom, fallbackX, fallbackY);
+    const fallbackData = await getTileData(basePMTiles, fallbackZoom, fallbackX, fallbackY, priority);
     if (fallbackData) {
       return parseMVT(fallbackData, fallbackX, fallbackY, fallbackZoom);
     }
@@ -324,11 +339,13 @@ export async function loadBaseTile(
  *
  * Results are cached by lower zoom tile coordinates for efficiency -
  * multiple detail tiles share the same lower zoom water data.
+ * @param priority - Fetch priority (Z14_GROUND for high-detail, Z10_GROUND for low-detail)
  */
 export async function loadWaterPolygonsFromLowerZooms(
   x: number,
   y: number,
-  zoom: number = TILE_ZOOM
+  zoom: number = TILE_ZOOM,
+  priority: TilePriority = TilePriority.Z14_GROUND
 ): Promise<ParsedFeature[]> {
   if (!basePMTiles) {
     return [];
@@ -351,7 +368,7 @@ export async function loadWaterPolygonsFromLowerZooms(
       features = waterPolygonCache.get(cacheKey)!;
     } else {
       // Fetch and cache
-      const data = await getTileData(basePMTiles, lowerZoom, lowerX, lowerY);
+      const data = await getTileData(basePMTiles, lowerZoom, lowerX, lowerY, priority);
       if (!data) continue;
 
       const allFeatures = parseMVT(data, lowerX, lowerY, lowerZoom, 'water');
@@ -434,15 +451,17 @@ export function clearDistantWaterPolygonCache(
 
 /**
  * Load transportation features for a tile (roads, paths, railways)
+ * @param priority - Fetch priority (defaults to Z14_GROUND for road network)
  */
 export async function loadTransportationTile(
   x: number,
   y: number,
-  zoom: number = TILE_ZOOM
+  zoom: number = TILE_ZOOM,
+  priority: TilePriority = TilePriority.Z14_GROUND
 ): Promise<ParsedFeature[]> {
   if (!transportationPMTiles) return [];
 
-  const data = await getTileData(transportationPMTiles, zoom, x, y);
+  const data = await getTileData(transportationPMTiles, zoom, x, y, priority);
   if (!data) return [];
 
   // Transportation PMTiles has layers: segment, connector

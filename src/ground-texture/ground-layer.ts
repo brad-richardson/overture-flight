@@ -67,11 +67,16 @@ export async function createGroundForTile(
   // Use semaphore to limit concurrent tile processing (maintains 60fps)
   // Z14 ground tiles have highest priority
   const semaphore = getTileSemaphore();
-  if (semaphore) {
-    return semaphore.run(() => createGroundForTileInner(tileX, tileY, tileZ, key), TilePriority.Z14_GROUND);
+  try {
+    if (semaphore) {
+      return await semaphore.run(() => createGroundForTileInner(tileX, tileY, tileZ, key), TilePriority.Z14_GROUND);
+    }
+    return await createGroundForTileInner(tileX, tileY, tileZ, key);
+  } catch (error) {
+    // Ensure cleanup on error to prevent permanently stuck entries
+    loadingTiles.delete(key);
+    throw error;
   }
-
-  return createGroundForTileInner(tileX, tileY, tileZ, key);
 }
 
 /**
