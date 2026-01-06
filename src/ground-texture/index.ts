@@ -9,6 +9,7 @@ export {
   evictDistantGroundTextures,
   clearAllGroundTiles,
   getGroundCacheStats,
+  getZ14CoverageBounds,
 } from './ground-layer.js';
 
 export { TileTextureCache, getTextureCache, initTextureCache } from './tile-texture-cache.js';

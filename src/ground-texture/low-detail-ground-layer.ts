@@ -7,6 +7,7 @@ import { loadBaseTile, loadWaterPolygonsFromLowerZooms, tileToBounds, lngLatToTi
 import { getTerrainHeight } from '../elevation.js';
 import { getScene } from '../scene.js';
 import { LOW_DETAIL_TERRAIN, ELEVATION } from '../constants.js';
+import { getZ14CoverageBounds } from './ground-layer.js';
 
 // Tile info type
 interface TileInfo {
@@ -119,7 +120,68 @@ export async function createLowDetailGroundForTile(
   material.stencilZFail = THREE.KeepStencilOp;
   material.stencilZPass = THREE.KeepStencilOp;
 
-  // Position mesh slightly below Z14 (as backup to stencil)
+  // Add shader-based clipping to discard fragments in Z14 coverage area
+  // This is more robust than stencil masking alone because it works in world-space
+  // regardless of mesh resolution differences on steep terrain
+  const z14Bounds = getZ14CoverageBounds();
+  if (z14Bounds) {
+    // Create uniforms for Z14 bounds
+    const clipUniforms = {
+      u_z14MinX: { value: z14Bounds.minX },
+      u_z14MaxX: { value: z14Bounds.maxX },
+      u_z14MinZ: { value: z14Bounds.minZ },
+      u_z14MaxZ: { value: z14Bounds.maxZ },
+    };
+
+    material.onBeforeCompile = (shader) => {
+      // Add uniforms
+      shader.uniforms.u_z14MinX = clipUniforms.u_z14MinX;
+      shader.uniforms.u_z14MaxX = clipUniforms.u_z14MaxX;
+      shader.uniforms.u_z14MinZ = clipUniforms.u_z14MinZ;
+      shader.uniforms.u_z14MaxZ = clipUniforms.u_z14MaxZ;
+
+      // Add varying for world position in vertex shader
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vWorldPos;`
+      );
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <worldpos_vertex>',
+        `#include <worldpos_vertex>
+        vWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
+      );
+
+      // Add uniform declarations and clipping logic in fragment shader
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <common>',
+        `#include <common>
+        uniform float u_z14MinX;
+        uniform float u_z14MaxX;
+        uniform float u_z14MinZ;
+        uniform float u_z14MaxZ;
+        varying vec3 vWorldPos;`
+      );
+
+      // Discard fragments within Z14 bounds early to avoid unnecessary lighting calculations
+      // Insert after clipping_planes_fragment for early exit
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <clipping_planes_fragment>',
+        `#include <clipping_planes_fragment>
+        // Z14 coverage clipping - discard Z10 fragments in Z14 area
+        float margin = 2.0; // 2 meter margin to ensure clean edges
+        if (vWorldPos.x > u_z14MinX - margin && vWorldPos.x < u_z14MaxX + margin &&
+            vWorldPos.z > u_z14MinZ - margin && vWorldPos.z < u_z14MaxZ + margin) {
+          discard;
+        }`
+      );
+    };
+
+    // Store uniforms reference so we can update them later if needed
+    (material as THREE.MeshStandardMaterial & { _clipUniforms?: typeof clipUniforms })._clipUniforms = clipUniforms;
+  }
+
+  // Position mesh slightly below Z14 (as backup to shader clipping)
   const mesh = quad.getMesh();
   mesh.position.y += LOW_DETAIL_TERRAIN.Y_OFFSET;
 

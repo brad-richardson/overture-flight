@@ -3,7 +3,7 @@ import type { GroundTileData } from './types.js';
 import { TileTextureCache, initTextureCache } from './tile-texture-cache.js';
 import { renderTileTexture } from './tile-texture-renderer.js';
 import { TerrainQuad } from './terrain-quad.js';
-import { loadBaseTile, loadTransportationTile, loadWaterPolygonsFromLowerZooms, tileToBounds } from '../tile-manager.js';
+import { loadBaseTile, loadTransportationTile, loadWaterPolygonsFromLowerZooms, tileToBounds, tileToWorldBounds } from '../tile-manager.js';
 import { getTerrainHeight } from '../elevation.js';
 import { getScene } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
@@ -12,6 +12,40 @@ import type { StoredFeature } from '../feature-picker.js';
 
 // Active ground tiles
 const activeTiles = new Map<string, GroundTileData>();
+
+// Track world-space bounds of all active Z14 tiles for Z10 clipping
+let z14CoverageBounds: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null;
+
+/**
+ * Recalculate the combined world-space bounds of all active Z14 tiles
+ */
+function updateZ14CoverageBounds(): void {
+  if (activeTiles.size === 0) {
+    z14CoverageBounds = null;
+    return;
+  }
+
+  let minX = Infinity, maxX = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+
+  for (const tileData of activeTiles.values()) {
+    const worldBounds = tileToWorldBounds(tileData.x, tileData.y, tileData.z);
+    minX = Math.min(minX, worldBounds.minX);
+    maxX = Math.max(maxX, worldBounds.maxX);
+    minZ = Math.min(minZ, worldBounds.minZ);
+    maxZ = Math.max(maxZ, worldBounds.maxZ);
+  }
+
+  z14CoverageBounds = { minX, maxX, minZ, maxZ };
+}
+
+/**
+ * Get the current world-space bounds of Z14 tile coverage
+ * Used by Z10 tiles to clip fragments in the Z14 region
+ */
+export function getZ14CoverageBounds(): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
+  return z14CoverageBounds;
+}
 
 // Track tiles currently being loaded to prevent race conditions
 const loadingTiles = new Set<string>();
@@ -184,6 +218,9 @@ export async function createGroundForTile(
     key,
   });
 
+  // Update Z14 coverage bounds for Z10 clipping
+  updateZ14CoverageBounds();
+
   // Add to scene
   scene.add(group);
 
@@ -217,6 +254,9 @@ export function removeGroundGroup(group: THREE.Group): void {
     }
 
     activeTiles.delete(key);
+
+    // Update Z14 coverage bounds for Z10 clipping
+    updateZ14CoverageBounds();
   }
 
   const scene = getScene();
