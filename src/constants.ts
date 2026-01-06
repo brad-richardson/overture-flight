@@ -185,8 +185,9 @@ export const GROUND_TEXTURE: GroundTextureConfig = {
 
 // Low-detail terrain settings (Z10 background layer)
 // Renders distant terrain with simplified features for extended visibility
+// Enable via VITE_ENABLE_Z10_RENDERING=true environment variable (disabled by default)
 export interface LowDetailTerrainConfig {
-  ENABLED: boolean;               // Enable/disable low-detail distant terrain
+  ENABLED: boolean;               // Enable/disable low-detail distant terrain (env: VITE_ENABLE_Z10_RENDERING)
   ZOOM: number;                   // Zoom level for low-detail tiles
   TILE_RADIUS: number;            // Radius of tiles to load (2 = 5x5 grid)
   TEXTURE_SIZE: number;           // Lower resolution texture
@@ -196,7 +197,7 @@ export interface LowDetailTerrainConfig {
 }
 
 export const LOW_DETAIL_TERRAIN: LowDetailTerrainConfig = {
-  ENABLED: true,
+  ENABLED: import.meta.env.VITE_ENABLE_Z10_RENDERING === 'true',
   ZOOM: 10,                       // Z10 covers 16x16 Z14 tiles (~24km x 24km)
   TILE_RADIUS: 2,                 // 5x5 grid = ~120km x 120km coverage
   TEXTURE_SIZE: 1024,             // Lower resolution (half of Z14)
