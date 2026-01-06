@@ -389,6 +389,7 @@
       list-style: none;
       max-height: 150px;
       overflow-y: auto;
+      overflow-x: hidden;
     }
 
     #player-list::-webkit-scrollbar {
@@ -413,14 +414,16 @@
 
     #player-list li.clickable-player {
       cursor: pointer;
-      padding: 4px 6px;
-      margin: 0 -6px;
       border-radius: 4px;
       transition: background 0.15s;
     }
 
     #player-list li.clickable-player:hover {
       background: rgba(255, 255, 255, 0.1);
+    }
+
+    #player-list li.clickable-player:hover span:last-child {
+      text-decoration: underline;
     }
 
     #player-list .color-dot {
@@ -875,7 +878,7 @@
       }
     }
   </style>
-  <script type="module" crossorigin src="/overture-flight/pr-preview/pr-46/assets/index-KhOcbTsw.js"></script>
+  <script type="module" crossorigin src="/overture-flight/pr-preview/pr-46/assets/index-CHthnYxz.js"></script>
 </head>
 <body>
   <div id="map"></div>
