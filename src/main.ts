@@ -77,6 +77,32 @@ function updateLocationHash(lng: number, lat: number): void {
   history.replaceState(null, '', newHash);
 }
 
+// Flag to track if we're currently handling a hash change (to avoid re-triggering)
+let isHandlingHashChange = false;
+
+/**
+ * Handle URL hash changes (user manually editing URL or using back/forward)
+ */
+function handleHashChange(): void {
+  if (isHandlingHashChange) return;
+
+  const location = parseLocationFromHash();
+  if (!location) return;
+
+  // Check if this is actually a different location than where we are
+  const currentHash = lastLocationHash;
+  const newHash = window.location.hash;
+  if (currentHash === newHash) return;
+
+  isHandlingHashChange = true;
+  handleTeleport(location.lat, location.lng).finally(() => {
+    isHandlingHashChange = false;
+  });
+}
+
+// Listen for hash changes (user editing URL or back/forward navigation)
+window.addEventListener('hashchange', handleHashChange);
+
 // Game state
 let connection: Connection | null = null;
 let localId = '';
