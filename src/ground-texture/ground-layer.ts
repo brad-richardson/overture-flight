@@ -6,9 +6,11 @@ import { TerrainQuad } from './terrain-quad.js';
 import { loadBaseTile, loadTransportationTile, loadWaterPolygonsFromLowerZooms, tileToBounds } from '../tile-manager.js';
 import { getTerrainHeight } from '../elevation.js';
 import { getScene } from '../scene.js';
-import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
+import { GROUND_TEXTURE, ELEVATION, WORKERS } from '../constants.js';
 import { storeFeatures, removeStoredFeatures } from '../feature-picker.js';
 import type { StoredFeature } from '../feature-picker.js';
+import { getWorkerPool } from '../workers/index.js';
+import { getTileSemaphore, TilePriority } from '../semaphore.js';
 
 // Active ground tiles
 const activeTiles = new Map<string, GroundTileData>();
@@ -61,6 +63,36 @@ export async function createGroundForTile(
 
   // Mark as loading
   loadingTiles.add(key);
+
+  // Use semaphore to limit concurrent tile processing (maintains 60fps)
+  // Z14 ground tiles have highest priority
+  const semaphore = getTileSemaphore();
+  try {
+    if (semaphore) {
+      return await semaphore.run(() => createGroundForTileInner(tileX, tileY, tileZ, key), TilePriority.Z14_GROUND);
+    }
+    return await createGroundForTileInner(tileX, tileY, tileZ, key);
+  } catch (error) {
+    // Ensure cleanup on error to prevent permanently stuck entries
+    loadingTiles.delete(key);
+    throw error;
+  }
+}
+
+/**
+ * Inner implementation of tile creation (runs with semaphore permit)
+ */
+async function createGroundForTileInner(
+  tileX: number,
+  tileY: number,
+  tileZ: number,
+  key: string
+): Promise<THREE.Group | null> {
+  const scene = getScene();
+  if (!scene) {
+    loadingTiles.delete(key);
+    return null;
+  }
 
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const cache = getCache();
@@ -143,7 +175,46 @@ export async function createGroundForTile(
     ];
 
     // Render to texture (canvas will clip features outside bounds)
-    texture = renderTileTexture(baseFeatures, transportFeatures, bounds);
+    // Use worker pool if enabled and supported, otherwise fall back to main thread
+    let useWorker = WORKERS.ENABLED;
+    if (useWorker) {
+      try {
+        const pool = getWorkerPool();
+        const isSupported = await pool.isWorkerSupported();
+        if (isSupported) {
+          // Render in worker, returns ImageBitmap
+          const bitmap = await pool.renderTileTexture(
+            baseFeatures,
+            transportFeatures,
+            bounds,
+            GROUND_TEXTURE.TEXTURE_SIZE
+          );
+
+          // Create texture from ImageBitmap
+          const workerTexture = new THREE.Texture(bitmap);
+          workerTexture.minFilter = THREE.LinearMipmapLinearFilter;
+          workerTexture.magFilter = THREE.LinearFilter;
+          workerTexture.generateMipmaps = true;
+          workerTexture.colorSpace = THREE.SRGBColorSpace;
+          workerTexture.needsUpdate = true;
+
+          // Cast to CanvasTexture for cache compatibility (works at runtime)
+          // Note: Don't close the bitmap - let Three.js/GC handle memory
+          texture = workerTexture as unknown as THREE.CanvasTexture;
+        } else {
+          useWorker = false;
+        }
+      } catch (error) {
+        console.warn('Worker rendering failed, falling back to main thread:', error);
+        useWorker = false;
+      }
+    }
+
+    // Fallback to main thread rendering
+    if (!useWorker || !texture) {
+      texture = renderTileTexture(baseFeatures, transportFeatures, bounds);
+    }
+
     cache.set(key, texture, bounds);
   }
 

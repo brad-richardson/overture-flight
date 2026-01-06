@@ -13,6 +13,7 @@ import {
 } from './building-materials.js';
 import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
 import type { StoredFeature } from './feature-picker.js';
+import { getTileSemaphore, TilePriority } from './semaphore.js';
 
 // Default building height when not specified
 const DEFAULT_BUILDING_HEIGHT = 10;
@@ -98,6 +99,9 @@ function simplifyPolygon(points: THREE.Vector2[], tolerance: number): THREE.Vect
 // Material cache by category for performance
 const materialCache = new Map<string, THREE.MeshStandardMaterial>();
 
+// Track tiles currently being loaded to prevent race conditions
+const loadingBuildingTiles = new Set<string>();
+
 /**
  * Get or create a material for a building category
  */
@@ -131,13 +135,53 @@ export async function createBuildingsForTile(
     return null;
   }
 
+  const tileKey = `buildings-${tileZ}/${tileX}/${tileY}`;
+
+  // Check if currently loading (prevent race condition)
+  if (loadingBuildingTiles.has(tileKey)) {
+    return null;
+  }
+
+  // Mark as loading
+  loadingBuildingTiles.add(tileKey);
+
+  // Use semaphore to limit concurrent tile processing (maintains 60fps)
+  // Buildings have lowest priority - ground tiles load first
+  const semaphore = getTileSemaphore();
+  try {
+    if (semaphore) {
+      return await semaphore.run(() => createBuildingsForTileInner(tileX, tileY, tileZ, tileKey), TilePriority.BUILDINGS);
+    }
+    return await createBuildingsForTileInner(tileX, tileY, tileZ, tileKey);
+  } catch (error) {
+    // Ensure cleanup on error to prevent permanently stuck entries
+    loadingBuildingTiles.delete(tileKey);
+    throw error;
+  }
+}
+
+/**
+ * Inner implementation of building tile creation (runs with semaphore permit)
+ */
+async function createBuildingsForTileInner(
+  tileX: number,
+  tileY: number,
+  tileZ: number,
+  tileKey: string
+): Promise<THREE.Group | null> {
+  const scene = getScene();
+  if (!scene) {
+    loadingBuildingTiles.delete(tileKey);
+    return null;
+  }
+
   const features = await loadBuildingTile(tileX, tileY, tileZ);
   if (features.length === 0) {
+    loadingBuildingTiles.delete(tileKey);
     return null;
   }
 
   // Store features for click picking
-  const tileKey = `buildings-${tileZ}/${tileX}/${tileY}`;
   const storedFeatures: StoredFeature[] = features
     .filter(f => {
       // Only process polygon/multipolygon types
@@ -253,10 +297,12 @@ export async function createBuildingsForTile(
   }
 
   if (group.children.length === 0) {
+    loadingBuildingTiles.delete(tileKey);
     return null;
   }
 
   scene.add(group);
+  loadingBuildingTiles.delete(tileKey);
   return group;
 }
 

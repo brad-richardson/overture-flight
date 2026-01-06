@@ -1,3 +1,8 @@
+// Mobile device detection - used to reduce texture sizes and cache limits
+// Detects once at startup for consistent behavior throughout session
+export const IS_MOBILE = typeof navigator !== 'undefined' &&
+  /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 // PMTiles URLs for Overture Maps data
 // Check https://docs.overturemaps.org/guides/pmtiles/ for latest releases
 // Can be overridden via environment variables
@@ -176,11 +181,11 @@ export interface GroundTextureConfig {
 }
 
 export const GROUND_TEXTURE: GroundTextureConfig = {
-  TEXTURE_SIZE: 2048,             // ~1.2m/pixel at equator, ~0.85m/pixel at 45° latitude (z14 tiles)
-  CACHE_MAX_SIZE: 100,            // 100 tiles = ~1.6GB GPU memory (increased for high-velocity turns)
-  CACHE_DISPOSE_THRESHOLD: 80,    // Start evicting at 80 tiles
-  TERRAIN_QUAD_SEGMENTS: 16,      // 16x16 subdivisions for elevation
-  ENABLED: true,                  // Toggle between new/old rendering
+  TEXTURE_SIZE: IS_MOBILE ? 1024 : 2048,              // Half resolution on mobile to reduce GPU memory
+  CACHE_MAX_SIZE: IS_MOBILE ? 30 : 100,               // Fewer cached textures on mobile
+  CACHE_DISPOSE_THRESHOLD: IS_MOBILE ? 20 : 80,       // Earlier eviction on mobile
+  TERRAIN_QUAD_SEGMENTS: IS_MOBILE ? 8 : 16,          // Simpler terrain mesh on mobile
+  ENABLED: true,
 };
 
 // Low-detail terrain settings (Z10 background layer)
@@ -200,8 +205,60 @@ export const LOW_DETAIL_TERRAIN: LowDetailTerrainConfig = {
   ENABLED: import.meta.env.VITE_ENABLE_Z10_RENDERING === 'true',
   ZOOM: 10,                       // Z10 covers 16x16 Z14 tiles (~24km x 24km)
   TILE_RADIUS: 2,                 // 5x5 grid = ~120km x 120km coverage
-  TEXTURE_SIZE: 1024,             // Lower resolution (half of Z14)
-  TERRAIN_QUAD_SEGMENTS: 8,       // Fewer subdivisions for performance
+  TEXTURE_SIZE: IS_MOBILE ? 512 : 1024,              // Even lower resolution on mobile
+  TERRAIN_QUAD_SEGMENTS: IS_MOBILE ? 4 : 8,          // Simpler mesh on mobile
   Y_OFFSET: -0.5,                 // 0.5m below Z14 layer (small offset, stencil does the real masking)
   UNLOAD_DISTANCE: 4,             // Chebyshev distance for unloading
+};
+
+// Web Worker settings for tile rendering
+// Offloads CPU-intensive work to background threads
+export interface WorkersConfig {
+  ENABLED: boolean;               // Enable/disable texture worker rendering
+  GEOMETRY_ENABLED: boolean;      // Enable/disable geometry worker creation
+  POOL_SIZE: number;              // Number of workers (0 = auto based on cores)
+}
+
+export const WORKERS: WorkersConfig = {
+  ENABLED: false,                 // Texture workers: Disabled (structured clone overhead negates benefit)
+  GEOMETRY_ENABLED: true,         // Geometry workers: Enabled (uses zero-copy ArrayBuffer transfer)
+  POOL_SIZE: 0,                   // 0 = auto (cores - 1, min 2, max 4)
+};
+
+// Loading gate settings for initial tile loading
+// Stalls plane movement until minimum tiles are rendered
+export interface LoadingGateConfig {
+  ENABLED: boolean;               // Enable/disable loading gate
+  MIN_TILES: number;              // Minimum tiles before starting
+  MAX_WAIT_MS: number;            // Maximum wait time (fallback timeout)
+}
+
+export const LOADING_GATE: LoadingGateConfig = {
+  ENABLED: true,
+  MIN_TILES: 1,                   // Wait for center tile only
+  MAX_WAIT_MS: 5000,              // 5 second timeout
+};
+
+// Tile loading concurrency settings
+// Limits parallel tile processing to maintain 60fps during loading
+export interface TileConcurrencyConfig {
+  ENABLED: boolean;               // Enable/disable concurrency limiter
+  MAX_CONCURRENT: number;         // Maximum tiles processing at once
+}
+
+export const TILE_CONCURRENCY: TileConcurrencyConfig = {
+  ENABLED: true,
+  MAX_CONCURRENT: IS_MOBILE ? 2 : 3,   // Fewer parallel tiles on mobile
+};
+
+// Network fetch concurrency settings
+// Limits parallel HTTP requests to prevent flooding and improve prioritization
+export interface FetchConcurrencyConfig {
+  ENABLED: boolean;               // Enable/disable fetch concurrency limiter
+  MAX_CONCURRENT: number;         // Maximum concurrent network requests
+}
+
+export const FETCH_CONCURRENCY: FetchConcurrencyConfig = {
+  ENABLED: true,
+  MAX_CONCURRENT: IS_MOBILE ? 4 : 6,   // Fewer parallel fetches on mobile
 };
