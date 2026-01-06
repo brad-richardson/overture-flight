@@ -25,6 +25,84 @@ interface TileMeshes {
   trees: THREE.Group | null;
 }
 
+// URL location tracking - store last hash to detect meaningful changes
+let lastLocationHash: string | null = null;
+let lastHashUpdateTime = 0;
+const HASH_UPDATE_INTERVAL = 1000; // Only check/update URL every 1 second
+
+/**
+ * Parse location from URL hash in format #z/lat/lng (compatible with explore site)
+ * Returns null if hash is invalid or not present
+ */
+function parseLocationFromHash(): { lat: number; lng: number } | null {
+  const hash = window.location.hash;
+  if (!hash || hash.length < 2) return null;
+
+  // Format: #z/lat/lng
+  const parts = hash.substring(1).split('/');
+  if (parts.length !== 3) return null;
+
+  const lat = parseFloat(parts[1]);
+  const lng = parseFloat(parts[2]);
+
+  // Validate values (zoom is ignored, we always use z14)
+  if (isNaN(lat) || isNaN(lng)) return null;
+  if (lat < -90 || lat > 90) return null;
+  if (lng < -180 || lng > 180) return null;
+
+  return { lat, lng };
+}
+
+/**
+ * Update URL hash with current location
+ * Format: #z/lat/lng (compatible with explore site, z is always 14)
+ * Uses 2 decimal places (~1.1km precision) for stable URLs that don't spin constantly
+ * Note: When parsing, we accept any precision for shared URLs with more detail
+ * Throttled to avoid unnecessary work every frame
+ */
+function updateLocationHash(lng: number, lat: number): void {
+  // Throttle: only check every HASH_UPDATE_INTERVAL ms
+  const now = performance.now();
+  if (now - lastHashUpdateTime < HASH_UPDATE_INTERVAL) return;
+  lastHashUpdateTime = now;
+
+  // Format: #z/lat/lng with z fixed at 14, 2 decimal places for lat/lng
+  const newHash = `#14/${lat.toFixed(2)}/${lng.toFixed(2)}`;
+
+  // Only update URL if position has changed meaningfully
+  if (newHash === lastLocationHash) return;
+  lastLocationHash = newHash;
+
+  // Use replaceState to avoid polluting browser history
+  history.replaceState(null, '', newHash);
+}
+
+// Flag to track if we're currently handling a hash change (to avoid re-triggering)
+let isHandlingHashChange = false;
+
+/**
+ * Handle URL hash changes (user manually editing URL or using back/forward)
+ */
+function handleHashChange(): void {
+  if (isHandlingHashChange) return;
+
+  const location = parseLocationFromHash();
+  if (!location) return;
+
+  // Check if this is actually a different location than where we are
+  const currentHash = lastLocationHash;
+  const newHash = window.location.hash;
+  if (currentHash === newHash) return;
+
+  isHandlingHashChange = true;
+  handleTeleport(location.lat, location.lng).finally(() => {
+    isHandlingHashChange = false;
+  });
+}
+
+// Listen for hash changes (user editing URL or back/forward navigation)
+window.addEventListener('hashchange', handleHashChange);
+
 // Game state
 let connection: Connection | null = null;
 let localId = '';
@@ -166,6 +244,9 @@ function gameLoop(time: number): void {
   // Update minimap
   updateMinimap(planeState);
 
+  // Update URL hash with current tile location
+  updateLocationHash(planeState.lng, planeState.lat);
+
   // Send position to server
   if (connection) {
     connection.sendPosition(planeState);
@@ -248,6 +329,10 @@ function handlePlayerLeft(id: string): void {
  * Handle teleport action
  */
 async function handleTeleport(lat: number, lng: number): Promise<void> {
+  // Reset location tracking so URL updates after teleport
+  lastLocationHash = null;
+  lastHashUpdateTime = 0;
+
   // Update origin for new location
   setOrigin(lng, lat);
 
@@ -350,8 +435,12 @@ function showError(title: string, details: string[] = [], footer: string = ''): 
  */
 async function init(): Promise<void> {
   try {
-    // Set initial origin
-    setOrigin(DEFAULT_LOCATION.lng, DEFAULT_LOCATION.lat);
+    // Check for location in URL hash
+    const urlLocation = parseLocationFromHash();
+    const startLocation = urlLocation || DEFAULT_LOCATION;
+
+    // Set initial origin from URL or default
+    setOrigin(startLocation.lng, startLocation.lat);
 
     // Initialize Three.js scene
     await initScene();
@@ -370,7 +459,12 @@ async function init(): Promise<void> {
 
     // Preload elevation tiles for the starting area
     if (ELEVATION.TERRAIN_ENABLED) {
-      await preloadElevationTiles(DEFAULT_LOCATION.lng, DEFAULT_LOCATION.lat, 2);
+      await preloadElevationTiles(startLocation.lng, startLocation.lat, 2);
+    }
+
+    // Teleport plane to start location if from URL
+    if (urlLocation) {
+      teleportPlane(urlLocation.lat, urlLocation.lng);
     }
 
     // Initialize controls (keyboard)
