@@ -1,9 +1,10 @@
 import { PMTiles } from 'pmtiles';
 import { VectorTile } from '@mapbox/vector-tile';
 import Pbf from 'pbf';
-import { OVERTURE_BUILDINGS_PMTILES, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from './constants.js';
+import { OVERTURE_BUILDINGS_PMTILES, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES, PROFILING } from './constants.js';
 import { getOrigin } from './scene.js';
 import { getFetchSemaphore, TilePriority } from './semaphore.js';
+import { recordFetchTiming, mark, measure } from './profiling/tile-profiler.js';
 
 // Types
 export interface TileBounds {
@@ -91,6 +92,11 @@ const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loa
 // Water polygon cache - keyed by lower zoom tile "z/x/y"
 // Shared between base-layer (for rendering) and tree-layer (for filtering)
 const waterPolygonCache = new Map<string, ParsedFeature[]>();
+
+// In-flight request deduplication cache
+// Key format: "source:z/x/y:layerName" to prevent cross-contamination between different layer requests
+// For example: "base:14/1234/5678:null" vs "base:14/1234/5678:water"
+const inFlightRequests = new Map<string, Promise<ParsedFeature[]>>();
 
 // Tile loading settings (aggressive performance tuning)
 const TILE_ZOOM = 14; // Zoom level for tile loading (max available in PMTiles)
@@ -197,6 +203,7 @@ export function tileToWorldBounds(x: number, y: number, zoom: number): WorldBoun
 
 /**
  * Parse MVT data and extract features
+ * Records parse timing for profiling when enabled
  */
 export function parseMVT(
   data: ArrayBuffer,
@@ -205,6 +212,13 @@ export function parseMVT(
   zoom: number,
   layerName: string | null = null
 ): ParsedFeature[] {
+  const parseStart = PROFILING.ENABLED ? performance.now() : 0;
+  const tileKey = `${zoom}/${tileX}/${tileY}`;
+
+  if (PROFILING.ENABLED) {
+    mark(`mvt:parse:start:${tileKey}`);
+  }
+
   const tile = new VectorTile(new Pbf(data));
   const features: ParsedFeature[] = [];
 
@@ -230,12 +244,21 @@ export function parseMVT(
     }
   }
 
+  if (PROFILING.ENABLED) {
+    const parseEnd = performance.now();
+    mark(`mvt:parse:end:${tileKey}`);
+    measure(`mvt:parse:${tileKey}`, `mvt:parse:start:${tileKey}`, `mvt:parse:end:${tileKey}`);
+    // Record parse time (network time is recorded separately in getTileData)
+    recordFetchTiming(0, parseEnd - parseStart);
+  }
+
   return features;
 }
 
 /**
  * Get tile data from PMTiles source with retry logic
  * Uses priority-based fetch queue to prevent request flooding
+ * Returns ArrayBuffer and optionally records network timing for profiling
  */
 async function getTileData(
   pmtiles: PMTiles | null,
@@ -251,12 +274,28 @@ async function getTileData(
   // Use fetch semaphore to limit concurrent network requests
   const semaphore = getFetchSemaphore();
   const fetchFn = async (): Promise<ArrayBuffer | null> => {
+    const tileKey = `${z}/${x}/${y}`;
+    const networkStart = PROFILING.ENABLED ? performance.now() : 0;
+
     try {
+      if (PROFILING.ENABLED) {
+        mark(`pmtiles:fetch:start:${tileKey}`);
+      }
+
       const result = await retryWithBackoff(
         () => pmtiles.getZxy(z, x, y),
         2, // fewer retries for individual tiles
         500
       );
+
+      if (PROFILING.ENABLED) {
+        const networkEnd = performance.now();
+        mark(`pmtiles:fetch:end:${tileKey}`);
+        measure(`pmtiles:fetch:${tileKey}`, `pmtiles:fetch:start:${tileKey}`, `pmtiles:fetch:end:${tileKey}`);
+        // Record just the network time here; parse time will be recorded in parseMVT
+        recordFetchTiming(networkEnd - networkStart, 0);
+      }
+
       if (result && result.data) {
         return result.data;
       }
@@ -296,6 +335,7 @@ export async function loadBuildingTile(
 /**
  * Load base layer features for a tile (land, water, etc.)
  * Tries multiple fallback zoom levels if the requested zoom has no data
+ * Uses request deduplication to prevent redundant fetches for the same tile
  * @param priority - Fetch priority (Z14_GROUND for high-detail, Z10_GROUND for low-detail)
  */
 export async function loadBaseTile(
@@ -309,26 +349,44 @@ export async function loadBaseTile(
     return [];
   }
 
-  const data = await getTileData(basePMTiles, zoom, x, y, priority);
-  if (data) {
-    // Base PMTiles has layers: water, land, land_use, land_cover, infrastructure
-    return parseMVT(data, x, y, zoom);
+  // Check deduplication cache - key includes source and layer (null = all layers)
+  const dedupeKey = `base:${zoom}/${x}/${y}:null`;
+  const existingRequest = inFlightRequests.get(dedupeKey);
+  if (existingRequest) {
+    return existingRequest;
   }
 
-  // Try fallback zoom levels from zoom-1 down to MIN_FALLBACK_ZOOM
-  // Water and land data may only be available at certain zoom levels in the PMTiles
-  for (let fallbackZoom = zoom - 1; fallbackZoom >= MIN_FALLBACK_ZOOM; fallbackZoom--) {
-    const scale = Math.pow(2, zoom - fallbackZoom);
-    const fallbackX = Math.floor(x / scale);
-    const fallbackY = Math.floor(y / scale);
-
-    const fallbackData = await getTileData(basePMTiles, fallbackZoom, fallbackX, fallbackY, priority);
-    if (fallbackData) {
-      return parseMVT(fallbackData, fallbackX, fallbackY, fallbackZoom);
+  // Create the loading promise
+  const loadPromise = (async (): Promise<ParsedFeature[]> => {
+    const data = await getTileData(basePMTiles, zoom, x, y, priority);
+    if (data) {
+      // Base PMTiles has layers: water, land, land_use, land_cover, infrastructure
+      return parseMVT(data, x, y, zoom);
     }
-  }
 
-  return [];
+    // Try fallback zoom levels from zoom-1 down to MIN_FALLBACK_ZOOM
+    // Water and land data may only be available at certain zoom levels in the PMTiles
+    for (let fallbackZoom = zoom - 1; fallbackZoom >= MIN_FALLBACK_ZOOM; fallbackZoom--) {
+      const scale = Math.pow(2, zoom - fallbackZoom);
+      const fallbackX = Math.floor(x / scale);
+      const fallbackY = Math.floor(y / scale);
+
+      const fallbackData = await getTileData(basePMTiles, fallbackZoom, fallbackX, fallbackY, priority);
+      if (fallbackData) {
+        return parseMVT(fallbackData, fallbackX, fallbackY, fallbackZoom);
+      }
+    }
+
+    return [];
+  })();
+
+  // Store in deduplication cache and clean up when done
+  inFlightRequests.set(dedupeKey, loadPromise);
+  loadPromise.finally(() => {
+    inFlightRequests.delete(dedupeKey);
+  });
+
+  return loadPromise;
 }
 
 /**
@@ -340,12 +398,14 @@ export async function loadBaseTile(
  * Results are cached by lower zoom tile coordinates for efficiency -
  * multiple detail tiles share the same lower zoom water data.
  * @param priority - Fetch priority (Z14_GROUND for high-detail, Z10_GROUND for low-detail)
+ * @param fastMode - If true, only load z10 (skip z8/z6) for faster initial load
  */
 export async function loadWaterPolygonsFromLowerZooms(
   x: number,
   y: number,
   zoom: number = TILE_ZOOM,
-  priority: TilePriority = TilePriority.Z14_GROUND
+  priority: TilePriority = TilePriority.Z14_GROUND,
+  fastMode: boolean = false
 ): Promise<ParsedFeature[]> {
   if (!basePMTiles) {
     return [];
@@ -354,7 +414,10 @@ export async function loadWaterPolygonsFromLowerZooms(
   const waterPolygons: ParsedFeature[] = [];
   const seenAreas = new Set<string>(); // Track polygons to avoid duplicates
 
-  for (const lowerZoom of WATER_POLYGON_ZOOM_LEVELS) {
+  // In fast mode, only check z10; otherwise check all levels
+  const zoomLevels = fastMode ? [10] : WATER_POLYGON_ZOOM_LEVELS;
+
+  for (const lowerZoom of zoomLevels) {
     if (lowerZoom >= zoom) continue; // Only check lower (zoomed out) levels
 
     const scale = Math.pow(2, zoom - lowerZoom);
@@ -451,6 +514,7 @@ export function clearDistantWaterPolygonCache(
 
 /**
  * Load transportation features for a tile (roads, paths, railways)
+ * Uses request deduplication to prevent redundant fetches for the same tile
  * @param priority - Fetch priority (defaults to Z14_GROUND for road network)
  */
 export async function loadTransportationTile(
@@ -461,11 +525,29 @@ export async function loadTransportationTile(
 ): Promise<ParsedFeature[]> {
   if (!transportationPMTiles) return [];
 
-  const data = await getTileData(transportationPMTiles, zoom, x, y, priority);
-  if (!data) return [];
+  // Check deduplication cache
+  const dedupeKey = `transport:${zoom}/${x}/${y}:null`;
+  const existingRequest = inFlightRequests.get(dedupeKey);
+  if (existingRequest) {
+    return existingRequest;
+  }
 
-  // Transportation PMTiles has layers: segment, connector
-  return parseMVT(data, x, y, zoom);
+  // Create the loading promise
+  const loadPromise = (async (): Promise<ParsedFeature[]> => {
+    const data = await getTileData(transportationPMTiles, zoom, x, y, priority);
+    if (!data) return [];
+
+    // Transportation PMTiles has layers: segment, connector
+    return parseMVT(data, x, y, zoom);
+  })();
+
+  // Store in deduplication cache and clean up when done
+  inFlightRequests.set(dedupeKey, loadPromise);
+  loadPromise.finally(() => {
+    inFlightRequests.delete(dedupeKey);
+  });
+
+  return loadPromise;
 }
 
 /**

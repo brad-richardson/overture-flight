@@ -116,12 +116,94 @@ export interface BaseGeometryResult {
 }
 
 /**
+ * Payload for MVT parsing
+ */
+export interface ParseMVTPayload {
+  /** Raw MVT ArrayBuffer (transferable) */
+  data: ArrayBuffer;
+  /** Tile coordinates */
+  tileX: number;
+  tileY: number;
+  zoom: number;
+  /** Layer name to extract (null = all layers) */
+  layerName: string | null;
+}
+
+/**
+ * Compact feature representation for worker transfer
+ * Uses transferable typed arrays instead of nested JS arrays
+ */
+export interface CompactFeature {
+  /** Feature type: 0=Point, 1=MultiPoint, 2=LineString, 3=MultiLineString, 4=Polygon, 5=MultiPolygon */
+  typeIndex: number;
+  /** Layer name */
+  layer: string;
+  /** Flattened coordinates [x1, y1, x2, y2, ...] - transferable */
+  coords: Float64Array;
+  /** Ring/part start indices (for polygons/multi-geometries) */
+  ringIndices: Uint32Array;
+  /** Simplified properties (only commonly used fields for styling) */
+  props: {
+    subtype?: string;
+    class?: string;
+    names?: { primary?: string };
+    surface?: string;
+    road_flags?: string;
+    level_rules?: string;
+    level?: number;
+    _fromLowerZoom?: boolean;
+    _sourceZoom?: number;
+    // Additional styling properties
+    type?: string;
+    category?: string;
+    depth?: number;
+    road_class?: string;
+    highway?: string;
+    is_tunnel?: boolean;
+    is_underground?: boolean;
+    [key: string]: unknown;
+  };
+}
+
+/**
+ * Result of MVT parsing in worker
+ */
+export interface ParseMVTResult {
+  /** Compact feature array */
+  features: CompactFeature[];
+  /** Feature count by layer (for profiling) */
+  layerCounts: Record<string, number>;
+}
+
+/**
+ * Payload for elevation tile decoding
+ */
+export interface DecodeElevationPayload {
+  /** URL of the Terrarium PNG tile */
+  url: string;
+  /** Tile size (typically 256) */
+  tileSize: number;
+  /** Terrarium offset constant (32768) */
+  terrariumOffset: number;
+}
+
+/**
+ * Result of elevation tile decoding
+ */
+export interface DecodeElevationResult {
+  /** Height values as Float32Array (tileSize * tileSize) - transferable */
+  heights: Float32Array;
+}
+
+/**
  * Request types (main thread -> worker)
  */
 export type WorkerRequest =
   | { type: 'RENDER_TILE_TEXTURE'; id: string; payload: RenderTileTexturePayload }
   | { type: 'RENDER_LOW_DETAIL_TEXTURE'; id: string; payload: RenderLowDetailTexturePayload }
   | { type: 'CREATE_BASE_GEOMETRY'; id: string; payload: CreateBaseGeometryPayload }
+  | { type: 'PARSE_MVT'; id: string; payload: ParseMVTPayload }
+  | { type: 'DECODE_ELEVATION'; id: string; payload: DecodeElevationPayload }
   | { type: 'CAPABILITY_CHECK'; id: string };
 
 /**
@@ -131,5 +213,7 @@ export type WorkerResponse =
   | { type: 'RENDER_TILE_TEXTURE_RESULT'; id: string; result: ImageBitmap }
   | { type: 'RENDER_LOW_DETAIL_TEXTURE_RESULT'; id: string; result: ImageBitmap }
   | { type: 'CREATE_BASE_GEOMETRY_RESULT'; id: string; result: BaseGeometryResult }
+  | { type: 'PARSE_MVT_RESULT'; id: string; result: ParseMVTResult }
+  | { type: 'DECODE_ELEVATION_RESULT'; id: string; result: DecodeElevationResult }
   | { type: 'CAPABILITY_CHECK_RESULT'; id: string; supported: boolean }
   | { type: 'ERROR'; id: string; error: string };

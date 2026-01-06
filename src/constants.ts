@@ -157,6 +157,7 @@ export interface ElevationConfig {
   TERRAIN_SEGMENTS: number;
   TERRAIN_ENABLED: boolean;
   VERTICAL_EXAGGERATION: number;
+  GPU_DISPLACEMENT: boolean;  // Use GPU shader for terrain displacement (experimental)
 }
 
 export const ELEVATION: ElevationConfig = {
@@ -168,6 +169,7 @@ export const ELEVATION: ElevationConfig = {
   TERRAIN_SEGMENTS: 32,       // Subdivisions per terrain mesh (reduced for perf)
   TERRAIN_ENABLED: true,      // Enable/disable terrain elevation
   VERTICAL_EXAGGERATION: 1.0, // Multiply elevation values (1.0 = realistic)
+  GPU_DISPLACEMENT: import.meta.env.VITE_GPU_TERRAIN === 'true', // GPU shader for displacement (experimental)
 };
 
 // Ground texture rendering settings
@@ -216,12 +218,18 @@ export const LOW_DETAIL_TERRAIN: LowDetailTerrainConfig = {
 export interface WorkersConfig {
   ENABLED: boolean;               // Enable/disable texture worker rendering
   GEOMETRY_ENABLED: boolean;      // Enable/disable geometry worker creation
+  MVT_ENABLED: boolean;           // Enable/disable MVT parsing worker (uses zero-copy ArrayBuffer transfer)
+  ELEVATION_ENABLED: boolean;     // Enable/disable elevation decoding worker (uses OffscreenCanvas)
+  FULL_PIPELINE_ENABLED: boolean; // Enable/disable full pipeline workers (fetch+parse+render in worker)
   POOL_SIZE: number;              // Number of workers (0 = auto based on cores)
 }
 
 export const WORKERS: WorkersConfig = {
   ENABLED: false,                 // Texture workers: Disabled (structured clone overhead negates benefit)
   GEOMETRY_ENABLED: true,         // Geometry workers: Enabled (uses zero-copy ArrayBuffer transfer)
+  MVT_ENABLED: import.meta.env.VITE_MVT_WORKERS !== 'false', // MVT parsing workers: Enabled by default
+  ELEVATION_ENABLED: import.meta.env.VITE_ELEVATION_WORKERS !== 'false', // Elevation workers: Enabled by default
+  FULL_PIPELINE_ENABLED: import.meta.env.VITE_FULL_PIPELINE_WORKERS === 'true', // Full pipeline workers: Disabled by default (experimental)
   POOL_SIZE: 0,                   // 0 = auto (cores - 1, min 2, max 4)
 };
 
@@ -241,24 +249,81 @@ export const LOADING_GATE: LoadingGateConfig = {
 
 // Tile loading concurrency settings
 // Limits parallel tile processing to maintain 60fps during loading
+// Override with VITE_TILE_CONCURRENCY env variable
 export interface TileConcurrencyConfig {
   ENABLED: boolean;               // Enable/disable concurrency limiter
   MAX_CONCURRENT: number;         // Maximum tiles processing at once
 }
 
+const defaultTileConcurrency = IS_MOBILE ? 2 : 3;
 export const TILE_CONCURRENCY: TileConcurrencyConfig = {
-  ENABLED: true,
-  MAX_CONCURRENT: IS_MOBILE ? 2 : 3,   // Fewer parallel tiles on mobile
+  ENABLED: import.meta.env.VITE_TILE_CONCURRENCY !== '0',
+  MAX_CONCURRENT: parseInt(import.meta.env.VITE_TILE_CONCURRENCY || '0', 10) || defaultTileConcurrency,
 };
 
 // Network fetch concurrency settings
 // Limits parallel HTTP requests to prevent flooding and improve prioritization
+// Override with VITE_FETCH_CONCURRENCY env variable
 export interface FetchConcurrencyConfig {
   ENABLED: boolean;               // Enable/disable fetch concurrency limiter
   MAX_CONCURRENT: number;         // Maximum concurrent network requests
 }
 
+const defaultFetchConcurrency = IS_MOBILE ? 4 : 6;
 export const FETCH_CONCURRENCY: FetchConcurrencyConfig = {
-  ENABLED: true,
-  MAX_CONCURRENT: IS_MOBILE ? 4 : 6,   // Fewer parallel fetches on mobile
+  ENABLED: import.meta.env.VITE_FETCH_CONCURRENCY !== '0',
+  MAX_CONCURRENT: parseInt(import.meta.env.VITE_FETCH_CONCURRENCY || '0', 10) || defaultFetchConcurrency,
+};
+
+// Performance profiling settings
+// Enable via VITE_PROFILING=true for Chrome DevTools visibility
+export interface ProfilingConfig {
+  ENABLED: boolean;               // Enable/disable profiling instrumentation
+  VERBOSE: boolean;               // Log individual tile metrics to console
+}
+
+export const PROFILING: ProfilingConfig = {
+  ENABLED: import.meta.env.VITE_PROFILING === 'true',
+  VERBOSE: import.meta.env.VITE_PROFILING_VERBOSE === 'true',
+};
+
+// Process chaining optimization settings
+// Controls how tile loading is sequenced for better initial load performance
+export interface ProcessChainingConfig {
+  DEFER_LOW_ZOOM_WATER: boolean;  // Defer z8/z6 water loading to background (keep z10 in critical path)
+  PRIORITIZE_CENTER_TILE: boolean; // Load center tile before neighbors
+}
+
+export const PROCESS_CHAINING: ProcessChainingConfig = {
+  DEFER_LOW_ZOOM_WATER: true,     // Skip z8/z6 initially, load in background (reduces initial requests ~30%)
+  PRIORITIZE_CENTER_TILE: true,   // Center tile gets processed first
+};
+
+// IndexedDB persistent texture caching
+// Caches rendered textures for faster repeat visits
+// Disabled by default in dev/PR builds, enabled in prod
+// Override with VITE_TEXTURE_CACHE env variable
+export interface TextureCacheConfig {
+  ENABLED: boolean;               // Enable/disable IndexedDB texture caching
+  DB_NAME: string;                // IndexedDB database name
+  STORE_NAME: string;             // Object store name for textures
+  MAX_ENTRIES: number;            // Maximum cached textures (LRU eviction)
+  VERSION: number;                // Cache version (increment to invalidate)
+}
+
+// Determine if caching should be enabled:
+// - Explicitly set via VITE_TEXTURE_CACHE=true/false
+// - Otherwise: disabled in dev mode, enabled in prod
+const textureCacheDefault = !import.meta.env.DEV;
+const textureCacheEnv = import.meta.env.VITE_TEXTURE_CACHE;
+const textureCacheEnabled = textureCacheEnv !== undefined
+  ? textureCacheEnv === 'true'
+  : textureCacheDefault;
+
+export const TEXTURE_CACHE: TextureCacheConfig = {
+  ENABLED: textureCacheEnabled,
+  DB_NAME: 'overture-flight-textures',
+  STORE_NAME: 'textures',
+  MAX_ENTRIES: IS_MOBILE ? 50 : 200,  // Fewer entries on mobile
+  VERSION: 1,                         // Increment to invalidate cache
 };

@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { TileBounds } from './types.js';
 import { geoToWorld, worldToGeo } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
+// GPU terrain shader - imported dynamically when GPU_DISPLACEMENT is enabled
+// import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
 
 /**
  * Creates a terrain-following quad mesh for rendering ground textures
