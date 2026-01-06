@@ -177,8 +177,30 @@ export interface GroundTextureConfig {
 
 export const GROUND_TEXTURE: GroundTextureConfig = {
   TEXTURE_SIZE: 2048,             // ~0.75m per pixel at z14 tiles (higher res)
-  CACHE_MAX_SIZE: 50,             // 50 tiles = ~800MB GPU memory (larger textures)
-  CACHE_DISPOSE_THRESHOLD: 40,    // Start evicting at 40 tiles
+  CACHE_MAX_SIZE: 100,            // 100 tiles = ~1.6GB GPU memory (increased for high-velocity turns)
+  CACHE_DISPOSE_THRESHOLD: 80,    // Start evicting at 80 tiles
   TERRAIN_QUAD_SEGMENTS: 16,      // 16x16 subdivisions for elevation
   ENABLED: true,                  // Toggle between new/old rendering
+};
+
+// Low-detail terrain settings (Z10 background layer)
+// Renders distant terrain with simplified features for extended visibility
+export interface LowDetailTerrainConfig {
+  ENABLED: boolean;               // Enable/disable low-detail distant terrain
+  ZOOM: number;                   // Zoom level for low-detail tiles
+  TILE_RADIUS: number;            // Radius of tiles to load (2 = 5x5 grid)
+  TEXTURE_SIZE: number;           // Lower resolution texture
+  TERRAIN_QUAD_SEGMENTS: number;  // Fewer subdivisions for distant terrain
+  Y_OFFSET: number;               // Y offset below Z14 tiles (meters)
+  UNLOAD_DISTANCE: number;        // Chebyshev distance for tile unloading
+}
+
+export const LOW_DETAIL_TERRAIN: LowDetailTerrainConfig = {
+  ENABLED: true,
+  ZOOM: 10,                       // Z10 covers 16x16 Z14 tiles (~24km x 24km)
+  TILE_RADIUS: 2,                 // 5x5 grid = ~120km x 120km coverage
+  TEXTURE_SIZE: 1024,             // Lower resolution (half of Z14)
+  TERRAIN_QUAD_SEGMENTS: 8,       // Fewer subdivisions for performance
+  Y_OFFSET: -5,                   // 5m below Z14 layer
+  UNLOAD_DISTANCE: 4,             // Chebyshev distance for unloading
 };

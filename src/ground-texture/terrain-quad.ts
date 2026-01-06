@@ -139,6 +139,20 @@ export class TerrainQuad {
   }
 
   /**
+   * Enable stencil writing for this quad (used by Z14 tiles)
+   * When enabled, this quad writes to the stencil buffer so that
+   * Z10 low-detail tiles can be masked where Z14 tiles exist
+   */
+  enableStencilWrite(): void {
+    this.material.stencilWrite = true;
+    this.material.stencilRef = 1;
+    this.material.stencilFunc = THREE.AlwaysStencilFunc;
+    this.material.stencilFail = THREE.KeepStencilOp;
+    this.material.stencilZFail = THREE.KeepStencilOp;
+    this.material.stencilZPass = THREE.ReplaceStencilOp;
+  }
+
+  /**
    * Dispose of resources
    */
   dispose(): void {

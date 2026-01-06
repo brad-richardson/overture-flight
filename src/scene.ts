@@ -263,7 +263,8 @@ export async function initScene(): Promise<{
   camera.lookAt(0, 0, 0);
 
   // Create renderer (aggressive performance tuning: disabled antialiasing, lower pixel ratio)
-  renderer = new THREE.WebGLRenderer({ antialias: false });
+  // Stencil buffer enabled for Z10/Z14 terrain masking
+  renderer = new THREE.WebGLRenderer({ antialias: false, stencil: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.shadowMap.enabled = true;

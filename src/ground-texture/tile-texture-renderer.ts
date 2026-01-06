@@ -44,9 +44,9 @@ const COLORS: Record<string, number> = {
   commercial: 0x787878,
   industrial: 0x606060,
 
-  // Default land - muted olive/gray that blends with forest areas
-  land: 0x8a9a7a,
-  default: 0x8a9a7a,
+  // Default land - greenish-gray that blends with forest/grass areas
+  land: 0x8fa880,
+  default: 0x8fa880,
 };
 
 /**
@@ -546,6 +546,124 @@ export function renderTileTexture(
     ctx.strokeStyle = hexToCSS(style.color);
     ctx.lineWidth = widthPixels;
     drawLineString(ctx, feature.coordinates as number[][] | number[][][], feature.type, geoToCanvas);
+  }
+  ctx.restore();
+
+  // Create Three.js texture
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = true;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+
+  return texture;
+}
+
+/**
+ * Render simplified features for a low-detail distant tile
+ * Skips roads and land_use - only renders: land, water, land_cover
+ */
+export function renderLowDetailTileTexture(
+  baseFeatures: ParsedFeature[],
+  bounds: TileBounds,
+  textureSize: number
+): THREE.CanvasTexture {
+  const size = textureSize;
+
+  // Create canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+
+  // Enable antialiasing
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  const geoToCanvas = createGeoToCanvas(bounds, size);
+
+  // Separate features by layer
+  const landFeatures: ParsedFeature[] = [];
+  const landCoverFeatures: ParsedFeature[] = [];
+  const waterBodyFeatures: ParsedFeature[] = [];
+  const oceanFeatures: ParsedFeature[] = [];
+
+  // Ocean/sea subtypes
+  const OCEAN_SUBTYPES = ['ocean', 'sea', 'bay', 'strait', 'gulf', 'sound', 'harbour', 'harbor'];
+
+  for (const feature of baseFeatures) {
+    const layer = feature.layer;
+    const subtype = ((feature.properties.subtype || feature.properties.class || '') as string).toLowerCase();
+
+    if (layer === 'land') {
+      if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
+        landFeatures.push(feature);
+      }
+    } else if (layer === 'land_cover') {
+      landCoverFeatures.push(feature);
+    } else if (layer === 'water') {
+      // Skip line water features (rivers as lines) at low detail
+      if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
+        const isFromLowerZoom = feature.properties._fromLowerZoom === true;
+        if (OCEAN_SUBTYPES.includes(subtype) || isFromLowerZoom) {
+          oceanFeatures.push(feature);
+        } else {
+          waterBodyFeatures.push(feature);
+        }
+      }
+    }
+  }
+
+  // Detect if this is an open ocean tile
+  const isOpenOceanTile = oceanFeatures.length > 0 && landFeatures.length < 10;
+
+  // === Layer 0: Base fill ===
+  if (isOpenOceanTile) {
+    ctx.fillStyle = hexToCSS(COLORS.water);
+    ctx.fillRect(0, 0, size, size);
+  } else {
+    ctx.fillStyle = hexToCSS(COLORS.land);
+    ctx.fillRect(0, 0, size, size);
+  }
+
+  // === Layer 1: Land polygons (for open ocean tiles) ===
+  if (isOpenOceanTile && landFeatures.length > 0) {
+    ctx.save();
+    ctx.fillStyle = hexToCSS(COLORS.land);
+    for (const feature of landFeatures) {
+      drawPolygon(ctx, feature.coordinates as number[][][] | number[][][][], feature.type, geoToCanvas);
+      ctx.fill('evenodd');
+    }
+    ctx.restore();
+  }
+
+  // === Layer 2: Land cover (skip land_use for simplicity) ===
+  ctx.save();
+  for (const feature of landCoverFeatures) {
+    if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') continue;
+
+    const color = getColorForFeature('land_cover', feature.properties);
+    ctx.fillStyle = hexToCSS(color);
+    drawPolygon(ctx, feature.coordinates as number[][][] | number[][][][], feature.type, geoToCanvas);
+    ctx.fill('evenodd');
+  }
+  ctx.restore();
+
+  // === Layer 3: Water bodies ===
+  ctx.save();
+  // Ocean features first
+  for (const feature of oceanFeatures) {
+    ctx.fillStyle = hexToCSS(COLORS.water);
+    drawPolygon(ctx, feature.coordinates as number[][][] | number[][][][], feature.type, geoToCanvas);
+    ctx.fill('evenodd');
+  }
+  // Inland water bodies
+  for (const feature of waterBodyFeatures) {
+    const color = getColorForFeature('water', feature.properties);
+    ctx.fillStyle = hexToCSS(color);
+    drawPolygon(ctx, feature.coordinates as number[][][] | number[][][][], feature.type, geoToCanvas);
+    ctx.fill('evenodd');
   }
   ctx.restore();
 

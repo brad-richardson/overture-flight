@@ -115,6 +115,9 @@ export async function createGroundForTile(
   // Apply ground texture
   quad.setTexture(texture);
 
+  // Enable stencil writing so Z10 tiles are masked where Z14 exists
+  quad.enableStencilWrite();
+
   // Create group
   const group = new THREE.Group();
   group.name = key;
