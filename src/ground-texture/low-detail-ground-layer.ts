@@ -109,8 +109,10 @@ export async function createLowDetailGroundForTile(
   cache.markInUse(key);
 
   // Configure material for stencil masking (Z10 only renders where Z14 doesn't exist)
+  // stencilWrite must be true to enable stencil TESTING (not just writing)
+  // KeepStencilOp on all ops means we test but don't modify the stencil buffer
   const material = quad.getMaterial();
-  material.stencilWrite = false;
+  material.stencilWrite = true;
   material.stencilRef = 0;
   material.stencilFunc = THREE.EqualStencilFunc;
   material.stencilFail = THREE.KeepStencilOp;
