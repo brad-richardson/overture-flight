@@ -165,10 +165,15 @@ export async function createGroundForTile(
   // which masks Z10 low-detail tiles from rendering in the same area
   quad.enableStencilWrite();
 
+  // Set render order: Z14 must render BEFORE Z10 so stencil is written first
+  // Lower renderOrder = renders earlier in Three.js
+  const mesh = quad.getMesh();
+  mesh.renderOrder = -5;
+
   // Create group
   const group = new THREE.Group();
   group.name = key;
-  group.add(quad.getMesh());
+  group.add(mesh);
 
   // Store in active tiles
   activeTiles.set(key, {

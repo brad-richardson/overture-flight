@@ -121,8 +121,9 @@ export async function createLowDetailGroundForTile(
   const mesh = quad.getMesh();
   mesh.position.y += LOW_DETAIL_TERRAIN.Y_OFFSET;
 
-  // Lower render order - render after Z14 (which writes stencil first)
-  mesh.renderOrder = -10;
+  // Render order: Z10 must render AFTER Z14 so stencil test works
+  // Z14 has renderOrder = -5, so Z10 needs higher value (renders later)
+  mesh.renderOrder = -4;
 
   // Create group
   const group = new THREE.Group();
