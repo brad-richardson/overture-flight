@@ -5,9 +5,12 @@ import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
 // GPU terrain shader - imported dynamically when GPU_DISPLACEMENT is enabled
 // import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
 
-// Maximum allowed height difference from neighbor median (in meters)
-// 50m is significant - catches sudden spikes but allows natural terrain variation
-const SPIKE_THRESHOLD_METERS = 50;
+// Spike detection: vertex must deviate more than this multiple of neighbor standard deviation
+// Higher values = less aggressive smoothing, preserves more terrain features
+const SPIKE_STDDEV_MULTIPLIER = 3.0;
+
+// Minimum absolute deviation to consider as spike (meters) - prevents smoothing small variations
+const SPIKE_MIN_DEVIATION_METERS = 30;
 
 /**
  * Creates a terrain-following quad mesh for rendering ground textures
@@ -180,14 +183,23 @@ export class TerrainQuad {
         // Need at least 3 valid neighbors for reliable spike detection
         if (neighbors.length < 3) continue;
 
-        // Calculate median of neighbors (more robust than mean)
-        neighbors.sort((a, b) => a - b);
-        const median = neighbors[Math.floor(neighbors.length / 2)];
+        // Calculate mean and standard deviation of neighbors
+        const mean = neighbors.reduce((a, b) => a + b, 0) / neighbors.length;
+        const variance = neighbors.reduce((sum, h) => sum + (h - mean) ** 2, 0) / neighbors.length;
+        const stdDev = Math.sqrt(variance);
 
-        // Check if this vertex is a spike (significantly different from neighbors)
-        const deviation = Math.abs(height - median);
-        if (deviation > SPIKE_THRESHOLD_METERS) {
-          spikes.push({ idx, median });
+        // Calculate how far this vertex deviates from neighbor mean
+        const deviation = Math.abs(height - mean);
+
+        // Only flag as spike if:
+        // 1. Deviation exceeds minimum threshold (avoids smoothing small variations)
+        // 2. Deviation is unusually large compared to neighbor variance (outlier detection)
+        //    - If neighbors have high stdDev (steep terrain), threshold is higher
+        //    - If neighbors are consistent (low stdDev), even small deviations are suspicious
+        const dynamicThreshold = Math.max(SPIKE_MIN_DEVIATION_METERS, stdDev * SPIKE_STDDEV_MULTIPLIER);
+
+        if (deviation > dynamicThreshold) {
+          spikes.push({ idx, median: mean });
         }
       }
     }
