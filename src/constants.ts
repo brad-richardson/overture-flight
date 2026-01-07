@@ -339,14 +339,21 @@ export interface TextureCacheConfig {
   TTL_MS: number;                 // Time-to-live in milliseconds (0 = no expiry)
 }
 
+// Check URL parameter first (for debugging)
+const urlParams = new URLSearchParams(window.location.search);
+const noCacheParam = urlParams.get('nocache');
+
 // Determine if caching should be enabled:
+// - URL param ?nocache=1 forces disabled (for debugging)
 // - Explicitly set via VITE_TEXTURE_CACHE=true/false
 // - Otherwise: disabled in dev mode, enabled in prod
 const textureCacheDefault = !import.meta.env.DEV;
 const textureCacheEnv = import.meta.env.VITE_TEXTURE_CACHE;
-const textureCacheEnabled = textureCacheEnv !== undefined
-  ? textureCacheEnv === 'true'
-  : textureCacheDefault;
+const textureCacheEnabled = noCacheParam === '1'
+  ? false
+  : textureCacheEnv !== undefined
+    ? textureCacheEnv === 'true'
+    : textureCacheDefault;
 
 export const TEXTURE_CACHE: TextureCacheConfig = {
   ENABLED: textureCacheEnabled,
