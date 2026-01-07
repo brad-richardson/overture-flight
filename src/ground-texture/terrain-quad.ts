@@ -5,6 +5,10 @@ import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
 // GPU terrain shader - imported dynamically when GPU_DISPLACEMENT is enabled
 // import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
 
+// Maximum allowed height difference from neighbor median (in meters)
+// 50m is significant - catches sudden spikes but allows natural terrain variation
+const SPIKE_THRESHOLD_METERS = 50;
+
 /**
  * Creates a terrain-following quad mesh for rendering ground textures
  */
@@ -143,10 +147,6 @@ export class TerrainQuad {
     const gridWidth = (params.widthSegments || 1) + 1;
     const gridHeight = (params.heightSegments || 1) + 1;
 
-    // Maximum allowed height difference from neighbor median (in meters)
-    // 50m is significant - catches sudden spikes but allows natural terrain variation
-    const SPIKE_THRESHOLD = 50;
-
     // Helper to get height at grid position
     const getHeightAt = (x: number, y: number): number | null => {
       if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) return null;
@@ -162,8 +162,8 @@ export class TerrainQuad {
         const idx = gy * gridWidth + gx;
         const height = heights[idx];
 
-        // Skip NaN or zero heights (likely missing data)
-        if (Number.isNaN(height) || height === 0) continue;
+        // Skip NaN heights (missing data) - zero is valid for sea-level terrain
+        if (Number.isNaN(height)) continue;
 
         // Get neighbor heights (8-connected neighborhood)
         const neighbors: number[] = [];
@@ -171,7 +171,7 @@ export class TerrainQuad {
           for (let dx = -1; dx <= 1; dx++) {
             if (dx === 0 && dy === 0) continue;
             const h = getHeightAt(gx + dx, gy + dy);
-            if (h !== null && !Number.isNaN(h) && h !== 0) {
+            if (h !== null && !Number.isNaN(h)) {
               neighbors.push(h);
             }
           }
@@ -186,7 +186,7 @@ export class TerrainQuad {
 
         // Check if this vertex is a spike (significantly different from neighbors)
         const deviation = Math.abs(height - median);
-        if (deviation > SPIKE_THRESHOLD) {
+        if (deviation > SPIKE_THRESHOLD_METERS) {
           spikes.push({ idx, median });
         }
       }

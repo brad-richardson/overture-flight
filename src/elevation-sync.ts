@@ -171,22 +171,19 @@ function repositionTreeGroup(update: PendingTreeUpdate): void {
         instancedMesh.getMatrixAt(tree.instanceIndex, matrix);
         matrix.decompose(position, quaternion, scale);
 
-        // Get new terrain height
+        // Get new terrain height (elevation tile is now loaded)
         const newHeight = getTerrainHeight(tree.lng, tree.lat) * ELEVATION.VERTICAL_EXAGGERATION;
 
-        // Only update if terrain height is non-zero (data is now available)
-        // Trees were created with terrain height = 0, so we just add the new height
-        if (newHeight !== 0) {
-          // Update Y position: add new terrain height to existing position
-          // Trees are positioned at terrainHeight + (trunk/crown offset)
-          // Since original terrainHeight was 0, position.y is just the trunk/crown offset
-          // Adding newHeight gives us: newTerrainHeight + offset (correct!)
-          position.y = position.y + newHeight;
+        // Update Y position: add new terrain height to existing position
+        // Trees are positioned at terrainHeight + (trunk/crown offset)
+        // Since original terrainHeight was 0, position.y is just the trunk/crown offset
+        // Adding newHeight gives us: newTerrainHeight + offset (correct!)
+        // Note: Even if newHeight is 0 (sea level), we apply it for consistency
+        position.y += newHeight;
 
-          // Recompose and set
-          matrix.compose(position, quaternion, scale);
-          instancedMesh.setMatrixAt(tree.instanceIndex, matrix);
-        }
+        // Recompose and set
+        matrix.compose(position, quaternion, scale);
+        instancedMesh.setMatrixAt(tree.instanceIndex, matrix);
       }
 
       instancedMesh.instanceMatrix.needsUpdate = true;

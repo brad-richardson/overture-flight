@@ -23,6 +23,10 @@ const DEFAULT_BUILDING_HEIGHT = 10;
 // Buildings should be slightly above roads (which use 1.0m offset)
 const BUILDING_TERRAIN_OFFSET = 0.5;
 
+// Multiplier for extending buildings into sloped terrain
+// Prevents floating appearance on hillsides (0.3 = 30% of slope height)
+const SLOPE_COMPENSATION_FACTOR = 0.3;
+
 // LOD (Level of Detail) settings (aggressive performance tuning)
 const LOD_NEAR_DISTANCE = 300; // meters - full detail (reduced from 500)
 const LOD_MEDIUM_DISTANCE = 800; // meters - reduced detail (reduced from 2000)
@@ -334,8 +338,8 @@ function createBuildingGeometry(
       const lng = coord[0];
       const lat = coord[1];
       const terrainHeight = getTerrainHeight(lng, lat);
-      // Only count non-zero heights as valid (0 means elevation not loaded)
-      if (!Number.isNaN(terrainHeight) && terrainHeight !== 0) {
+      // Only count non-NaN heights as valid (zero is valid for sea-level terrain)
+      if (!Number.isNaN(terrainHeight)) {
         minTerrainHeight = Math.min(minTerrainHeight, terrainHeight);
         maxTerrainHeight = Math.max(maxTerrainHeight, terrainHeight);
         validHeightCount++;
@@ -461,8 +465,7 @@ function createBuildingGeometry(
     // Extend building down into terrain on sloped ground to fill gaps
     // This prevents the building from appearing to float on the upper slope side
     if (terrainSlope > 1) {
-      // Translate geometry down by half the slope to embed in terrain
-      geometry.translate(0, -terrainSlope * 0.3, 0);
+      geometry.translate(0, -terrainSlope * SLOPE_COMPENSATION_FACTOR, 0);
     }
 
     // Add vertex colors for individual building variation (skip for low LOD for performance)
