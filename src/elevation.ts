@@ -27,6 +27,75 @@ const elevationCache = new Map<string, ElevationCacheEntry>();
 // Pending load promises to avoid duplicate fetches
 const pendingLoads = new Map<string, Promise<Float32Array>>();
 
+// ============================================================================
+// ELEVATION TILE LOAD EVENT SYSTEM
+// ============================================================================
+
+// Type for elevation tile load callbacks
+type ElevationLoadCallback = (tileKey: string, heights: Float32Array) => void;
+
+// Listener registry: callbacks to invoke when specific tiles load
+const elevationLoadListeners = new Map<string, Set<ElevationLoadCallback>>();
+
+/**
+ * Register a callback to be notified when a specific elevation tile loads
+ * Returns an unsubscribe function
+ */
+export function onElevationTileLoad(
+  tileKey: string,
+  callback: ElevationLoadCallback
+): () => void {
+  if (!elevationLoadListeners.has(tileKey)) {
+    elevationLoadListeners.set(tileKey, new Set());
+  }
+  elevationLoadListeners.get(tileKey)!.add(callback);
+
+  // Return unsubscribe function
+  return () => {
+    const listeners = elevationLoadListeners.get(tileKey);
+    if (listeners) {
+      listeners.delete(callback);
+      if (listeners.size === 0) {
+        elevationLoadListeners.delete(tileKey);
+      }
+    }
+  };
+}
+
+/**
+ * Notify listeners when an elevation tile finishes loading
+ */
+function notifyElevationTileLoaded(tileKey: string, heights: Float32Array): void {
+  const listeners = elevationLoadListeners.get(tileKey);
+  if (listeners && listeners.size > 0) {
+    for (const callback of listeners) {
+      try {
+        callback(tileKey, heights);
+      } catch (e) {
+        console.error('Elevation load callback error:', e);
+      }
+    }
+    // Clean up listeners after notification (one-shot)
+    elevationLoadListeners.delete(tileKey);
+  }
+}
+
+/**
+ * Get the elevation tile key for given coordinates (exported for external use)
+ */
+export function getElevationTileKey(lng: number, lat: number): string {
+  const { key } = getElevationTileInfo(lng, lat);
+  return key;
+}
+
+/**
+ * Check if an elevation tile is loaded
+ */
+export function isElevationTileLoaded(tileKey: string): boolean {
+  const cached = elevationCache.get(tileKey);
+  return cached !== undefined && !cached.loading && cached.heights !== null;
+}
+
 // Singleton elevation worker pool (lazy initialized)
 let elevationWorkerPool: ElevationWorkerPool | null = null;
 let workerPoolChecked = false;
@@ -101,6 +170,7 @@ async function decodeElevationMainThread(url: string): Promise<Float32Array> {
 
 /**
  * Perform bilinear interpolation on a height grid
+ * Handles partial NaN values by using average of valid corners
  */
 function bilinearInterpolate(
   heights: Float32Array,
@@ -125,12 +195,33 @@ function bilinearInterpolate(
   const h01 = heights[y1 * gridSize + x0];
   const h11 = heights[y1 * gridSize + x1];
 
-  // Handle NaN values - if any corner is NaN, return NaN
-  if (Number.isNaN(h00) || Number.isNaN(h10) || Number.isNaN(h01) || Number.isNaN(h11)) {
+  // Count valid corners and collect values
+  const corners = [h00, h10, h01, h11];
+  const validCorners = corners.filter(h => !Number.isNaN(h));
+
+  // If all corners are NaN, return NaN (no data)
+  if (validCorners.length === 0) {
     return NaN;
   }
 
-  // Bilinear interpolation formula
+  // If some corners are NaN, use average of valid corners as fallback
+  if (validCorners.length < 4) {
+    const avg = validCorners.reduce((a, b) => a + b, 0) / validCorners.length;
+    // Replace NaN corners with average for interpolation
+    const h00Safe = Number.isNaN(h00) ? avg : h00;
+    const h10Safe = Number.isNaN(h10) ? avg : h10;
+    const h01Safe = Number.isNaN(h01) ? avg : h01;
+    const h11Safe = Number.isNaN(h11) ? avg : h11;
+
+    return (
+      h00Safe * (1 - fx) * (1 - fy) +
+      h10Safe * fx * (1 - fy) +
+      h01Safe * (1 - fx) * fy +
+      h11Safe * fx * fy
+    );
+  }
+
+  // Standard bilinear interpolation (all corners valid)
   return (
     h00 * (1 - fx) * (1 - fy) +
     h10 * fx * (1 - fy) +
@@ -187,6 +278,9 @@ async function loadElevationTile(x: number, y: number, z: number): Promise<Float
       // Cache the result
       elevationCache.set(key, { heights, loading: false });
       pendingLoads.delete(key);
+
+      // Notify listeners that this elevation tile is now available
+      notifyElevationTileLoaded(key, heights);
 
       return heights;
     } catch (error) {

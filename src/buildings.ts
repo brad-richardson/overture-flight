@@ -14,6 +14,7 @@ import {
 import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
 import type { StoredFeature } from './feature-picker.js';
 import { getTileSemaphore, TilePriority } from './semaphore.js';
+import { clearPendingUpdatesForTile } from './elevation-sync.js';
 
 // Default building height when not specified
 const DEFAULT_BUILDING_HEIGHT = 10;
@@ -21,6 +22,10 @@ const DEFAULT_BUILDING_HEIGHT = 10;
 // Height offset above terrain to prevent z-fighting with roads (in meters)
 // Buildings should be slightly above roads (which use 1.0m offset)
 const BUILDING_TERRAIN_OFFSET = 0.5;
+
+// Multiplier for extending buildings into sloped terrain
+// Prevents floating appearance on hillsides (0.3 = 30% of slope height)
+const SLOPE_COMPENSATION_FACTOR = 0.3;
 
 // LOD (Level of Detail) settings (aggressive performance tuning)
 const LOD_NEAR_DISTANCE = 300; // meters - full detail (reduced from 500)
@@ -322,8 +327,10 @@ function createBuildingGeometry(
   if (!outerRing || outerRing.length < 3) return null;
 
   // Calculate terrain height for the building footprint
-  // Use the average terrain height across all footprint vertices for stability
-  let terrainHeightSum = 0;
+  // Use MINIMUM height to ensure building sits on ground at lowest point
+  // This prevents gaps/deep shadows on sloped terrain
+  let minTerrainHeight = Infinity;
+  let maxTerrainHeight = -Infinity;
   let validHeightCount = 0;
 
   if (ELEVATION.TERRAIN_ENABLED) {
@@ -331,16 +338,24 @@ function createBuildingGeometry(
       const lng = coord[0];
       const lat = coord[1];
       const terrainHeight = getTerrainHeight(lng, lat);
+      // Only count non-NaN heights as valid (zero is valid for sea-level terrain)
       if (!Number.isNaN(terrainHeight)) {
-        terrainHeightSum += terrainHeight;
+        minTerrainHeight = Math.min(minTerrainHeight, terrainHeight);
+        maxTerrainHeight = Math.max(maxTerrainHeight, terrainHeight);
         validHeightCount++;
       }
     }
   }
 
-  // Calculate average terrain height (0 if no valid samples)
-  const avgTerrainHeight = validHeightCount > 0
-    ? (terrainHeightSum / validHeightCount) * ELEVATION.VERTICAL_EXAGGERATION
+  // Use minimum height (0 if no valid samples)
+  // This ensures building base touches ground at lowest point
+  const baseTerrainHeight = validHeightCount > 0
+    ? minTerrainHeight * ELEVATION.VERTICAL_EXAGGERATION
+    : 0;
+
+  // Calculate slope for extending building height on upper side
+  const terrainSlope = validHeightCount > 0
+    ? (maxTerrainHeight - minTerrainHeight) * ELEVATION.VERTICAL_EXAGGERATION
     : 0;
 
   // Convert outer ring to Three.js points
@@ -440,11 +455,17 @@ function createBuildingGeometry(
     // Rotate so extrusion goes up (Y) instead of out (Z)
     geometry.rotateX(-Math.PI / 2);
 
-    // Apply terrain-following elevation
-    // Translate the building up to sit on the terrain surface
-    const yOffset = avgTerrainHeight + BUILDING_TERRAIN_OFFSET;
+    // Apply terrain-following elevation using minimum height
+    // This ensures building base touches ground at lowest point
+    const yOffset = baseTerrainHeight + BUILDING_TERRAIN_OFFSET;
     if (yOffset !== 0) {
       geometry.translate(0, yOffset, 0);
+    }
+
+    // Extend building down into terrain on sloped ground to fill gaps
+    // This prevents the building from appearing to float on the upper slope side
+    if (terrainSlope > 1) {
+      geometry.translate(0, -terrainSlope * SLOPE_COMPENSATION_FACTOR, 0);
     }
 
     // Add vertex colors for individual building variation (skip for low LOD for performance)
@@ -545,10 +566,11 @@ function calculatePolygonArea(points: THREE.Vector2[]): number {
 export function removeBuildingsGroup(group: THREE.Group): void {
   if (!group) return;
 
-  // Remove stored features for this tile
+  // Remove stored features and pending elevation updates for this tile
   if (group.name) {
     const tileKey = group.name; // e.g., "buildings-14/8372/5739"
     removeStoredFeatures(tileKey);
+    clearPendingUpdatesForTile(tileKey);
   }
 
   const scene = getScene();

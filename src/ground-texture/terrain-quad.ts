@@ -5,6 +5,13 @@ import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
 // GPU terrain shader - imported dynamically when GPU_DISPLACEMENT is enabled
 // import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
 
+// Spike detection: vertex must deviate more than this multiple of neighbor standard deviation
+// Higher values = less aggressive smoothing, preserves more terrain features
+const SPIKE_STDDEV_MULTIPLIER = 3.0;
+
+// Minimum absolute deviation to consider as spike (meters) - prevents smoothing small variations
+const SPIKE_MIN_DEVIATION_METERS = 30;
+
 /**
  * Creates a terrain-following quad mesh for rendering ground textures
  */
@@ -91,7 +98,7 @@ export class TerrainQuad {
   }
 
   /**
-   * Apply terrain elevation to vertices
+   * Apply terrain elevation to vertices with spike detection and smoothing
    * @param getHeight Function that returns terrain height for a given lng/lat
    * @param verticalExaggeration Multiplier for elevation values
    */
@@ -101,6 +108,9 @@ export class TerrainQuad {
   ): void {
     const positions = this.geometry.attributes.position;
     const meshPosition = this.mesh.position;
+
+    // First pass: collect all heights into an array
+    const heights: number[] = new Array(positions.count);
 
     for (let i = 0; i < positions.count; i++) {
       // Get vertex position in world space
@@ -115,13 +125,94 @@ export class TerrainQuad {
 
       // Get terrain height
       const elevation = getHeight(geo.lng, geo.lat);
-      const y = elevation * verticalExaggeration;
+      heights[i] = elevation * verticalExaggeration;
+    }
 
-      positions.setY(i, y);
+    // Second pass: detect and smooth spikes
+    this.smoothTerrainSpikes(heights);
+
+    // Third pass: apply smoothed heights
+    for (let i = 0; i < positions.count; i++) {
+      positions.setY(i, heights[i]);
     }
 
     positions.needsUpdate = true;
     this.geometry.computeVertexNormals();
+  }
+
+  /**
+   * Detect and smooth terrain spikes
+   * A spike is a vertex that differs significantly from its neighbors
+   */
+  private smoothTerrainSpikes(heights: number[]): void {
+    // Get grid dimensions from geometry parameters
+    const params = this.geometry.parameters;
+    const gridWidth = (params.widthSegments || 1) + 1;
+    const gridHeight = (params.heightSegments || 1) + 1;
+
+    // Helper to get height at grid position
+    const getHeightAt = (x: number, y: number): number | null => {
+      if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) return null;
+      return heights[y * gridWidth + x];
+    };
+
+    // Track which vertices are spikes (to avoid modifying while iterating)
+    const spikes: { idx: number; median: number }[] = [];
+
+    // Check each vertex (skip border vertices to maintain tile seam consistency)
+    for (let gy = 0; gy < gridHeight; gy++) {
+      for (let gx = 0; gx < gridWidth; gx++) {
+        // Skip border vertices - they must match neighboring tiles exactly
+        // Smoothing them would create seams where tiles meet
+        const isEdge = gx === 0 || gx === gridWidth - 1 || gy === 0 || gy === gridHeight - 1;
+        if (isEdge) continue;
+
+        const idx = gy * gridWidth + gx;
+        const height = heights[idx];
+
+        // Skip NaN heights (missing data) - zero is valid for sea-level terrain
+        if (Number.isNaN(height)) continue;
+
+        // Get neighbor heights (8-connected neighborhood)
+        const neighbors: number[] = [];
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const h = getHeightAt(gx + dx, gy + dy);
+            if (h !== null && !Number.isNaN(h)) {
+              neighbors.push(h);
+            }
+          }
+        }
+
+        // Need at least 3 valid neighbors for reliable spike detection
+        if (neighbors.length < 3) continue;
+
+        // Calculate mean and standard deviation of neighbors
+        const mean = neighbors.reduce((a, b) => a + b, 0) / neighbors.length;
+        const variance = neighbors.reduce((sum, h) => sum + (h - mean) ** 2, 0) / neighbors.length;
+        const stdDev = Math.sqrt(variance);
+
+        // Calculate how far this vertex deviates from neighbor mean
+        const deviation = Math.abs(height - mean);
+
+        // Only flag as spike if:
+        // 1. Deviation exceeds minimum threshold (avoids smoothing small variations)
+        // 2. Deviation is unusually large compared to neighbor variance (outlier detection)
+        //    - If neighbors have high stdDev (steep terrain), threshold is higher
+        //    - If neighbors are consistent (low stdDev), even small deviations are suspicious
+        const dynamicThreshold = Math.max(SPIKE_MIN_DEVIATION_METERS, stdDev * SPIKE_STDDEV_MULTIPLIER);
+
+        if (deviation > dynamicThreshold) {
+          spikes.push({ idx, median: mean });
+        }
+      }
+    }
+
+    // Apply smoothing to detected spikes
+    for (const spike of spikes) {
+      heights[spike.idx] = spike.median;
+    }
   }
 
   /**
