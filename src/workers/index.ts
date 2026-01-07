@@ -44,6 +44,8 @@ interface PendingTask {
   reject: (reason: unknown) => void;
   workerIndex: number;
   timeoutId: ReturnType<typeof setTimeout>;
+  /** Whether this task incremented pendingCount (false for capability checks) */
+  countIncremented?: boolean;
 }
 
 /**
@@ -321,6 +323,7 @@ export class WorkerPool {
         reject,
         workerIndex,
         timeoutId,
+        countIncremented: true,
       });
 
       state.pendingCount++;
@@ -540,6 +543,7 @@ export class GeometryWorkerPool {
         reject,
         workerIndex,
         timeoutId: timeout,
+        countIncremented: false, // Capability checks don't increment pendingCount
       });
 
       const request: WorkerRequest = { type: 'CAPABILITY_CHECK', id };
@@ -597,7 +601,10 @@ export class GeometryWorkerPool {
       if (task.workerIndex === workerIndex) {
         clearTimeout(task.timeoutId);
         this.pendingTasks.delete(id);
-        this.workers[task.workerIndex].pendingCount--;
+        // Only decrement if this task incremented the count (not capability checks)
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
         task.reject(new Error(`Worker error: ${event.message}`));
       }
     }
@@ -612,7 +619,9 @@ export class GeometryWorkerPool {
       if (task.workerIndex === workerIndex) {
         clearTimeout(task.timeoutId);
         this.pendingTasks.delete(id);
-        this.workers[task.workerIndex].pendingCount--;
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
         task.reject(new Error('Worker message error'));
       }
     }
@@ -678,6 +687,7 @@ export class GeometryWorkerPool {
         reject,
         workerIndex,
         timeoutId,
+        countIncremented: true,
       });
 
       state.pendingCount++;
@@ -869,6 +879,7 @@ export class MVTWorkerPool {
         reject,
         workerIndex,
         timeoutId: timeout,
+        countIncremented: false, // Capability checks don't increment pendingCount
       });
 
       const request: WorkerRequest = { type: 'CAPABILITY_CHECK', id };
@@ -926,7 +937,9 @@ export class MVTWorkerPool {
       if (task.workerIndex === workerIndex) {
         clearTimeout(task.timeoutId);
         this.pendingTasks.delete(id);
-        this.workers[task.workerIndex].pendingCount--;
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
         task.reject(new Error(`Worker error: ${event.message}`));
       }
     }
@@ -941,7 +954,9 @@ export class MVTWorkerPool {
       if (task.workerIndex === workerIndex) {
         clearTimeout(task.timeoutId);
         this.pendingTasks.delete(id);
-        this.workers[task.workerIndex].pendingCount--;
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
         task.reject(new Error('Worker message error'));
       }
     }
@@ -1007,6 +1022,7 @@ export class MVTWorkerPool {
         reject,
         workerIndex,
         timeoutId,
+        countIncremented: true,
       });
 
       state.pendingCount++;
@@ -1206,6 +1222,7 @@ export class ElevationWorkerPool {
         reject,
         workerIndex,
         timeoutId: timeout,
+        countIncremented: false, // Capability checks don't increment pendingCount
       });
 
       const request: WorkerRequest = { type: 'CAPABILITY_CHECK', id };
@@ -1263,7 +1280,9 @@ export class ElevationWorkerPool {
       if (task.workerIndex === workerIndex) {
         clearTimeout(task.timeoutId);
         this.pendingTasks.delete(id);
-        this.workers[task.workerIndex].pendingCount--;
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
         task.reject(new Error(`Worker error: ${event.message}`));
       }
     }
@@ -1278,7 +1297,9 @@ export class ElevationWorkerPool {
       if (task.workerIndex === workerIndex) {
         clearTimeout(task.timeoutId);
         this.pendingTasks.delete(id);
-        this.workers[task.workerIndex].pendingCount--;
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
         task.reject(new Error('Worker message error'));
       }
     }
@@ -1344,6 +1365,7 @@ export class ElevationWorkerPool {
         reject,
         workerIndex,
         timeoutId,
+        countIncremented: true,
       });
 
       state.pendingCount++;
@@ -1526,6 +1548,8 @@ export class FullPipelineWorkerPool {
     // Wait for workers to signal ready
     await new Promise<void>((resolve) => {
       let readyCount = 0;
+      const originalHandlers = new Map<WorkerState, ((event: MessageEvent) => void) | null>();
+
       const checkReady = () => {
         readyCount++;
         if (readyCount >= this.workers.length) {
@@ -1541,10 +1565,13 @@ export class FullPipelineWorkerPool {
         }
 
         const originalHandler = state.worker.onmessage;
+        originalHandlers.set(state, originalHandler);
+
         state.worker.onmessage = (event) => {
           if (event.data.type === 'READY') {
             state.ready = true;
             state.worker.onmessage = originalHandler;
+            originalHandlers.delete(state);
             checkReady();
           }
         };
@@ -1555,8 +1582,14 @@ export class FullPipelineWorkerPool {
         for (const state of this.workers) {
           if (!state.ready) {
             state.ready = true; // Mark as ready even if no signal
+            // Restore original handler so worker can still process messages
+            const originalHandler = originalHandlers.get(state);
+            if (originalHandler !== undefined) {
+              state.worker.onmessage = originalHandler;
+            }
           }
         }
+        originalHandlers.clear();
         resolve();
       }, 5000);
     });
@@ -1616,7 +1649,10 @@ export class FullPipelineWorkerPool {
 
     clearTimeout(task.timeoutId);
     this.pendingTasks.delete(typedResponse.id);
-    this.workers[task.workerIndex].pendingCount--;
+    // Only decrement if this task incremented the count (not capability checks)
+    if (task.countIncremented) {
+      this.workers[task.workerIndex].pendingCount--;
+    }
 
     if (typedResponse.type === 'ERROR') {
       task.reject(new Error(typedResponse.error));
@@ -1741,6 +1777,7 @@ export class FullPipelineWorkerPool {
         reject,
         workerIndex,
         timeoutId,
+        countIncremented: true,
       });
 
       worker.pendingCount++;
