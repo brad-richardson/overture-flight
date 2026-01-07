@@ -9,8 +9,9 @@
 import * as THREE from 'three';
 import { getScene, geoToWorld } from './scene.js';
 import { tileToBounds, loadBaseTile, loadWaterPolygonsFromLowerZooms, loadBuildingTile, loadTransportationTile, ParsedFeature } from './tile-manager.js';
-import { getTerrainHeight } from './elevation.js';
+import { getTerrainHeight, getElevationTileKey, isElevationTileLoaded } from './elevation.js';
 import { ELEVATION } from './constants.js';
+import { registerTreesForElevationUpdate, clearPendingUpdatesForTile } from './elevation-sync.js';
 
 // Types
 export interface TreeData {
@@ -1019,13 +1020,26 @@ export async function createTreesForTile(
   const coniferPositions: { x: number; y: number; z: number }[] = [];
   const deciduousPositions: { x: number; y: number; z: number }[] = [];
 
+  // Track trees that need elevation updates (for repositioning when elevation loads)
+  const treesNeedingElevationUpdate: {
+    lng: number;
+    lat: number;
+    meshName: string;
+    instanceIndex: number;
+  }[] = [];
+
   // Calculate world positions and separate by type
   for (const tree of trees) {
     const worldPos = geoToWorld(tree.lng, tree.lat, 0);
 
     // Get terrain height at tree position
     let terrainHeight = 0;
+    let elevationMissing = false;
     if (ELEVATION.TERRAIN_ENABLED) {
+      const elevationKey = getElevationTileKey(tree.lng, tree.lat);
+      if (!isElevationTileLoaded(elevationKey)) {
+        elevationMissing = true;
+      }
       terrainHeight = getTerrainHeight(tree.lng, tree.lat) * ELEVATION.VERTICAL_EXAGGERATION;
     }
 
@@ -1036,17 +1050,49 @@ export async function createTreesForTile(
     };
 
     if (tree.leafType === 'needleleaved') {
+      if (elevationMissing) {
+        treesNeedingElevationUpdate.push({
+          lng: tree.lng,
+          lat: tree.lat,
+          meshName: 'conifers',
+          instanceIndex: conifers.length, // Index before push
+        });
+      }
       conifers.push(tree);
       coniferPositions.push(position);
     } else if (tree.leafType === 'broadleaved') {
+      if (elevationMissing) {
+        treesNeedingElevationUpdate.push({
+          lng: tree.lng,
+          lat: tree.lat,
+          meshName: 'deciduous',
+          instanceIndex: deciduous.length,
+        });
+      }
       deciduous.push(tree);
       deciduousPositions.push(position);
     } else {
       // Use seeded random for consistent assignment (70% deciduous, 30% conifer)
       if (random() < 0.7) {
+        if (elevationMissing) {
+          treesNeedingElevationUpdate.push({
+            lng: tree.lng,
+            lat: tree.lat,
+            meshName: 'deciduous',
+            instanceIndex: deciduous.length,
+          });
+        }
         deciduous.push(tree);
         deciduousPositions.push(position);
       } else {
+        if (elevationMissing) {
+          treesNeedingElevationUpdate.push({
+            lng: tree.lng,
+            lat: tree.lat,
+            meshName: 'conifers',
+            instanceIndex: conifers.length,
+          });
+        }
         conifers.push(tree);
         coniferPositions.push(position);
       }
@@ -1077,6 +1123,11 @@ export async function createTreesForTile(
     return null;
   }
 
+  // Register trees for elevation updates if needed
+  if (treesNeedingElevationUpdate.length > 0) {
+    registerTreesForElevationUpdate(group.name, group, treesNeedingElevationUpdate);
+  }
+
   scene.add(group);
 
   return group;
@@ -1087,6 +1138,11 @@ export async function createTreesForTile(
  */
 export function removeTreesGroup(group: THREE.Group): void {
   if (!group) return;
+
+  // Clear any pending elevation updates for this tile
+  if (group.name) {
+    clearPendingUpdatesForTile(group.name);
+  }
 
   const scene = getScene();
   if (scene) {

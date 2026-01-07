@@ -91,7 +91,7 @@ export class TerrainQuad {
   }
 
   /**
-   * Apply terrain elevation to vertices
+   * Apply terrain elevation to vertices with spike detection and smoothing
    * @param getHeight Function that returns terrain height for a given lng/lat
    * @param verticalExaggeration Multiplier for elevation values
    */
@@ -101,6 +101,9 @@ export class TerrainQuad {
   ): void {
     const positions = this.geometry.attributes.position;
     const meshPosition = this.mesh.position;
+
+    // First pass: collect all heights into an array
+    const heights: number[] = new Array(positions.count);
 
     for (let i = 0; i < positions.count; i++) {
       // Get vertex position in world space
@@ -115,13 +118,84 @@ export class TerrainQuad {
 
       // Get terrain height
       const elevation = getHeight(geo.lng, geo.lat);
-      const y = elevation * verticalExaggeration;
+      heights[i] = elevation * verticalExaggeration;
+    }
 
-      positions.setY(i, y);
+    // Second pass: detect and smooth spikes
+    this.smoothTerrainSpikes(heights);
+
+    // Third pass: apply smoothed heights
+    for (let i = 0; i < positions.count; i++) {
+      positions.setY(i, heights[i]);
     }
 
     positions.needsUpdate = true;
     this.geometry.computeVertexNormals();
+  }
+
+  /**
+   * Detect and smooth terrain spikes
+   * A spike is a vertex that differs significantly from its neighbors
+   */
+  private smoothTerrainSpikes(heights: number[]): void {
+    // Get grid dimensions from geometry parameters
+    const params = this.geometry.parameters;
+    const gridWidth = (params.widthSegments || 1) + 1;
+    const gridHeight = (params.heightSegments || 1) + 1;
+
+    // Maximum allowed height difference from neighbor median (in meters)
+    // 50m is significant - catches sudden spikes but allows natural terrain variation
+    const SPIKE_THRESHOLD = 50;
+
+    // Helper to get height at grid position
+    const getHeightAt = (x: number, y: number): number | null => {
+      if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) return null;
+      return heights[y * gridWidth + x];
+    };
+
+    // Track which vertices are spikes (to avoid modifying while iterating)
+    const spikes: { idx: number; median: number }[] = [];
+
+    // Check each vertex
+    for (let gy = 0; gy < gridHeight; gy++) {
+      for (let gx = 0; gx < gridWidth; gx++) {
+        const idx = gy * gridWidth + gx;
+        const height = heights[idx];
+
+        // Skip NaN or zero heights (likely missing data)
+        if (Number.isNaN(height) || height === 0) continue;
+
+        // Get neighbor heights (8-connected neighborhood)
+        const neighbors: number[] = [];
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const h = getHeightAt(gx + dx, gy + dy);
+            if (h !== null && !Number.isNaN(h) && h !== 0) {
+              neighbors.push(h);
+            }
+          }
+        }
+
+        // Need at least 3 valid neighbors for reliable spike detection
+        if (neighbors.length < 3) continue;
+
+        // Calculate median of neighbors (more robust than mean)
+        neighbors.sort((a, b) => a - b);
+        const median = neighbors[Math.floor(neighbors.length / 2)];
+
+        // Check if this vertex is a spike (significantly different from neighbors)
+        const deviation = Math.abs(height - median);
+        if (deviation > SPIKE_THRESHOLD) {
+          spikes.push({ idx, median });
+        }
+      }
+    }
+
+    // Apply smoothing to detected spikes
+    for (const spike of spikes) {
+      heights[spike.idx] = spike.median;
+    }
   }
 
   /**
