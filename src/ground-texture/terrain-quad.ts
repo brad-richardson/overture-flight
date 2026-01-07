@@ -159,9 +159,14 @@ export class TerrainQuad {
     // Track which vertices are spikes (to avoid modifying while iterating)
     const spikes: { idx: number; median: number }[] = [];
 
-    // Check each vertex
+    // Check each vertex (skip border vertices to maintain tile seam consistency)
     for (let gy = 0; gy < gridHeight; gy++) {
       for (let gx = 0; gx < gridWidth; gx++) {
+        // Skip border vertices - they must match neighboring tiles exactly
+        // Smoothing them would create seams where tiles meet
+        const isEdge = gx === 0 || gx === gridWidth - 1 || gy === 0 || gy === gridHeight - 1;
+        if (isEdge) continue;
+
         const idx = gy * gridWidth + gx;
         const height = heights[idx];
 
