@@ -114,6 +114,19 @@ export function setMobileInput(joystick: JoystickInput, throttle: ThrottleInput)
 }
 
 /**
+ * Reset all keyboard input states
+ * Called when window loses focus to prevent stuck keys
+ */
+function resetAllInputs(): void {
+  input.pitchUp = false;
+  input.pitchDown = false;
+  input.rollLeft = false;
+  input.rollRight = false;
+  input.throttleUp = false;
+  input.throttleDown = false;
+}
+
+/**
  * Initialize keyboard controls
  */
 export function initControls(): void {
@@ -123,6 +136,17 @@ export function initControls(): void {
 
   document.addEventListener('keyup', (e) => {
     handleKeyChange(e.code, false);
+  });
+
+  // Reset all inputs when window loses focus (e.g., Cmd+Shift+4 screenshot)
+  // This prevents stuck keys when the OS intercepts keyboard events
+  window.addEventListener('blur', resetAllInputs);
+
+  // Also reset on visibility change (tab switch, minimize, etc.)
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      resetAllInputs();
+    }
   });
 }
 
