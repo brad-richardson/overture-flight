@@ -192,29 +192,6 @@ export const GROUND_TEXTURE: GroundTextureConfig = {
   SKIP_NEIGHBOR_TILES: IS_MOBILE ? true : false,      // Skip neighbors on mobile to reduce network; load on desktop for full coverage
 };
 
-// Low-detail terrain settings (Z10 background layer)
-// Renders distant terrain with simplified features for extended visibility
-// Enable via VITE_ENABLE_Z10_RENDERING=true environment variable (disabled by default)
-export interface LowDetailTerrainConfig {
-  ENABLED: boolean;               // Enable/disable low-detail distant terrain (env: VITE_ENABLE_Z10_RENDERING)
-  ZOOM: number;                   // Zoom level for low-detail tiles
-  TILE_RADIUS: number;            // Radius of tiles to load (2 = 5x5 grid)
-  TEXTURE_SIZE: number;           // Lower resolution texture
-  TERRAIN_QUAD_SEGMENTS: number;  // Fewer subdivisions for distant terrain
-  Y_OFFSET: number;               // Y offset below Z14 tiles (meters)
-  UNLOAD_DISTANCE: number;        // Chebyshev distance for tile unloading
-}
-
-export const LOW_DETAIL_TERRAIN: LowDetailTerrainConfig = {
-  ENABLED: import.meta.env.VITE_ENABLE_Z10_RENDERING === 'true',
-  ZOOM: 10,                       // Z10 covers 16x16 Z14 tiles (~24km x 24km)
-  TILE_RADIUS: 2,                 // 5x5 grid = ~120km x 120km coverage
-  TEXTURE_SIZE: IS_MOBILE ? 512 : 1024,              // Even lower resolution on mobile
-  TERRAIN_QUAD_SEGMENTS: IS_MOBILE ? 4 : 8,          // Simpler mesh on mobile
-  Y_OFFSET: -0.5,                 // 0.5m below Z14 layer (small offset, stencil does the real masking)
-  UNLOAD_DISTANCE: 4,             // Chebyshev distance for unloading
-};
-
 // Expanded terrain settings (Z14 terrain-only outer ring)
 // Loads a larger area of terrain/texture without buildings for extended visibility
 // Helps avoid "edge of world" when flying
@@ -256,7 +233,7 @@ export const WORKERS: WorkersConfig = {
   MVT_ENABLED: import.meta.env.VITE_MVT_WORKERS !== 'false', // MVT parsing workers: Enabled by default
   ELEVATION_ENABLED: import.meta.env.VITE_ELEVATION_WORKERS !== 'false', // Elevation workers: Enabled by default
   FULL_PIPELINE_ENABLED: import.meta.env.VITE_FULL_PIPELINE_WORKERS === 'true', // Full pipeline workers: Disabled by default (experimental)
-  BUILDING_GEOMETRY_ENABLED: import.meta.env.VITE_BUILDING_WORKERS === 'true', // Building geometry workers: Disabled by default (experimental)
+  BUILDING_GEOMETRY_ENABLED: import.meta.env.VITE_BUILDING_WORKERS !== 'false', // Building geometry workers: Enabled by default
   POOL_SIZE: 0,                   // 0 = auto (cores - 1, min 2, max 4)
 };
 

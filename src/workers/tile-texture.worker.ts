@@ -4,7 +4,7 @@
  */
 
 import type { WorkerRequest, WorkerResponse } from './types.js';
-import { renderTileTextureToCanvas, renderLowDetailTextureToCanvas } from './offscreen-renderer.js';
+import { renderTileTextureToCanvas } from './offscreen-renderer.js';
 
 // Test OffscreenCanvas capability on worker startup
 let offscreenCanvasSupported = false;
@@ -55,34 +55,6 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         const bitmap = canvas.transferToImageBitmap();
         const response: WorkerResponse = {
           type: 'RENDER_TILE_TEXTURE_RESULT',
-          id: request.id,
-          result: bitmap,
-        };
-        self.postMessage(response, { transfer: [bitmap] });
-        break;
-      }
-
-      case 'RENDER_LOW_DETAIL_TEXTURE': {
-        if (!offscreenCanvasSupported) {
-          const response: WorkerResponse = {
-            type: 'ERROR',
-            id: request.id,
-            error: 'OffscreenCanvas not supported in this worker',
-          };
-          self.postMessage(response);
-          return;
-        }
-
-        const { baseFeatures, bounds, textureSize } = request.payload;
-
-        // Create OffscreenCanvas and render
-        const canvas = new OffscreenCanvas(textureSize, textureSize);
-        renderLowDetailTextureToCanvas(canvas, baseFeatures, bounds);
-
-        // Transfer ImageBitmap back to main thread (zero-copy)
-        const bitmap = canvas.transferToImageBitmap();
-        const response: WorkerResponse = {
-          type: 'RENDER_LOW_DETAIL_TEXTURE_RESULT',
           id: request.id,
           result: bitmap,
         };

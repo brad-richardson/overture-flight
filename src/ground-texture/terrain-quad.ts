@@ -3,6 +3,7 @@ import type { TileBounds } from './types.js';
 import { geoToWorld, worldToGeo } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
 import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
+import { disposeTexture } from '../renderer/texture-disposal.js';
 
 // Spike detection: vertex must deviate more than this multiple of neighbor standard deviation
 // Higher values = less aggressive smoothing, preserves more terrain features
@@ -294,30 +295,18 @@ export class TerrainQuad {
   }
 
   /**
-   * Enable stencil writing for this quad (used by Z14 tiles)
-   * When enabled, this quad writes to the stencil buffer so that
-   * Z10 low-detail tiles can be masked where Z14 tiles exist
-   */
-  enableStencilWrite(): void {
-    this.material.stencilWrite = true;
-    this.material.stencilRef = 1;
-    this.material.stencilFunc = THREE.AlwaysStencilFunc;
-    this.material.stencilFail = THREE.KeepStencilOp;
-    this.material.stencilZFail = THREE.KeepStencilOp;
-    this.material.stencilZPass = THREE.ReplaceStencilOp;
-  }
-
-  /**
    * Dispose of resources
    */
   dispose(): void {
     this.geometry.dispose();
     this.material.dispose();
     if (this.material.map) {
-      this.material.map.dispose();
+      // Use deferred disposal for WebGPU compatibility
+      disposeTexture(this.material.map);
     }
     if (this.elevationTexture) {
-      this.elevationTexture.dispose();
+      // Use deferred disposal for WebGPU compatibility
+      disposeTexture(this.elevationTexture);
       this.elevationTexture = null;
     }
   }

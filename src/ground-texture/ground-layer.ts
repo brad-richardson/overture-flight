@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { GroundTileData } from './types.js';
-import { TileTextureCache, initTextureCache } from './tile-texture-cache.js';
+import { TileTextureCache } from './tile-texture-cache.js';
 import { TerrainQuad } from './terrain-quad.js';
 import { loadBaseTile, loadTransportationTile, tileToBounds } from '../tile-manager.js';
 import { getTerrainHeight, getElevationDataForTile } from '../elevation.js';
@@ -33,7 +33,10 @@ let textureCache: TileTextureCache | null = null;
  */
 function getCache(): TileTextureCache {
   if (!textureCache) {
-    textureCache = initTextureCache({
+    // Create a separate cache instance for ground tiles (not using singleton)
+    // The deferDisposal config is no longer needed - the cache uses the global
+    // texture-disposal utility which automatically handles WebGPU deferral
+    textureCache = new TileTextureCache({
       maxSize: GROUND_TEXTURE.CACHE_MAX_SIZE,
       disposeThreshold: GROUND_TEXTURE.CACHE_DISPOSE_THRESHOLD,
     });
@@ -245,14 +248,7 @@ async function createGroundForTileInner(
   // Mark texture as in-use so it won't be evicted while bound to this tile
   cache.markInUse(key);
 
-  // Enable stencil writing: Z14 high-detail tiles write to stencil buffer,
-  // which masks Z10 low-detail tiles from rendering in the same area
-  quad.enableStencilWrite();
-
-  // Set render order: Z14 must render BEFORE Z10 so stencil is written first
-  // Lower renderOrder = renders earlier in Three.js
   const mesh = quad.getMesh();
-  mesh.renderOrder = -5;
 
   // Create group
   const group = new THREE.Group();

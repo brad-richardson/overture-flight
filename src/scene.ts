@@ -4,9 +4,14 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { PLANE_MODEL_URL, PLANE_RENDER, DEFAULT_LOCATION } from './constants.js';
 import { isMobileDevice } from './mobile-controls.js';
 import { initSkySystem, updateSky } from './sky.js';
+import { createRenderer, RendererType } from './renderer/renderer-factory.js';
+import { setDeferredDisposal } from './renderer/texture-disposal.js';
 
 // Export for use in buildings.ts
 export { BufferGeometryUtils };
+
+// Re-export RendererType for external use
+export type { RendererType };
 
 // Cache for plane textures by color
 const planeTextureCache = new Map<string, THREE.CanvasTexture>();
@@ -170,6 +175,7 @@ function createAircraftMaterials(playerColor: string): {
 let scene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
 let renderer: THREE.WebGLRenderer | null = null;
+let rendererType: RendererType = 'webgl';
 let planeModel: THREE.Group | null = null;
 const planeMeshes = new Map<string, THREE.Object3D>(); // id -> mesh
 
@@ -280,13 +286,24 @@ export async function initScene(): Promise<{
   camera.position.set(0, 500, 500);
   camera.lookAt(0, 0, 0);
 
-  // Create renderer (aggressive performance tuning: disabled antialiasing, lower pixel ratio)
-  // Stencil buffer enabled for Z10/Z14 terrain masking
-  renderer = new THREE.WebGLRenderer({ antialias: false, stencil: true });
+  // Create renderer with WebGPU preference and WebGL fallback
+  // Use ?webgpu=0 URL param to force WebGL for debugging
+  const rendererResult = await createRenderer({ antialias: false });
+  renderer = rendererResult.renderer;
+  rendererType = rendererResult.type;
+
+  // Enable deferred texture disposal for WebGPU to avoid command buffer conflicts
+  if (rendererType === 'webgpu') {
+    setDeferredDisposal(true);
+  }
+
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // PCFSoftShadowMap only supported in WebGL; WebGPU uses default shadow type
+  if (rendererType === 'webgl') {
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  }
 
   // Replace map container content with Three.js canvas
   const container = document.getElementById('map');
@@ -316,12 +333,14 @@ export async function initScene(): Promise<{
   scene.add(sunLight);
 
   // Initialize procedural sky system with atmospheric effects
-  initSkySystem(scene, {
+  // Pass renderer type for WebGL/WebGPU shader compatibility
+  await initSkySystem(scene, {
     sunPosition: sunLight.position.clone(),
     turbidity: 2,
     cloudDensity: 0.35,
     cloudAltitude: 3000,
-    fogDensity: 0.00006
+    fogDensity: 0.00006,
+    rendererType: rendererType
   });
 
   // Handle window resize
@@ -627,6 +646,13 @@ export function getCamera(): THREE.PerspectiveCamera | null {
  */
 export function getRenderer(): THREE.WebGLRenderer | null {
   return renderer;
+}
+
+/**
+ * Get the renderer type (webgpu or webgl)
+ */
+export function getRendererType(): RendererType {
+  return rendererType;
 }
 
 /**

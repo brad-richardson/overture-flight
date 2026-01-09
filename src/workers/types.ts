@@ -33,15 +33,6 @@ export interface RenderTileTexturePayload {
 }
 
 /**
- * Payload for rendering a low-detail tile texture
- */
-export interface RenderLowDetailTexturePayload {
-  baseFeatures: ParsedFeature[];
-  bounds: TileBounds;
-  textureSize: number;
-}
-
-/**
  * Scene origin for coordinate conversion
  * Used by geometry workers to convert geo coords to world coords
  */
@@ -274,7 +265,6 @@ export interface CreateBuildingGeometryResult {
  */
 export type WorkerRequest =
   | { type: 'RENDER_TILE_TEXTURE'; id: string; payload: RenderTileTexturePayload }
-  | { type: 'RENDER_LOW_DETAIL_TEXTURE'; id: string; payload: RenderLowDetailTexturePayload }
   | { type: 'CREATE_BASE_GEOMETRY'; id: string; payload: CreateBaseGeometryPayload }
   | { type: 'CREATE_BUILDING_GEOMETRY'; id: string; payload: CreateBuildingGeometryPayload }
   | { type: 'PARSE_MVT'; id: string; payload: ParseMVTPayload }
@@ -286,7 +276,6 @@ export type WorkerRequest =
  */
 export type WorkerResponse =
   | { type: 'RENDER_TILE_TEXTURE_RESULT'; id: string; result: ImageBitmap }
-  | { type: 'RENDER_LOW_DETAIL_TEXTURE_RESULT'; id: string; result: ImageBitmap }
   | { type: 'CREATE_BASE_GEOMETRY_RESULT'; id: string; result: BaseGeometryResult }
   | { type: 'CREATE_BUILDING_GEOMETRY_RESULT'; id: string; result: CreateBuildingGeometryResult }
   | { type: 'PARSE_MVT_RESULT'; id: string; result: ParseMVTResult }

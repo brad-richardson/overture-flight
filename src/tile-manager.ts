@@ -1,10 +1,11 @@
 import { PMTiles } from 'pmtiles';
 import { VectorTile } from '@mapbox/vector-tile';
 import Pbf from 'pbf';
-import { OVERTURE_BUILDINGS_PMTILES, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES, PROFILING } from './constants.js';
+import { OVERTURE_BUILDINGS_PMTILES, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES, PROFILING, WORKERS } from './constants.js';
 import { getOrigin } from './scene.js';
 import { getFetchSemaphore, TilePriority } from './semaphore.js';
 import { recordFetchTiming, mark, measure } from './profiling/tile-profiler.js';
+import { getMVTWorkerPool, compactFeatureToFeature } from './workers/index.js';
 
 // Types
 export interface TileBounds {
@@ -261,6 +262,60 @@ export function parseMVT(
 }
 
 /**
+ * Parse MVT data asynchronously using web worker (if enabled)
+ * Falls back to synchronous parsing on main thread if workers disabled
+ *
+ * @param data - MVT tile ArrayBuffer (NOTE: this buffer is transferred to worker and becomes unusable)
+ * @param tileX - Tile X coordinate
+ * @param tileY - Tile Y coordinate
+ * @param zoom - Zoom level
+ * @param layerName - Optional layer name filter
+ * @returns Parsed features
+ */
+export async function parseMVTAsync(
+  data: ArrayBuffer,
+  tileX: number,
+  tileY: number,
+  zoom: number,
+  layerName: string | null = null
+): Promise<ParsedFeature[]> {
+  // Use worker if enabled, otherwise fall back to synchronous parsing
+  if (!WORKERS.MVT_ENABLED) {
+    return parseMVT(data, tileX, tileY, zoom, layerName);
+  }
+
+  const parseStart = PROFILING.ENABLED ? performance.now() : 0;
+  const tileKey = `${zoom}/${tileX}/${tileY}`;
+
+  if (PROFILING.ENABLED) {
+    mark(`mvt:parse:async:start:${tileKey}`);
+  }
+
+  try {
+    const pool = getMVTWorkerPool();
+    const result = await pool.parseMVT(data, tileX, tileY, zoom, layerName);
+
+    // Convert CompactFeature[] back to ParsedFeature[]
+    const features = result.features.map(compactFeatureToFeature);
+
+    if (PROFILING.ENABLED) {
+      const parseEnd = performance.now();
+      mark(`mvt:parse:async:end:${tileKey}`);
+      measure(`mvt:parse:async:${tileKey}`, `mvt:parse:async:start:${tileKey}`, `mvt:parse:async:end:${tileKey}`);
+      recordFetchTiming(0, parseEnd - parseStart);
+    }
+
+    return features;
+  } catch (error) {
+    // Fall back to synchronous parsing if worker fails
+    console.warn(`MVT worker parsing failed for ${tileKey}, falling back to main thread:`, error);
+    // Note: data may be transferred and unusable, so we can't fall back
+    // Return empty array to prevent errors
+    return [];
+  }
+}
+
+/**
  * Get tile data from PMTiles source with retry logic
  * Uses priority-based fetch queue to prevent request flooding
  * Returns ArrayBuffer and optionally records network timing for profiling
@@ -334,7 +389,7 @@ export async function loadBuildingTile(
   const data = await getTileData(buildingsPMTiles, zoom, x, y, TilePriority.BUILDINGS);
   if (!data) return [];
 
-  return parseMVT(data, x, y, zoom, 'building');
+  return parseMVTAsync(data, x, y, zoom, 'building');
 }
 
 /**
@@ -368,7 +423,7 @@ export async function loadBaseTile(
     const data = await getTileData(basePMTiles, zoom, x, y, priority);
     if (data) {
       // Base PMTiles has layers: water, land, land_use, land_cover, infrastructure
-      return parseMVT(data, x, y, zoom);
+      return parseMVTAsync(data, x, y, zoom);
     }
 
     // Try fallback zoom levels from zoom-1 down to MIN_FALLBACK_ZOOM
@@ -380,7 +435,7 @@ export async function loadBaseTile(
 
       const fallbackData = await getTileData(basePMTiles, fallbackZoom, fallbackX, fallbackY, priority);
       if (fallbackData) {
-        return parseMVT(fallbackData, fallbackX, fallbackY, fallbackZoom);
+        return parseMVTAsync(fallbackData, fallbackX, fallbackY, fallbackZoom);
       }
     }
 
@@ -445,7 +500,7 @@ export async function loadWaterPolygonsFromLowerZooms(
       const data = await getTileData(basePMTiles, lowerZoom, lowerX, lowerY, priority);
       if (!data) continue;
 
-      const allFeatures = parseMVT(data, lowerX, lowerY, lowerZoom, 'water');
+      const allFeatures = await parseMVTAsync(data, lowerX, lowerY, lowerZoom, 'water');
 
       // Filter for polygon features only and mark them
       features = [];
@@ -551,7 +606,7 @@ export async function loadTransportationTile(
     if (!data) return [];
 
     // Transportation PMTiles has layers: segment, connector
-    return parseMVT(data, x, y, zoom);
+    return parseMVTAsync(data, x, y, zoom);
   })();
 
   // Store in deduplication cache and clean up when done
