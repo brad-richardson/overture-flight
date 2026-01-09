@@ -26,6 +26,7 @@ export interface TileMetrics {
     canvasRender?: PhaseMetric;
     gpuUpload?: PhaseMetric;
     terrainElevation?: PhaseMetric;
+    fullPipeline?: PhaseMetric;
   };
   featureCounts?: {
     base: number;

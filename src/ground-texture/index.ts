@@ -29,7 +29,6 @@ export {
 } from './expanded-ground-layer.js';
 
 export { TileTextureCache, getTextureCache, initTextureCache } from './tile-texture-cache.js';
-export { renderTileTexture } from './tile-texture-renderer.js';
 export { TerrainQuad, createElevationTexture } from './terrain-quad.js';
 
 export type {

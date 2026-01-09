@@ -2,8 +2,7 @@ import * as THREE from 'three';
 import type { TileBounds } from './types.js';
 import { geoToWorld, worldToGeo } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
-// GPU terrain shader - imported dynamically when GPU_DISPLACEMENT is enabled
-// import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
+import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
 
 // Spike detection: vertex must deviate more than this multiple of neighbor standard deviation
 // Higher values = less aggressive smoothing, preserves more terrain features
@@ -22,6 +21,7 @@ export class TerrainQuad {
   private overlap: number;
   private originalWidth: number;
   private originalHeight: number;
+  private elevationTexture: THREE.DataTexture | null = null;
 
   constructor(bounds: TileBounds, segments: number = GROUND_TEXTURE.TERRAIN_QUAD_SEGMENTS) {
     // Calculate world dimensions
@@ -216,6 +216,44 @@ export class TerrainQuad {
   }
 
   /**
+   * Apply GPU-based terrain displacement using vertex shader
+   * @param heights Elevation data as Float32Array (from elevation tile)
+   * @param textureSize Size of the elevation texture (e.g., 256)
+   * @param elevationBounds Bounds of the elevation tile (Z12) - NOT the ground tile
+   * @param verticalExaggeration Multiplier for elevation values
+   */
+  applyGPUDisplacement(
+    heights: Float32Array,
+    textureSize: number,
+    elevationBounds: TileBounds,
+    verticalExaggeration: number = ELEVATION.VERTICAL_EXAGGERATION
+  ): void {
+    // Create elevation texture from height data
+    this.elevationTexture = createElevationDataTexture(heights, textureSize);
+
+    // Calculate elevation tile's world position and dimensions
+    // The elevation tile (Z12) covers a larger area than the ground tile (Z14)
+    const elevNW = geoToWorld(elevationBounds.west, elevationBounds.north, 0);
+    const elevSE = geoToWorld(elevationBounds.east, elevationBounds.south, 0);
+    const elevCenterX = (elevNW.x + elevSE.x) / 2;
+    const elevCenterZ = (elevNW.z + elevSE.z) / 2;
+    const elevWidth = Math.abs(elevSE.x - elevNW.x);
+    const elevHeight = Math.abs(elevSE.z - elevNW.z);
+
+    // Apply terrain shader to material
+    applyTerrainShader(this.material, {
+      elevationTexture: this.elevationTexture,
+      verticalExaggeration,
+      bounds: elevationBounds,
+      tileCenter: new THREE.Vector3(elevCenterX, 0, elevCenterZ),
+      tileDimensions: {
+        width: elevWidth,
+        height: elevHeight,
+      },
+    });
+  }
+
+  /**
    * Set the ground color texture
    */
   setTexture(texture: THREE.CanvasTexture): void {
@@ -224,14 +262,11 @@ export class TerrainQuad {
   }
 
   /**
-   * Set elevation texture for future GPU displacement
-   * (Placeholder for vertex shader implementation)
+   * Set elevation texture for GPU displacement (legacy method, prefer applyGPUDisplacement)
+   * @deprecated Use applyGPUDisplacement instead
    */
   setElevationTexture(_texture: THREE.DataTexture): void {
-    // For future GPU-based displacement:
-    // this.material.displacementMap = _texture;
-    // this.material.displacementScale = ELEVATION.VERTICAL_EXAGGERATION * maxElevation;
-    console.log('Elevation texture set (GPU displacement not yet implemented)');
+    console.warn('setElevationTexture is deprecated. Use applyGPUDisplacement instead.');
   }
 
   /**
@@ -277,6 +312,10 @@ export class TerrainQuad {
     this.material.dispose();
     if (this.material.map) {
       this.material.map.dispose();
+    }
+    if (this.elevationTexture) {
+      this.elevationTexture.dispose();
+      this.elevationTexture = null;
     }
   }
 }

@@ -1,13 +1,12 @@
 import * as THREE from 'three';
 import type { GroundTileData } from './types.js';
 import { TileTextureCache, initTextureCache } from './tile-texture-cache.js';
-import { renderLowDetailTileTexture } from './tile-texture-renderer.js';
 import { TerrainQuad } from './terrain-quad.js';
-import { loadBaseTile, loadWaterPolygonsFromLowerZooms, tileToBounds, lngLatToTile } from '../tile-manager.js';
-import { getTerrainHeight } from '../elevation.js';
+import { tileToBounds, lngLatToTile } from '../tile-manager.js';
+import { getTerrainHeight, getElevationDataForTile } from '../elevation.js';
 import { getScene } from '../scene.js';
-import { LOW_DETAIL_TERRAIN, ELEVATION, WORKERS } from '../constants.js';
-import { getWorkerPool } from '../workers/index.js';
+import { LOW_DETAIL_TERRAIN, ELEVATION, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
+import { getFullPipelineWorkerPool } from '../workers/index.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
 
 // Tile info type
@@ -107,62 +106,36 @@ async function createLowDetailGroundForTileInner(
   let texture = cache.get(key);
 
   if (!texture) {
-    // Load base features (land, water, land_cover) - no transportation
-    // At Z10, polygons are large enough that we don't need neighbor tiles
-    // Use Z10_GROUND priority (lower than Z14) for distant terrain
-    const baseFeatures = await loadBaseTile(tileX, tileY, tileZ, TilePriority.Z10_GROUND);
+    // Full pipeline: fetch, parse, render all in worker
+    // At Z10, no transportation and no neighbor tiles needed
+    const fullPipelinePool = getFullPipelineWorkerPool();
+    const bitmap = await fullPipelinePool.renderTile(
+      tileX,
+      tileY,
+      tileZ,
+      LOW_DETAIL_TERRAIN.TEXTURE_SIZE,
+      OVERTURE_BASE_PMTILES,
+      OVERTURE_TRANSPORTATION_PMTILES,
+      false, // includeNeighbors - not needed at Z10
+      false  // includeTransportation - not needed at Z10
+    );
 
-    // Also load water polygons from even lower zooms for ocean coverage
-    const lowerZoomWater = await loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ, TilePriority.Z10_GROUND);
+    // Create texture from ImageBitmap
+    const workerTexture = new THREE.Texture(bitmap);
+    workerTexture.flipY = false;
+    workerTexture.minFilter = THREE.LinearMipmapLinearFilter;
+    workerTexture.magFilter = THREE.LinearFilter;
+    workerTexture.generateMipmaps = true;
+    workerTexture.colorSpace = THREE.SRGBColorSpace;
+    workerTexture.needsUpdate = true;
 
-    // Merge features - lower zoom water first
-    const allBaseFeatures = [...lowerZoomWater, ...baseFeatures];
+    texture = workerTexture as unknown as THREE.CanvasTexture;
 
-    // Render to texture with simplified renderer (no roads)
-    // Use worker pool if enabled and supported, otherwise fall back to main thread
-    let useWorker = WORKERS.ENABLED;
-    if (useWorker) {
-      try {
-        const pool = getWorkerPool();
-        const isSupported = await pool.isWorkerSupported();
-        if (isSupported) {
-          // Render in worker, returns ImageBitmap
-          const bitmap = await pool.renderLowDetailTexture(
-            allBaseFeatures,
-            bounds,
-            LOW_DETAIL_TERRAIN.TEXTURE_SIZE
-          );
-
-          // Create texture from ImageBitmap
-          const workerTexture = new THREE.Texture(bitmap);
-          workerTexture.minFilter = THREE.LinearMipmapLinearFilter;
-          workerTexture.magFilter = THREE.LinearFilter;
-          workerTexture.generateMipmaps = true;
-          workerTexture.colorSpace = THREE.SRGBColorSpace;
-          workerTexture.needsUpdate = true;
-
-          // Cast to CanvasTexture for cache compatibility (works at runtime)
-          // Note: Don't close the bitmap - let Three.js/GC handle memory
-          texture = workerTexture as unknown as THREE.CanvasTexture;
-        } else {
-          useWorker = false;
-        }
-      } catch (error) {
-        console.warn('Worker rendering failed for low-detail tile, falling back to main thread:', error);
-        useWorker = false;
-      }
+    if (texture) {
+      cache.set(key, texture, bounds);
+    } else {
+      console.error(`Failed to create texture for low-detail tile ${key}: worker returned null`);
     }
-
-    // Fallback to main thread rendering
-    if (!useWorker || !texture) {
-      texture = renderLowDetailTileTexture(
-        allBaseFeatures,
-        bounds,
-        LOW_DETAIL_TERRAIN.TEXTURE_SIZE
-      );
-    }
-
-    cache.set(key, texture, bounds);
   }
 
   // Create terrain-following quad with fewer segments
@@ -170,10 +143,33 @@ async function createLowDetailGroundForTileInner(
 
   // Apply terrain elevation
   if (ELEVATION.TERRAIN_ENABLED) {
-    quad.updateElevation(getTerrainHeight, ELEVATION.VERTICAL_EXAGGERATION);
+    if (ELEVATION.GPU_DISPLACEMENT) {
+      // GPU path: use vertex shader displacement
+      const centerLng = (bounds.west + bounds.east) / 2;
+      const centerLat = (bounds.north + bounds.south) / 2;
+      const [elevTileX, elevTileY] = lngLatToTile(centerLng, centerLat, ELEVATION.ZOOM);
+
+      const elevationData = await getElevationDataForTile(elevTileX, elevTileY);
+      if (elevationData) {
+        quad.applyGPUDisplacement(
+          elevationData.heights,
+          ELEVATION.TILE_SIZE,
+          elevationData.bounds,
+          ELEVATION.VERTICAL_EXAGGERATION
+        );
+      }
+    } else {
+      // CPU path: iterate over vertices
+      quad.updateElevation(getTerrainHeight, ELEVATION.VERTICAL_EXAGGERATION);
+    }
   }
 
   // Apply ground texture
+  if (!texture) {
+    console.error(`Cannot apply texture for low-detail tile ${key}: texture is null`);
+    quad.dispose();
+    return null;
+  }
   quad.setTexture(texture);
 
   // Mark texture as in-use so it won't be evicted while bound to this tile
