@@ -361,14 +361,13 @@ export function buildBaseGeometry(
   const polygonGroups: GeometryBufferGroup[] = [];
   const lineGroups: LineGeometryBufferGroup[] = [];
 
-  // Check for water lines
-  const hasWaterLines = features.some(
+  // Check if we have lower zoom water polygons (which cover full river width)
+  // If present, skip rendering thin water line strings to avoid z-fighting
+  const hasLowerZoomWaterPolygons = features.some(
     (f) =>
-      (f.type === 'LineString' || f.type === 'MultiLineString') &&
+      (f.type === 'Polygon' || f.type === 'MultiPolygon') &&
       f.layer === 'water' &&
-      LINEAR_WATER_TYPES.includes(
-        String(f.properties?.subtype || f.properties?.class || '').toLowerCase()
-      )
+      f.properties?._fromLowerZoom === true
   );
 
   // Group features by color+layer
@@ -396,7 +395,7 @@ export function buildBaseGeometry(
       featuresByColorAndLayer.get(key)!.features.push(feature);
     } else if (feature.type === 'LineString' || feature.type === 'MultiLineString') {
       // Only process water lines if we don't have lower zoom polygons
-      if (layer === 'water' && !hasWaterLines) {
+      if (layer === 'water' && !hasLowerZoomWaterPolygons) {
         const subtype = String(feature.properties?.subtype || feature.properties?.class || '').toLowerCase();
         if (LINEAR_WATER_TYPES.includes(subtype)) {
           if (!lineFeaturesByColor.has(color)) {

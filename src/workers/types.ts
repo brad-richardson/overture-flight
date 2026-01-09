@@ -196,12 +196,87 @@ export interface DecodeElevationResult {
 }
 
 /**
+ * Building feature for worker processing
+ */
+export interface BuildingFeatureInput {
+  /** Feature type: 'Polygon' or 'MultiPolygon' */
+  type: 'Polygon' | 'MultiPolygon';
+  /** Coordinates in GeoJSON format */
+  coordinates: number[][][] | number[][][][];
+  /** Building properties */
+  properties: {
+    height?: number;
+    num_floors?: number;
+    min_height?: number;
+    subtype?: string;
+    class?: string;
+    is_underground?: boolean;
+    [key: string]: unknown;
+  };
+}
+
+/**
+ * Payload for building geometry creation
+ */
+export interface CreateBuildingGeometryPayload {
+  /** Building features */
+  features: BuildingFeatureInput[];
+  /** Scene origin for coordinate conversion */
+  origin: SceneOrigin;
+  /** Tile coordinates (for debugging) */
+  tileX: number;
+  tileY: number;
+  tileZ: number;
+  /** LOD level: 0=HIGH, 1=MEDIUM, 2=LOW */
+  lodLevel: number;
+  /** Default building height when not specified */
+  defaultHeight: number;
+  /** Terrain heights for building footprints (optional, for terrain following) */
+  terrainHeights?: {
+    /** Map from building index to [minHeight, maxHeight] */
+    [buildingIndex: number]: [number, number];
+  };
+  /** Vertical exaggeration factor for terrain */
+  verticalExaggeration: number;
+}
+
+/**
+ * Single building geometry result
+ */
+export interface BuildingGeometryBuffers {
+  /** Vertex positions (x, y, z interleaved) */
+  positions: Float32Array;
+  /** Vertex normals (x, y, z interleaved) */
+  normals: Float32Array;
+  /** Vertex colors (r, g, b interleaved, 0-1 range) */
+  colors: Float32Array;
+  /** Triangle indices */
+  indices: Uint32Array;
+}
+
+/**
+ * Result of building geometry creation
+ */
+export interface CreateBuildingGeometryResult {
+  /** Merged building geometry buffers */
+  geometry: BuildingGeometryBuffers | null;
+  /** Statistics */
+  stats: {
+    buildingsProcessed: number;
+    buildingsSkipped: number;
+    totalVertices: number;
+    totalTriangles: number;
+  };
+}
+
+/**
  * Request types (main thread -> worker)
  */
 export type WorkerRequest =
   | { type: 'RENDER_TILE_TEXTURE'; id: string; payload: RenderTileTexturePayload }
   | { type: 'RENDER_LOW_DETAIL_TEXTURE'; id: string; payload: RenderLowDetailTexturePayload }
   | { type: 'CREATE_BASE_GEOMETRY'; id: string; payload: CreateBaseGeometryPayload }
+  | { type: 'CREATE_BUILDING_GEOMETRY'; id: string; payload: CreateBuildingGeometryPayload }
   | { type: 'PARSE_MVT'; id: string; payload: ParseMVTPayload }
   | { type: 'DECODE_ELEVATION'; id: string; payload: DecodeElevationPayload }
   | { type: 'CAPABILITY_CHECK'; id: string };
@@ -213,6 +288,7 @@ export type WorkerResponse =
   | { type: 'RENDER_TILE_TEXTURE_RESULT'; id: string; result: ImageBitmap }
   | { type: 'RENDER_LOW_DETAIL_TEXTURE_RESULT'; id: string; result: ImageBitmap }
   | { type: 'CREATE_BASE_GEOMETRY_RESULT'; id: string; result: BaseGeometryResult }
+  | { type: 'CREATE_BUILDING_GEOMETRY_RESULT'; id: string; result: CreateBuildingGeometryResult }
   | { type: 'PARSE_MVT_RESULT'; id: string; result: ParseMVTResult }
   | { type: 'DECODE_ELEVATION_RESULT'; id: string; result: DecodeElevationResult }
   | { type: 'CAPABILITY_CHECK_RESULT'; id: string; supported: boolean }

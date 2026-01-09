@@ -1,20 +1,23 @@
 import * as THREE from 'three';
-import { getScene, geoToWorld, BufferGeometryUtils } from './scene.js';
+import { getScene, geoToWorld, getSceneOriginForWorker, BufferGeometryUtils } from './scene.js';
 import { loadBuildingTile, tileToWorldBounds } from './tile-manager.js';
 import { getTerrainHeight } from './elevation.js';
-import { ELEVATION } from './constants.js';
+import { ELEVATION, WORKERS } from './constants.js';
 import {
   getBuildingColor,
   getBuildingHeight,
   groupFeaturesByCategory,
   createCategoryMaterial,
   isUndergroundBuilding,
+  isBuildingFeature,
   BuildingFeature,
 } from './building-materials.js';
 import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
 import type { StoredFeature } from './feature-picker.js';
 import { getTileSemaphore, TilePriority } from './semaphore.js';
 import { clearPendingUpdatesForTile } from './elevation-sync.js';
+import { getBuildingGeometryWorkerPool } from './workers/index.js';
+import type { BuildingFeatureInput } from './workers/index.js';
 
 // Default building height when not specified
 const DEFAULT_BUILDING_HEIGHT = 10;
@@ -189,10 +192,10 @@ async function createBuildingsForTileInner(
   // Store features for click picking
   const storedFeatures: StoredFeature[] = features
     .filter(f => {
-      // Only process polygon/multipolygon types
-      if (f.type !== 'Polygon' && f.type !== 'MultiPolygon') return false;
-      // Skip underground buildings (cast to BuildingFeature for type check)
-      return !isUndergroundBuilding(f as unknown as BuildingFeature);
+      // Only process polygon/multipolygon types using type guard
+      if (!isBuildingFeature(f)) return false;
+      // Skip underground buildings
+      return !isUndergroundBuilding(f);
     })
     .map(f => ({
       type: f.type as 'Polygon' | 'MultiPolygon',
@@ -212,6 +215,107 @@ async function createBuildingsForTileInner(
   // Store tile info for LOD updates
   group.userData = { tileX, tileY, tileZ, lodLevel, tileDistance };
 
+  // Try worker-based building geometry generation
+  // Trade-offs: Worker produces single merged mesh with uniform material properties.
+  // Main thread fallback groups by category with varied materials.
+  // Worker benefits: Heavy geometry computation off main thread, better frame rates.
+  // Note: Origin captured here; if floating origin shifts during processing,
+  // geometry may be slightly offset (acceptable for typical movement speeds).
+  if (WORKERS.BUILDING_GEOMETRY_ENABLED) {
+    try {
+      const workerPool = getBuildingGeometryWorkerPool();
+      const isSupported = await workerPool.isWorkerSupported();
+
+      if (isSupported) {
+        const origin = getSceneOriginForWorker();
+        if (origin) {
+          // Convert features to worker format and collect terrain heights
+          const workerFeatures: BuildingFeatureInput[] = [];
+          const terrainHeights: { [index: number]: [number, number] } = {};
+
+          for (const f of features) {
+            if (!isBuildingFeature(f)) continue;
+            if (isUndergroundBuilding(f)) continue;
+
+            const featureIndex = workerFeatures.length;
+
+            // Collect terrain heights for this building if terrain is enabled
+            if (ELEVATION.TERRAIN_ENABLED) {
+              const coords = f.type === 'Polygon'
+                ? [f.coordinates as number[][][]]
+                : f.coordinates as number[][][][];
+
+              let minHeight = Infinity;
+              let maxHeight = -Infinity;
+              let validCount = 0;
+
+              for (const polygon of coords) {
+                const outerRing = polygon[0];
+                if (!outerRing) continue;
+                for (const coord of outerRing) {
+                  const h = getTerrainHeight(coord[0], coord[1]);
+                  if (!Number.isNaN(h)) {
+                    minHeight = Math.min(minHeight, h);
+                    maxHeight = Math.max(maxHeight, h);
+                    validCount++;
+                  }
+                }
+              }
+
+              if (validCount > 0) {
+                terrainHeights[featureIndex] = [minHeight, maxHeight];
+              }
+            }
+
+            workerFeatures.push({
+              type: f.type as 'Polygon' | 'MultiPolygon',
+              coordinates: f.coordinates as number[][][] | number[][][][],
+              properties: f.properties as BuildingFeatureInput['properties'],
+            });
+          }
+
+          if (workerFeatures.length > 0) {
+            const result = await workerPool.createBuildingGeometry(
+              workerFeatures,
+              origin,
+              tileX,
+              tileY,
+              tileZ,
+              lodLevel,
+              DEFAULT_BUILDING_HEIGHT,
+              Object.keys(terrainHeights).length > 0 ? terrainHeights : undefined,
+              ELEVATION.VERTICAL_EXAGGERATION
+            );
+
+            if (result.geometry) {
+              // Create Three.js BufferGeometry from worker result
+              const geometry = new THREE.BufferGeometry();
+              geometry.setAttribute('position', new THREE.BufferAttribute(result.geometry.positions, 3));
+              geometry.setAttribute('normal', new THREE.BufferAttribute(result.geometry.normals, 3));
+              geometry.setAttribute('color', new THREE.BufferAttribute(result.geometry.colors, 3));
+              geometry.setIndex(new THREE.Uint32BufferAttribute(result.geometry.indices, 1));
+
+              const mesh = new THREE.Mesh(geometry, vertexColorMaterial.clone());
+              mesh.castShadow = true;
+              mesh.receiveShadow = true;
+              mesh.name = 'buildings-worker';
+              group.add(mesh);
+
+              if (group.children.length > 0) {
+                scene.add(group);
+                loadingBuildingTiles.delete(tileKey);
+                return group;
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Building geometry worker failed, falling back to main thread:', error);
+    }
+  }
+
+  // Fallback: Main thread building geometry generation
   // Group features by category for better material batching
   const categoryGroups = groupFeaturesByCategory(features as BuildingFeature[]);
   let totalGeometries = 0;
