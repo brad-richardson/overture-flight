@@ -549,6 +549,18 @@ const OVERTURE_SUBTYPES = new Set<string>([
 ]);
 
 /**
+ * Type guard to check if a feature is a valid BuildingFeature
+ * Checks for required polygon/multipolygon type and coordinates
+ */
+export function isBuildingFeature(feature: unknown): feature is BuildingFeature {
+  if (!feature || typeof feature !== 'object') return false;
+  const f = feature as Record<string, unknown>;
+  if (f.type !== 'Polygon' && f.type !== 'MultiPolygon') return false;
+  if (!Array.isArray(f.coordinates)) return false;
+  return true;
+}
+
+/**
  * Check if a building is underground (should not be rendered)
  * Uses the Overture is_underground property
  */

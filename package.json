@@ -17,17 +17,19 @@
     "generate:trees": "uv run scripts/generate-tree-tiles.py"
   },
   "dependencies": {
+    "@bradrichardson/overture-geocoder": "^0.2.2",
     "@bradrichardson/overturemaps": "^0.2.1",
     "@loaders.gl/gltf": "^4.3.4",
     "@mapbox/vector-tile": "^2.0.4",
+    "earcut": "^3.0.2",
     "maplibre-gl": "^5.0.0",
-    "@bradrichardson/overture-geocoder": "^0.2.2",
     "partysocket": "^1.0.2",
     "pbf": "^4.0.1",
     "pmtiles": "^4.3.2",
     "three": "^0.182.0"
   },
   "devDependencies": {
+    "@types/earcut": "^3.0.0",
     "@types/pbf": "^3.0.5",
     "@types/three": "^0.182.0",
     "partykit": "^0.0.111",

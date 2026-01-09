@@ -9,6 +9,7 @@ import type {
   RenderTileTexturePayload,
   RenderLowDetailTexturePayload,
   CreateBaseGeometryPayload,
+  CreateBuildingGeometryPayload,
   ParseMVTPayload,
   DecodeElevationPayload,
   TileBounds,
@@ -17,11 +18,13 @@ import type {
   BaseGeometryResult,
   ParseMVTResult,
   DecodeElevationResult,
+  BuildingFeatureInput,
+  CreateBuildingGeometryResult,
 } from './types.js';
 import { WORKERS } from '../constants.js';
 
 // Re-export types for convenience
-export type { TileBounds, ParsedFeature, SceneOrigin, BaseGeometryResult, GeometryBufferGroup, LineGeometryBufferGroup, ParseMVTResult, CompactFeature } from './types.js';
+export type { TileBounds, ParsedFeature, SceneOrigin, BaseGeometryResult, GeometryBufferGroup, LineGeometryBufferGroup, ParseMVTResult, CompactFeature, BuildingFeatureInput, CreateBuildingGeometryResult, BuildingGeometryBuffers } from './types.js';
 
 /**
  * Get optimal worker pool size based on device capabilities and config
@@ -1460,6 +1463,349 @@ export function resetElevationWorkerPool(): void {
   if (elevationPoolInstance) {
     elevationPoolInstance.terminate();
     elevationPoolInstance = null;
+  }
+}
+
+// =============================================================================
+// Building Geometry Worker Pool
+// Offloads building extrusion to workers using earcut triangulation
+// =============================================================================
+
+export class BuildingGeometryWorkerPool {
+  private workers: WorkerState[] = [];
+  private pendingTasks = new Map<string, PendingTask>();
+  private isSupported = true;
+  private initialized = false;
+  private initPromise: Promise<void> | null = null;
+
+  constructor(private poolSize: number = getOptimalPoolSize()) {}
+
+  /**
+   * Initialize the building geometry worker pool
+   */
+  async initialize(): Promise<boolean> {
+    if (this.initialized) return this.isSupported;
+
+    if (this.initPromise) {
+      await this.initPromise;
+      return this.isSupported;
+    }
+
+    this.initPromise = this.doInitialize();
+    await this.initPromise;
+    return this.isSupported;
+  }
+
+  private async doInitialize(): Promise<void> {
+    // Create building geometry workers
+    for (let i = 0; i < this.poolSize; i++) {
+      try {
+        const worker = new Worker(
+          new URL('./building-geometry.worker.ts', import.meta.url),
+          { type: 'module' }
+        );
+
+        const state: WorkerState = {
+          worker,
+          ready: false,
+          pendingCount: 0,
+        };
+
+        worker.onmessage = (event) => this.handleMessage(i, event);
+        worker.onerror = (event) => this.handleError(i, event);
+        worker.onmessageerror = () => this.handleMessageError(i);
+
+        this.workers.push(state);
+      } catch (error) {
+        console.warn(`Failed to create building geometry worker ${i}:`, error);
+      }
+    }
+
+    if (this.workers.length === 0) {
+      console.warn('No building geometry workers could be created, falling back to main thread');
+      this.isSupported = false;
+      this.initialized = true;
+      return;
+    }
+
+    // Check capability
+    try {
+      const supported = await this.checkCapability(0);
+      if (!supported) {
+        console.warn('Building geometry worker capability check failed');
+        this.isSupported = false;
+        this.terminate();
+      }
+    } catch (error) {
+      console.warn('Building geometry worker capability check failed:', error);
+      this.isSupported = false;
+      this.terminate();
+    }
+
+    this.initialized = true;
+  }
+
+  private checkCapability(workerIndex: number): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      const id = crypto.randomUUID();
+      const timeout = setTimeout(() => {
+        this.pendingTasks.delete(id);
+        reject(new Error('Capability check timeout'));
+      }, 5000);
+
+      this.pendingTasks.set(id, {
+        resolve: (result) => resolve(result as boolean),
+        reject,
+        workerIndex,
+        timeoutId: timeout,
+        countIncremented: false,
+      });
+
+      const request: WorkerRequest = { type: 'CAPABILITY_CHECK', id };
+      this.workers[workerIndex].worker.postMessage(request);
+    });
+  }
+
+  private handleMessage(workerIndex: number, event: MessageEvent<WorkerResponse | { type: 'READY' }>): void {
+    const data = event.data;
+
+    if (data.type === 'READY') {
+      this.workers[workerIndex].ready = true;
+      return;
+    }
+
+    const response = data as WorkerResponse;
+
+    if (response.type === 'CAPABILITY_CHECK_RESULT') {
+      const task = this.pendingTasks.get(response.id);
+      if (task) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(response.id);
+        task.resolve(response.supported);
+      }
+      return;
+    }
+
+    if (response.type === 'CREATE_BUILDING_GEOMETRY_RESULT') {
+      const task = this.pendingTasks.get(response.id);
+      if (task) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(response.id);
+        this.workers[task.workerIndex].pendingCount--;
+        task.resolve(response.result);
+      }
+      return;
+    }
+
+    if (response.type === 'ERROR') {
+      const task = this.pendingTasks.get(response.id);
+      if (task) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(response.id);
+        this.workers[task.workerIndex].pendingCount--;
+        task.reject(new Error(response.error));
+      }
+      return;
+    }
+  }
+
+  private handleError(workerIndex: number, event: ErrorEvent): void {
+    console.error(`Building geometry worker ${workerIndex} error:`, event.message);
+
+    for (const [id, task] of this.pendingTasks) {
+      if (task.workerIndex === workerIndex) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(id);
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
+        task.reject(new Error(`Worker error: ${event.message}`));
+      }
+    }
+
+    this.replaceWorker(workerIndex);
+  }
+
+  private handleMessageError(workerIndex: number): void {
+    console.error(`Building geometry worker ${workerIndex} message error`);
+
+    for (const [id, task] of this.pendingTasks) {
+      if (task.workerIndex === workerIndex) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(id);
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
+        task.reject(new Error('Worker message error'));
+      }
+    }
+  }
+
+  private replaceWorker(workerIndex: number): void {
+    try {
+      this.workers[workerIndex]?.worker.terminate();
+
+      const worker = new Worker(
+        new URL('./building-geometry.worker.ts', import.meta.url),
+        { type: 'module' }
+      );
+
+      const state: WorkerState = {
+        worker,
+        ready: false,
+        pendingCount: 0,
+      };
+
+      worker.onmessage = (event) => this.handleMessage(workerIndex, event);
+      worker.onerror = (event) => this.handleError(workerIndex, event);
+      worker.onmessageerror = () => this.handleMessageError(workerIndex);
+
+      this.workers[workerIndex] = state;
+    } catch (error) {
+      console.error(`Failed to replace building geometry worker ${workerIndex}:`, error);
+    }
+  }
+
+  private getLeastLoadedWorker(): number {
+    let minLoad = Infinity;
+    let minIndex = 0;
+
+    for (let i = 0; i < this.workers.length; i++) {
+      const state = this.workers[i];
+      if (state.ready && state.pendingCount < minLoad) {
+        minLoad = state.pendingCount;
+        minIndex = i;
+      }
+    }
+
+    return minIndex;
+  }
+
+  private sendRequest<T>(request: WorkerRequest): Promise<T> {
+    if (!this.isSupported || this.workers.length === 0) {
+      return Promise.reject(new Error('Building geometry worker pool not available'));
+    }
+
+    return new Promise((resolve, reject) => {
+      const workerIndex = this.getLeastLoadedWorker();
+      const state = this.workers[workerIndex];
+
+      const timeoutId = setTimeout(() => {
+        this.pendingTasks.delete(request.id);
+        state.pendingCount--;
+        reject(new Error('Task timeout'));
+      }, TASK_TIMEOUT_MS);
+
+      this.pendingTasks.set(request.id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        workerIndex,
+        timeoutId,
+        countIncremented: true,
+      });
+
+      state.pendingCount++;
+      state.worker.postMessage(request);
+    });
+  }
+
+  /**
+   * Create building geometry using a worker
+   */
+  async createBuildingGeometry(
+    features: BuildingFeatureInput[],
+    origin: SceneOrigin,
+    tileX: number,
+    tileY: number,
+    tileZ: number,
+    lodLevel: number,
+    defaultHeight: number,
+    terrainHeights: { [buildingIndex: number]: [number, number] } | undefined,
+    verticalExaggeration: number
+  ): Promise<CreateBuildingGeometryResult> {
+    await this.initialize();
+
+    if (!this.isSupported) {
+      throw new Error('Building geometry worker pool not supported');
+    }
+
+    const payload: CreateBuildingGeometryPayload = {
+      features,
+      origin,
+      tileX,
+      tileY,
+      tileZ,
+      lodLevel,
+      defaultHeight,
+      terrainHeights,
+      verticalExaggeration,
+    };
+
+    const request: WorkerRequest = {
+      type: 'CREATE_BUILDING_GEOMETRY',
+      id: crypto.randomUUID(),
+      payload,
+    };
+
+    return this.sendRequest<CreateBuildingGeometryResult>(request);
+  }
+
+  /**
+   * Check if building geometry worker is supported
+   */
+  async isWorkerSupported(): Promise<boolean> {
+    await this.initialize();
+    return this.isSupported;
+  }
+
+  /**
+   * Terminate all building geometry workers
+   */
+  terminate(): void {
+    for (const [_id, task] of this.pendingTasks) {
+      clearTimeout(task.timeoutId);
+      task.reject(new Error('Building geometry worker pool terminated'));
+    }
+    this.pendingTasks.clear();
+
+    for (const state of this.workers) {
+      state.worker.terminate();
+    }
+    this.workers = [];
+  }
+
+  /**
+   * Get pool statistics
+   */
+  getStats(): { workerCount: number; pendingTasks: number; isSupported: boolean } {
+    return {
+      workerCount: this.workers.length,
+      pendingTasks: this.pendingTasks.size,
+      isSupported: this.isSupported,
+    };
+  }
+}
+
+// Building geometry pool singleton
+let buildingGeometryPoolInstance: BuildingGeometryWorkerPool | null = null;
+
+/**
+ * Get the global building geometry worker pool instance
+ */
+export function getBuildingGeometryWorkerPool(): BuildingGeometryWorkerPool {
+  if (!buildingGeometryPoolInstance) {
+    buildingGeometryPoolInstance = new BuildingGeometryWorkerPool();
+  }
+  return buildingGeometryPoolInstance;
+}
+
+/**
+ * Reset the building geometry worker pool (for testing)
+ */
+export function resetBuildingGeometryWorkerPool(): void {
+  if (buildingGeometryPoolInstance) {
+    buildingGeometryPoolInstance.terminate();
+    buildingGeometryPoolInstance = null;
   }
 }
 

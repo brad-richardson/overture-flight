@@ -244,6 +244,7 @@ export interface WorkersConfig {
   MVT_ENABLED: boolean;           // Enable/disable MVT parsing worker (uses zero-copy ArrayBuffer transfer)
   ELEVATION_ENABLED: boolean;     // Enable/disable elevation decoding worker (uses OffscreenCanvas)
   FULL_PIPELINE_ENABLED: boolean; // Enable/disable full pipeline workers (fetch+parse+render in worker)
+  BUILDING_GEOMETRY_ENABLED: boolean; // Enable/disable building geometry workers (extrusion in worker)
   POOL_SIZE: number;              // Number of workers (0 = auto based on cores)
 }
 
@@ -253,6 +254,7 @@ export const WORKERS: WorkersConfig = {
   MVT_ENABLED: import.meta.env.VITE_MVT_WORKERS !== 'false', // MVT parsing workers: Enabled by default
   ELEVATION_ENABLED: import.meta.env.VITE_ELEVATION_WORKERS !== 'false', // Elevation workers: Enabled by default
   FULL_PIPELINE_ENABLED: import.meta.env.VITE_FULL_PIPELINE_WORKERS === 'true', // Full pipeline workers: Disabled by default (experimental)
+  BUILDING_GEOMETRY_ENABLED: import.meta.env.VITE_BUILDING_WORKERS === 'true', // Building geometry workers: Disabled by default (experimental)
   POOL_SIZE: 0,                   // 0 = auto (cores - 1, min 2, max 4)
 };
 
