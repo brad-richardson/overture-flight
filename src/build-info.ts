@@ -9,8 +9,8 @@
  */
 
 // Injected by Vite at build time (see vite.config.ts)
-// Uses ISO timestamp truncated to create a unique but readable hash
-// Format: "20240115-143052" (date-time) or git short hash if available
+// Typically a git short hash (e.g., "a1b2c3d"); falls back to an ISO timestamp
+// truncated to create a unique but readable hash, e.g. "20240115-143052" (date-time)
 export const BUILD_HASH: string = __BUILD_HASH__;
 
 // Build timestamp (milliseconds since epoch)
