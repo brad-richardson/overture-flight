@@ -84,6 +84,10 @@ party/
 
 - **Buildings**: Overture Maps buildings theme (PMTiles)
 - **Terrain**: Overture Maps base theme - land, water, land use (PMTiles)
+- **Elevation**: AWS Terrain Tiles (Mapzen Terrarium format)
+- **Transportation**: Overture Maps transportation theme (PMTiles)
+
+See [ATTRIBUTION.md](ATTRIBUTION.md) for complete attribution and licensing information.
 
 ## Tech Stack
 
