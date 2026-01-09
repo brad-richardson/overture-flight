@@ -189,7 +189,7 @@ export const GROUND_TEXTURE: GroundTextureConfig = {
   CACHE_DISPOSE_THRESHOLD: IS_MOBILE ? 20 : 80,       // Earlier eviction on mobile
   TERRAIN_QUAD_SEGMENTS: IS_MOBILE ? 8 : 16,          // Simpler terrain mesh on mobile
   ENABLED: true,
-  SKIP_NEIGHBOR_TILES: true,                          // Skip neighbor tile fetching (8 fewer requests per tile)
+  SKIP_NEIGHBOR_TILES: false,                         // Include neighbor tiles for complete land use/water coverage
 };
 
 // Low-detail terrain settings (Z10 background layer)
