@@ -196,12 +196,17 @@ async function fetchTileData(
 }
 
 // Lower zoom levels to check for water polygons (highest detail first)
-const WATER_POLYGON_ZOOM_LEVELS = [10, 8, 6];
+// Include more zoom levels to catch river polygons that may only exist at certain zooms
+const WATER_POLYGON_ZOOM_LEVELS = [13, 12, 11, 10, 8, 6];
+
+// Stop loading lower zoom water once we have this many polygons intersecting the tile
+// This prevents loading overly simplified z6 data when we already have good coverage
+const WATER_POLYGON_SUFFICIENT_COUNT = 5;
 
 /**
  * Load water polygons from lower zoom levels for ocean coverage
- * Loads water from all levels (z10, z8, z6) and merges results with deduplication.
- * Different zoom levels have different coverage (z10 has rivers, z6 has oceans).
+ * Loads water from higher detail levels first, bailing out early once sufficient coverage is found.
+ * This prevents loading overly simplified z6 data when we already have good river/lake coverage.
  */
 async function loadLowerZoomWater(
   tileX: number,
@@ -226,6 +231,7 @@ async function loadLowerZoomWater(
 
     // Only extract water layer polygons
     const allFeatures = parseMVT(data, lowerX, lowerY, lowerZoom);
+
     const waterFeatures = allFeatures.filter(f =>
       f.layer === 'water' &&
       (f.type === 'Polygon' || f.type === 'MultiPolygon')
@@ -243,7 +249,7 @@ async function loadLowerZoomWater(
       if (seenAreas.has(areaKey)) continue;
       seenAreas.add(areaKey);
 
-      // Mark as coming from lower zoom for debugging
+      // Mark as coming from lower zoom
       feature.properties = {
         ...feature.properties,
         _fromLowerZoom: true,
@@ -252,9 +258,11 @@ async function loadLowerZoomWater(
       waterPolygons.push(feature);
     }
 
-    // Don't stop early - continue to load all zoom levels
-    // Different zoom levels may have different water coverage
-    // (e.g., z10 has rivers, z6 has oceans)
+    // Bail out early if we have sufficient water polygon coverage
+    // This prevents loading overly simplified z6/z8 data when higher zoom data is available
+    if (waterPolygons.length >= WATER_POLYGON_SUFFICIENT_COUNT) {
+      break;
+    }
   }
 
   return waterPolygons;

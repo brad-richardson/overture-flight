@@ -447,13 +447,26 @@ export function renderTileTextureToCanvas(
   ctx.restore();
 
   // === Layer 4: Water lines (rivers/streams) ===
+  // Render with wider strokes since river polygons often don't exist at lower zoom levels
   ctx.save();
   ctx.strokeStyle = hexToCSS(COLORS.river);
-  ctx.lineWidth = Math.max(1, 3 / metersPerPixel);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
   for (const feature of waterLineFeatures) {
+    // Use subtype to determine line width: rivers are wider than streams
+    const subtype = ((feature.properties.subtype || feature.properties.class || '') as string).toLowerCase();
+    let widthMeters: number;
+    if (subtype === 'river') {
+      widthMeters = 20; // Major rivers
+    } else if (subtype === 'stream' || subtype === 'drain' || subtype === 'ditch') {
+      widthMeters = 3;
+    } else if (subtype === 'canal') {
+      widthMeters = 12;
+    } else {
+      widthMeters = 8; // Default width for unknown or unclassified water lines
+    }
+    ctx.lineWidth = Math.max(2, widthMeters / metersPerPixel);
     drawLineString(ctx, feature.coordinates as number[][] | number[][][], feature.type, geoToCanvas);
   }
   ctx.restore();
