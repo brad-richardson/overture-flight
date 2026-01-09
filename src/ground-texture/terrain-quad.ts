@@ -90,9 +90,12 @@ export class TerrainQuad {
     for (let i = 0; i < uvs.count; i++) {
       const u = uvs.getX(i);
       const v = uvs.getY(i);
+      // Flip V coordinate: After rotateX(-PI/2), geometry UV V=0 ends up at south,
+      // but texture has V=0 at north. Flipping V aligns them correctly.
+      const flippedV = 1 - v;
       // Remap: original 0-1 spans the expanded geometry
       // We want the center (original tile) to map to 0-1
-      uvs.setXY(i, u * uScale - uOffset, v * vScale - vOffset);
+      uvs.setXY(i, u * uScale - uOffset, flippedV * vScale - vOffset);
     }
     uvs.needsUpdate = true;
   }
