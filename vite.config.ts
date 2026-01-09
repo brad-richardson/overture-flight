@@ -40,6 +40,6 @@ export default defineConfig(({ mode }) => ({
   // In dev mode, use a fixed hash to keep cache stable across HMR reloads
   define: {
     __BUILD_HASH__: JSON.stringify(mode === 'development' ? 'dev' : buildHash),
-    __BUILD_TIMESTAMP__: buildTimestamp,
+    __BUILD_TIMESTAMP__: JSON.stringify(buildTimestamp),
   }
 }));
