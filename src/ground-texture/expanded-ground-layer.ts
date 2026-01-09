@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import type { GroundTileData } from './types.js';
 import { TileTextureCache, initTextureCache } from './tile-texture-cache.js';
-import { renderTileTexture } from './tile-texture-renderer.js';
 import { TerrainQuad } from './terrain-quad.js';
-import { loadBaseTile, loadTransportationTile, loadWaterPolygonsFromLowerZooms, tileToBounds, lngLatToTile } from '../tile-manager.js';
-import { getTerrainHeight } from '../elevation.js';
+import { tileToBounds, lngLatToTile } from '../tile-manager.js';
+import { getTerrainHeight, getElevationDataForTile } from '../elevation.js';
 import { getScene } from '../scene.js';
-import { EXPANDED_TERRAIN, ELEVATION, GROUND_TEXTURE } from '../constants.js';
+import { EXPANDED_TERRAIN, ELEVATION, GROUND_TEXTURE, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
+import { getFullPipelineWorkerPool } from '../workers/index.js';
 
 // Tile info type
 interface TileInfo {
@@ -166,30 +166,38 @@ async function createExpandedGroundForTileInner(
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const cache = getExpandedCache();
 
-  // Try to get texture from cache
-  let texture = cache.get(key);
+  // Skip cache in dev mode to catch rendering issues
+  const useCache = !import.meta.env.DEV;
+  let texture = useCache ? cache.get(key) : null;
 
   if (!texture) {
-    // Load base features and transportation (same as core tiles, but no buildings)
-    // Use EXPANDED_TERRAIN priority (lowest)
-    const [baseFeatures, transportFeatures, lowerZoomWater] = await Promise.all([
-      loadBaseTile(tileX, tileY, tileZ, TilePriority.EXPANDED_TERRAIN),
-      loadTransportationTile(tileX, tileY, tileZ, TilePriority.EXPANDED_TERRAIN),
-      loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ, TilePriority.EXPANDED_TERRAIN, true),
-    ]);
-
-    // Merge features - lower zoom water first for ocean coverage
-    const allBaseFeatures = [...lowerZoomWater, ...baseFeatures];
-
-    // Render to texture (use EXPANDED_TERRAIN.TEXTURE_SIZE for potentially lower resolution)
-    texture = renderTileTexture(
-      allBaseFeatures,
-      transportFeatures,
-      bounds,
-      EXPANDED_TERRAIN.TEXTURE_SIZE
+    // Full pipeline: fetch, parse, render all in worker (same as core tiles)
+    const fullPipelinePool = getFullPipelineWorkerPool();
+    const bitmap = await fullPipelinePool.renderTile(
+      tileX,
+      tileY,
+      tileZ,
+      EXPANDED_TERRAIN.TEXTURE_SIZE,
+      OVERTURE_BASE_PMTILES,
+      OVERTURE_TRANSPORTATION_PMTILES,
+      false, // includeNeighbors - not needed for expanded tiles
+      true   // includeTransportation
     );
 
-    cache.set(key, texture, bounds);
+    // Create texture from ImageBitmap
+    const workerTexture = new THREE.Texture(bitmap);
+    workerTexture.flipY = false;
+    workerTexture.minFilter = THREE.LinearMipmapLinearFilter;
+    workerTexture.magFilter = THREE.LinearFilter;
+    workerTexture.generateMipmaps = true;
+    workerTexture.colorSpace = THREE.SRGBColorSpace;
+    workerTexture.needsUpdate = true;
+
+    texture = workerTexture as unknown as THREE.CanvasTexture;
+
+    if (useCache) {
+      cache.set(key, texture, bounds);
+    }
   }
 
   // Create terrain-following quad (use same segments as core tiles for consistency)
@@ -197,7 +205,25 @@ async function createExpandedGroundForTileInner(
 
   // Apply terrain elevation
   if (ELEVATION.TERRAIN_ENABLED) {
-    quad.updateElevation(getTerrainHeight, ELEVATION.VERTICAL_EXAGGERATION);
+    if (ELEVATION.GPU_DISPLACEMENT) {
+      // GPU path: use vertex shader displacement
+      const centerLng = (bounds.west + bounds.east) / 2;
+      const centerLat = (bounds.north + bounds.south) / 2;
+      const [elevTileX, elevTileY] = lngLatToTile(centerLng, centerLat, ELEVATION.ZOOM);
+
+      const elevationData = await getElevationDataForTile(elevTileX, elevTileY);
+      if (elevationData) {
+        quad.applyGPUDisplacement(
+          elevationData.heights,
+          ELEVATION.TILE_SIZE,
+          elevationData.bounds,
+          ELEVATION.VERTICAL_EXAGGERATION
+        );
+      }
+    } else {
+      // CPU path: iterate over vertices
+      quad.updateElevation(getTerrainHeight, ELEVATION.VERTICAL_EXAGGERATION);
+    }
   }
 
   // Apply ground texture

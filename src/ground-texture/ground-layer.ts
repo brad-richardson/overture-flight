@@ -1,21 +1,19 @@
 import * as THREE from 'three';
 import type { GroundTileData } from './types.js';
 import { TileTextureCache, initTextureCache } from './tile-texture-cache.js';
-import { renderTileTexture } from './tile-texture-renderer.js';
 import { TerrainQuad } from './terrain-quad.js';
-import { loadBaseTile, loadTransportationTile, loadWaterPolygonsFromLowerZooms, tileToBounds } from '../tile-manager.js';
-import { getTerrainHeight } from '../elevation.js';
+import { loadBaseTile, loadTransportationTile, tileToBounds } from '../tile-manager.js';
+import { getTerrainHeight, getElevationDataForTile } from '../elevation.js';
+import { lngLatToTile } from '../tile-manager.js';
 import { getScene } from '../scene.js';
-import { GROUND_TEXTURE, ELEVATION, WORKERS, PROCESS_CHAINING, PROFILING, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
+import { GROUND_TEXTURE, ELEVATION, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
 import { storeFeatures, removeStoredFeatures } from '../feature-picker.js';
 import type { StoredFeature } from '../feature-picker.js';
-import { getWorkerPool, getFullPipelineWorkerPool } from '../workers/index.js';
+import { getFullPipelineWorkerPool } from '../workers/index.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
 import * as profiler from '../profiling/tile-profiler.js';
 import {
   getCachedTexture,
-  cacheTexture,
-  canvasToBlob,
   blobToImageBitmap,
   isTextureCacheEnabled,
 } from '../cache/indexed-db-texture-cache.js';
@@ -29,26 +27,6 @@ const loadingTiles = new Set<string>();
 
 // Texture cache (initialized lazily)
 let textureCache: TileTextureCache | null = null;
-
-/**
- * Persist texture to IndexedDB (non-blocking)
- * Errors are logged but don't block rendering
- */
-function persistTextureToIndexedDB(
-  tileKey: string,
-  canvas: HTMLCanvasElement,
-  bounds: { west: number; east: number; north: number; south: number }
-): void {
-  // Run async in background - don't await
-  (async () => {
-    try {
-      const blob = await canvasToBlob(canvas);
-      await cacheTexture(tileKey, blob, bounds);
-    } catch (error) {
-      console.warn('[TextureCache] Failed to persist texture:', error);
-    }
-  })();
-}
 
 /**
  * Get or initialize the texture cache
@@ -120,12 +98,12 @@ async function createGroundForTileInner(
   // Start profiling this tile
   profiler.startTile(key);
 
-  const scene = getScene();
-  if (!scene) {
-    loadingTiles.delete(key);
-    profiler.endTile(key);
-    return null;
-  }
+  try {
+    const scene = getScene();
+    if (!scene) {
+      loadingTiles.delete(key);
+      return null;
+    }
 
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const cache = getCache();
@@ -141,6 +119,7 @@ async function createGroundForTileInner(
         // Reconstruct Three.js texture from cached blob
         const bitmap = await blobToImageBitmap(persistedTexture.blob);
         const restoredTexture = new THREE.Texture(bitmap);
+        restoredTexture.flipY = false;
         restoredTexture.minFilter = THREE.LinearMipmapLinearFilter;
         restoredTexture.magFilter = THREE.LinearFilter;
         restoredTexture.generateMipmaps = true;
@@ -191,178 +170,36 @@ async function createGroundForTileInner(
   storeFeatures(key, storedFeatures);
 
   if (!texture) {
-    // Try full pipeline worker first (fetch+parse+render all in worker)
-    // This avoids structured clone overhead for feature arrays
-    let useFullPipeline = WORKERS.FULL_PIPELINE_ENABLED;
+    // Full pipeline: fetches, parses, renders all in worker (avoids structured clone overhead)
+    profiler.startPhase(key, 'fullPipeline');
+    const fullPipelinePool = getFullPipelineWorkerPool();
+    const bitmap = await fullPipelinePool.renderTile(
+      tileX,
+      tileY,
+      tileZ,
+      GROUND_TEXTURE.TEXTURE_SIZE,
+      OVERTURE_BASE_PMTILES,
+      OVERTURE_TRANSPORTATION_PMTILES,
+      !GROUND_TEXTURE.SKIP_NEIGHBOR_TILES, // includeNeighbors
+      true // includeTransportation
+    );
 
-    if (useFullPipeline) {
-      try {
-        profiler.startPhase(key, 'canvasRender');
-        const fullPipelinePool = getFullPipelineWorkerPool();
-        const isSupported = await fullPipelinePool.isWorkerSupported();
+    // Create texture from ImageBitmap
+    const workerTexture = new THREE.Texture(bitmap);
+    workerTexture.flipY = false;
+    workerTexture.minFilter = THREE.LinearMipmapLinearFilter;
+    workerTexture.magFilter = THREE.LinearFilter;
+    workerTexture.generateMipmaps = true;
+    workerTexture.colorSpace = THREE.SRGBColorSpace;
+    workerTexture.needsUpdate = true;
 
-        if (isSupported) {
-          // Full pipeline: worker fetches, parses, and renders
-          const bitmap = await fullPipelinePool.renderTile(
-            tileX,
-            tileY,
-            tileZ,
-            GROUND_TEXTURE.TEXTURE_SIZE,
-            OVERTURE_BASE_PMTILES,
-            OVERTURE_TRANSPORTATION_PMTILES,
-            true, // includeNeighbors
-            true  // includeTransportation
-          );
+    texture = workerTexture as unknown as THREE.CanvasTexture;
+    profiler.endPhase(key, 'fullPipeline');
 
-          // Create texture from ImageBitmap
-          const workerTexture = new THREE.Texture(bitmap);
-          workerTexture.minFilter = THREE.LinearMipmapLinearFilter;
-          workerTexture.magFilter = THREE.LinearFilter;
-          workerTexture.generateMipmaps = true;
-          workerTexture.colorSpace = THREE.SRGBColorSpace;
-          workerTexture.needsUpdate = true;
-
-          texture = workerTexture as unknown as THREE.CanvasTexture;
-          profiler.endPhase(key, 'canvasRender');
-
-          // Cache the texture
-          cache.set(key, texture, bounds);
-        } else {
-          useFullPipeline = false;
-          profiler.endPhase(key, 'canvasRender');
-        }
-      } catch (error) {
-        console.warn('Full pipeline worker failed, falling back to standard path:', error);
-        useFullPipeline = false;
-        profiler.endPhase(key, 'canvasRender');
-      }
-    }
-
-    // Standard path: load features on main thread, optionally render in worker
-    if (!useFullPipeline || !texture) {
-      // Load features from surrounding tiles (3x3 grid) for texture rendering
-      profiler.startPhase(key, 'neighborFetch');
-      const neighborOffsets: [number, number][] = [];
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          // Skip center tile - already loaded above
-          if (dx === 0 && dy === 0) continue;
-          neighborOffsets.push([dx, dy]);
-        }
-      }
-
-      // Also load from a lower zoom level (z12) for larger land_cover polygons
-      // This helps fill gaps where detailed tiles don't have land_cover data
-      const lowerZoom = Math.max(10, tileZ - 2);
-      const scale = Math.pow(2, tileZ - lowerZoom);
-      const lowerX = Math.floor(tileX / scale);
-      const lowerY = Math.floor(tileY / scale);
-
-      const loadPromises = neighborOffsets.map(([dx, dy]) =>
-        Promise.all([
-          loadBaseTile(tileX + dx, tileY + dy, tileZ),
-          loadTransportationTile(tileX + dx, tileY + dy, tileZ),
-        ])
-      );
-
-      // Load lower zoom base features for background land_cover
-      const lowerZoomPromise = loadBaseTile(lowerX, lowerY, lowerZoom);
-
-      // Load water polygons from lower zoom levels
-      // In fast mode (DEFER_LOW_ZOOM_WATER=true), only load z10 in the critical path
-      // z8/z6 are skipped to reduce initial network requests
-      const fastWaterMode = PROCESS_CHAINING.DEFER_LOW_ZOOM_WATER;
-      const lowerZoomWaterPromise = loadWaterPolygonsFromLowerZooms(
-        tileX, tileY, tileZ, TilePriority.Z14_GROUND, fastWaterMode
-      );
-
-      const [neighborResults, lowerZoomFeatures, lowerZoomWater] = await Promise.all([
-        Promise.all(loadPromises),
-        lowerZoomPromise,
-        lowerZoomWaterPromise,
-      ]);
-      profiler.endPhase(key, 'neighborFetch');
-
-      // Background load z8/z6 water if deferred (non-blocking, just warms the cache)
-      // NOTE: We intentionally don't re-render to avoid texture swap flicker
-      // The cached data will be used on subsequent tile loads or page revisits
-      // Use BUILDINGS priority (lowest) to avoid competing with critical Z14 tiles
-      if (fastWaterMode) {
-        loadWaterPolygonsFromLowerZooms(tileX, tileY, tileZ, TilePriority.BUILDINGS, false)
-          .catch((error) => {
-            // Log in dev/profiling mode for debugging
-            if (PROFILING.ENABLED || import.meta.env.DEV) {
-              console.warn(`[GroundLayer] Background z8/z6 water load failed for ${tileX}/${tileY}:`, error);
-            }
-          });
-      }
-
-      // Merge all features - lower zoom features go first (background)
-      // Lower zoom water goes first so it provides ocean coverage behind everything
-      const baseFeatures = [
-        ...lowerZoomWater,
-        ...lowerZoomFeatures,
-        ...currentTileBase,
-        ...neighborResults.flatMap(([base]) => base),
-      ];
-      const transportFeatures = [
-        ...currentTileTransport,
-        ...neighborResults.flatMap(([, transport]) => transport),
-      ];
-
-      // Record feature counts for profiling
-      profiler.recordFeatureCounts(key, baseFeatures.length, transportFeatures.length);
-
-      // Render to texture (canvas will clip features outside bounds)
-      // Use worker pool if enabled and supported, otherwise fall back to main thread
-      profiler.startPhase(key, 'canvasRender');
-      let useWorker = WORKERS.ENABLED;
-      if (useWorker) {
-        try {
-          const pool = getWorkerPool();
-          const isSupported = await pool.isWorkerSupported();
-          if (isSupported) {
-            // Render in worker, returns ImageBitmap
-            const bitmap = await pool.renderTileTexture(
-              baseFeatures,
-              transportFeatures,
-              bounds,
-              GROUND_TEXTURE.TEXTURE_SIZE
-            );
-
-            // Create texture from ImageBitmap
-            const workerTexture = new THREE.Texture(bitmap);
-            workerTexture.minFilter = THREE.LinearMipmapLinearFilter;
-            workerTexture.magFilter = THREE.LinearFilter;
-            workerTexture.generateMipmaps = true;
-            workerTexture.colorSpace = THREE.SRGBColorSpace;
-            workerTexture.needsUpdate = true;
-
-            // Cast to CanvasTexture for cache compatibility (works at runtime)
-            // Note: Don't close the bitmap - let Three.js/GC handle memory
-            texture = workerTexture as unknown as THREE.CanvasTexture;
-          } else {
-            useWorker = false;
-          }
-        } catch (error) {
-          console.warn('Worker rendering failed, falling back to main thread:', error);
-          useWorker = false;
-        }
-      }
-
-      // Fallback to main thread rendering
-      if (!useWorker || !texture) {
-        texture = renderTileTexture(baseFeatures, transportFeatures, bounds);
-
-        // Persist to IndexedDB (non-blocking)
-        // Only for main thread rendering since we have access to the canvas
-        if (isTextureCacheEnabled() && texture.image instanceof HTMLCanvasElement) {
-          persistTextureToIndexedDB(key, texture.image, bounds);
-        }
-      }
-      profiler.endPhase(key, 'canvasRender');
-
+    if (texture) {
       cache.set(key, texture, bounds);
+    } else {
+      console.error(`Failed to create texture for tile ${key}: worker returned null`);
     }
   }
 
@@ -372,11 +209,37 @@ async function createGroundForTileInner(
   // Apply terrain elevation
   if (ELEVATION.TERRAIN_ENABLED) {
     profiler.startPhase(key, 'terrainElevation');
-    quad.updateElevation(getTerrainHeight, ELEVATION.VERTICAL_EXAGGERATION);
+
+    if (ELEVATION.GPU_DISPLACEMENT) {
+      // GPU path: use vertex shader displacement
+      // Find the elevation tile that covers this ground tile
+      const centerLng = (bounds.west + bounds.east) / 2;
+      const centerLat = (bounds.north + bounds.south) / 2;
+      const [elevTileX, elevTileY] = lngLatToTile(centerLng, centerLat, ELEVATION.ZOOM);
+
+      const elevationData = await getElevationDataForTile(elevTileX, elevTileY);
+      if (elevationData) {
+        quad.applyGPUDisplacement(
+          elevationData.heights,
+          ELEVATION.TILE_SIZE,
+          elevationData.bounds, // Pass elevation tile bounds, not ground tile bounds
+          ELEVATION.VERTICAL_EXAGGERATION
+        );
+      }
+    } else {
+      // CPU path: iterate over vertices
+      quad.updateElevation(getTerrainHeight, ELEVATION.VERTICAL_EXAGGERATION);
+    }
+
     profiler.endPhase(key, 'terrainElevation');
   }
 
   // Apply ground texture
+  if (!texture) {
+    console.error(`Cannot apply texture for tile ${key}: texture is null`);
+    quad.dispose();
+    return null;
+  }
   quad.setTexture(texture);
 
   // Mark texture as in-use so it won't be evicted while bound to this tile
@@ -415,10 +278,11 @@ async function createGroundForTileInner(
   // Mark loading complete
   loadingTiles.delete(key);
 
-  // End profiling for this tile
-  profiler.endTile(key);
-
   return group;
+  } finally {
+    // Always end profiling, even if an error occurred
+    profiler.endTile(key);
+  }
 }
 
 /**

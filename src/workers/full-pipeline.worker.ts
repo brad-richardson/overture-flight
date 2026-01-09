@@ -6,13 +6,7 @@
  * - No structured clone for feature arrays (they never leave the worker)
  * - Only ImageBitmap transferred back (zero-copy)
  * - PMTiles fetch happens in worker thread (no main thread blocking)
- *
- * Known Limitations (experimental feature, disabled by default):
- * - Does NOT support fallback zoom levels when requested zoom has no data
- * - Does NOT load low-zoom water polygons (z10/z8/z6) for ocean coverage
- * - May have gaps in ocean/land_cover coverage compared to main-thread path
- *
- * TODO: Add loadWaterPolygonsFromLowerZooms equivalent for feature parity
+ * - Loads lower-zoom water (z10) and land_cover (z12) for background coverage
  */
 
 import { PMTiles } from 'pmtiles';
@@ -201,8 +195,74 @@ async function fetchTileData(
   }
 }
 
+// Lower zoom levels to check for water polygons (highest detail first)
+const WATER_POLYGON_ZOOM_LEVELS = [10, 8, 6];
+
+/**
+ * Load water polygons from lower zoom levels for ocean coverage
+ * Loads water from all levels (z10, z8, z6) and merges results with deduplication.
+ * Different zoom levels have different coverage (z10 has rivers, z6 has oceans).
+ */
+async function loadLowerZoomWater(
+  tileX: number,
+  tileY: number,
+  tileZ: number
+): Promise<ParsedFeature[]> {
+  if (!basePMTiles) return [];
+
+  const waterPolygons: ParsedFeature[] = [];
+  const seenAreas = new Set<string>(); // Track polygons to avoid duplicates
+
+  for (const lowerZoom of WATER_POLYGON_ZOOM_LEVELS) {
+    if (lowerZoom >= tileZ) continue; // Only check lower (zoomed out) levels
+
+    // Calculate which lower-zoom tile contains this tile
+    const scale = Math.pow(2, tileZ - lowerZoom);
+    const lowerX = Math.floor(tileX / scale);
+    const lowerY = Math.floor(tileY / scale);
+
+    const data = await fetchTileData(basePMTiles, lowerZoom, lowerX, lowerY);
+    if (!data) continue;
+
+    // Only extract water layer polygons
+    const allFeatures = parseMVT(data, lowerX, lowerY, lowerZoom);
+    const waterFeatures = allFeatures.filter(f =>
+      f.layer === 'water' &&
+      (f.type === 'Polygon' || f.type === 'MultiPolygon')
+    );
+
+    // Dedupe across zoom levels using first coordinate as key
+    for (const feature of waterFeatures) {
+      const coords = feature.coordinates as number[][][] | number[][][][];
+      const firstRing = feature.type === 'Polygon' ? coords[0] : (coords[0] as number[][][])[0];
+      if (!firstRing || firstRing.length < 3) continue;
+
+      const firstCoord = firstRing[0] as number[];
+      const areaKey = `${firstCoord[0].toFixed(4)},${firstCoord[1].toFixed(4)}`;
+
+      if (seenAreas.has(areaKey)) continue;
+      seenAreas.add(areaKey);
+
+      // Mark as coming from lower zoom for debugging
+      feature.properties = {
+        ...feature.properties,
+        _fromLowerZoom: true,
+        _sourceZoom: lowerZoom
+      };
+      waterPolygons.push(feature);
+    }
+
+    // Don't stop early - continue to load all zoom levels
+    // Different zoom levels may have different water coverage
+    // (e.g., z10 has rivers, z6 has oceans)
+  }
+
+  return waterPolygons;
+}
+
 /**
  * Load base features for a tile (and optionally neighbors)
+ * Also loads lower-zoom water and land_cover for background coverage
  */
 async function loadBaseFeatures(
   tileX: number,
@@ -212,18 +272,34 @@ async function loadBaseFeatures(
 ): Promise<ParsedFeature[]> {
   if (!basePMTiles) return [];
 
-  const features: ParsedFeature[] = [];
+  // Start all fetches in parallel
+  const promises: Promise<ParsedFeature[]>[] = [];
 
-  // Load center tile
-  const centerData = await fetchTileData(basePMTiles, tileZ, tileX, tileY);
-  if (centerData) {
-    features.push(...parseMVT(centerData, tileX, tileY, tileZ));
-  }
+  // 1. Load lower-zoom water for ocean coverage (loads z10, z8, z6 and merges results)
+  promises.push(loadLowerZoomWater(tileX, tileY, tileZ));
 
-  // Load neighbor tiles if requested
+  // 2. Load lower-zoom base features for land_cover background (z12)
+  const lowerZoom = Math.max(10, tileZ - 2);
+  const scale = Math.pow(2, tileZ - lowerZoom);
+  const lowerX = Math.floor(tileX / scale);
+  const lowerY = Math.floor(tileY / scale);
+  promises.push(
+    fetchTileData(basePMTiles, lowerZoom, lowerX, lowerY).then(data => {
+      if (!data) return [];
+      return parseMVT(data, lowerX, lowerY, lowerZoom);
+    })
+  );
+
+  // 3. Load center tile
+  promises.push(
+    fetchTileData(basePMTiles, tileZ, tileX, tileY).then(data => {
+      if (!data) return [];
+      return parseMVT(data, tileX, tileY, tileZ);
+    })
+  );
+
+  // 4. Load neighbor tiles if requested
   if (includeNeighbors) {
-    const neighborPromises: Promise<ParsedFeature[]>[] = [];
-
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
         if (dx === 0 && dy === 0) continue; // Skip center
@@ -231,7 +307,7 @@ async function loadBaseFeatures(
         const nx = tileX + dx;
         const ny = tileY + dy;
 
-        neighborPromises.push(
+        promises.push(
           fetchTileData(basePMTiles!, tileZ, nx, ny).then(data => {
             if (!data) return [];
             return parseMVT(data, nx, ny, tileZ);
@@ -239,11 +315,15 @@ async function loadBaseFeatures(
         );
       }
     }
+  }
 
-    const neighborResults = await Promise.all(neighborPromises);
-    for (const neighborFeatures of neighborResults) {
-      features.push(...neighborFeatures);
-    }
+  // Wait for all fetches and merge in order (lower zoom first for background)
+  const results = await Promise.all(promises);
+
+  // Merge: lower zoom water -> lower zoom base -> center tile -> neighbors
+  const features: ParsedFeature[] = [];
+  for (const result of results) {
+    features.push(...result);
   }
 
   return features;

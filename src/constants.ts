@@ -180,6 +180,7 @@ export interface GroundTextureConfig {
   CACHE_DISPOSE_THRESHOLD: number; // Start evicting when cache reaches this size
   TERRAIN_QUAD_SEGMENTS: number;  // Subdivisions for terrain-following quads
   ENABLED: boolean;               // Enable/disable texture-based ground rendering
+  SKIP_NEIGHBOR_TILES: boolean;   // Skip fetching 8 neighbor tiles (saves network requests, MVT tiles have built-in buffer)
 }
 
 export const GROUND_TEXTURE: GroundTextureConfig = {
@@ -188,6 +189,7 @@ export const GROUND_TEXTURE: GroundTextureConfig = {
   CACHE_DISPOSE_THRESHOLD: IS_MOBILE ? 20 : 80,       // Earlier eviction on mobile
   TERRAIN_QUAD_SEGMENTS: IS_MOBILE ? 8 : 16,          // Simpler terrain mesh on mobile
   ENABLED: true,
+  SKIP_NEIGHBOR_TILES: true,                          // Skip neighbor tile fetching (8 fewer requests per tile)
 };
 
 // Low-detail terrain settings (Z10 background layer)
