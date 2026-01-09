@@ -1,4 +1,4 @@
-import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin, updateSkySystem } from './scene.js';
+import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin, updateSkySystem, getRenderer } from './scene.js';
 import {
   initControls,
   updatePlane,
@@ -161,6 +161,27 @@ let currentFps = 60; // Start optimistic, will converge quickly
 const EXPANDED_TERRAIN_MIN_FPS = 30;  // Don't load expanded terrain below this
 const CRITICAL_FPS_THRESHOLD = 15;    // Throttle core tile loading below this
 
+// Dynamic resolution scaling thresholds
+const RESOLUTION_REDUCE_FPS = 25;     // Reduce pixel ratio below this FPS
+const RESOLUTION_RESTORE_FPS = 40;    // Restore pixel ratio above this FPS
+const REDUCED_PIXEL_RATIO = 1.0;      // Target when reducing (1.0 = native resolution)
+let basePixelRatio = Math.min(window.devicePixelRatio, 1.5);
+let currentPixelRatio = basePixelRatio;
+let resolutionScalingActive = false;
+
+// Update base pixel ratio when device pixel ratio changes (monitor switch, zoom)
+window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', () => {
+  basePixelRatio = Math.min(window.devicePixelRatio, 1.5);
+  // If not in reduced mode, update current ratio to match new base
+  if (!resolutionScalingActive) {
+    currentPixelRatio = basePixelRatio;
+    const renderer = getRenderer();
+    if (renderer) {
+      renderer.setPixelRatio(currentPixelRatio);
+    }
+  }
+});
+
 function initFpsCounter(): void {
   if (!import.meta.env.DEV) return;
 
@@ -194,10 +215,38 @@ function updateFpsTracking(time: number): void {
   if (elapsed >= 1000) {
     currentFps = Math.round((frameCount * 1000) / elapsed);
     if (fpsElement) {
-      fpsElement.textContent = `${currentFps} FPS`;
+      fpsElement.textContent = `${currentFps} FPS${resolutionScalingActive ? ' (reduced res)' : ''}`;
     }
     frameCount = 0;
     fpsLastTime = time;
+
+    // Update dynamic resolution scaling
+    updateDynamicResolution();
+  }
+}
+
+/**
+ * Adjust pixel ratio based on FPS to maintain smooth frame rate
+ */
+function updateDynamicResolution(): void {
+  const renderer = getRenderer();
+  if (!renderer) return;
+
+  // Only reduce if FPS is valid (> 0 prevents reducing before first FPS calculation)
+  const shouldReduce = currentFps < RESOLUTION_REDUCE_FPS && currentFps > 0;
+  // Restore whenever FPS is high enough (no > 0 check needed since high FPS implies valid measurement)
+  const shouldRestore = currentFps >= RESOLUTION_RESTORE_FPS;
+
+  if (shouldReduce && !resolutionScalingActive) {
+    // Reduce resolution to help GPU
+    currentPixelRatio = REDUCED_PIXEL_RATIO;
+    renderer.setPixelRatio(currentPixelRatio);
+    resolutionScalingActive = true;
+  } else if (shouldRestore && resolutionScalingActive) {
+    // Restore resolution when FPS is healthy
+    currentPixelRatio = basePixelRatio;
+    renderer.setPixelRatio(currentPixelRatio);
+    resolutionScalingActive = false;
   }
 }
 
