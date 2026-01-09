@@ -456,13 +456,15 @@ export function renderTileTextureToCanvas(
   for (const feature of waterLineFeatures) {
     // Use subtype to determine line width: rivers are wider than streams
     const subtype = ((feature.properties.subtype || feature.properties.class || '') as string).toLowerCase();
-    let widthMeters = 8; // Default river width
-    if (subtype === 'stream' || subtype === 'drain' || subtype === 'ditch') {
+    let widthMeters: number;
+    if (subtype === 'river') {
+      widthMeters = 20; // Major rivers
+    } else if (subtype === 'stream' || subtype === 'drain' || subtype === 'ditch') {
       widthMeters = 3;
     } else if (subtype === 'canal') {
       widthMeters = 12;
-    } else if (subtype === 'river') {
-      widthMeters = 20; // Major rivers
+    } else {
+      widthMeters = 8; // Default width for unknown or unclassified water lines
     }
     ctx.lineWidth = Math.max(2, widthMeters / metersPerPixel);
     drawLineString(ctx, feature.coordinates as number[][] | number[][][], feature.type, geoToCanvas);
