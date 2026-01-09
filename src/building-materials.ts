@@ -484,7 +484,7 @@ const CLASS_TO_CATEGORY: Record<string, string> = {
  * Simple seeded random number generator for deterministic results
  * Uses mulberry32 algorithm
  */
-function seededRandom(seed: number): () => number {
+export function seededRandom(seed: number): () => number {
   return function(): number {
     let t = seed += 0x6D2B79F5;
     t = Math.imul(t ^ t >>> 15, t | 1);
@@ -497,7 +497,7 @@ function seededRandom(seed: number): () => number {
  * Generate a deterministic seed from feature properties
  * Uses Overture id property, with coordinates as fallback
  */
-function generateSeed(feature: BuildingFeature): number {
+export function generateSeed(feature: BuildingFeature): number {
   const props = feature.properties;
 
   // Use Overture id property if available
@@ -587,7 +587,7 @@ export function hasBuildingParts(feature: BuildingFeature): boolean {
  * @param feature - Building feature with Overture properties
  * @returns Category name for palette selection
  */
-function getBuildingCategory(feature: BuildingFeature): string {
+export function getBuildingCategory(feature: BuildingFeature): string {
   const props = feature.properties;
   if (!props) {
     return 'default';

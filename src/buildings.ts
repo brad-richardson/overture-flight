@@ -10,8 +10,11 @@ import {
   createCategoryMaterial,
   isUndergroundBuilding,
   isBuildingFeature,
+  generateSeed,
   BuildingFeature,
 } from './building-materials.js';
+import { getAtlasUVs, ATLAS_CONFIG, loadBuildingAtlas, getBuildingAtlas } from './building-atlas.js';
+import { createBuildingMaterial, createSimpleBuildingMaterial } from './building-shader.js';
 import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
 import type { StoredFeature } from './feature-picker.js';
 import { getTileSemaphore, TilePriority } from './semaphore.js';
@@ -104,6 +107,132 @@ function simplifyPolygon(points: THREE.Vector2[], tolerance: number): THREE.Vect
   return simplified;
 }
 
+/**
+ * Apply UV mapping to building geometry for texture atlas
+ *
+ * ExtrudeGeometry creates vertices in a specific order:
+ * - First: front face (cap at depth=0)
+ * - Then: back face (cap at depth=height)
+ * - Finally: side walls
+ *
+ * We identify wall faces by checking if their normals are roughly horizontal
+ * (perpendicular to Y axis), then map UVs based on perimeter position and height.
+ *
+ * @param geometry - The extruded building geometry
+ * @param category - Building category for atlas tile selection
+ * @param height - Building height in meters
+ * @param numFloors - Number of floors (for vertical tiling)
+ * @param variant - Seeded variant for atlas tile selection
+ */
+function applyBuildingUVs(
+  geometry: THREE.BufferGeometry,
+  category: string,
+  height: number,
+  numFloors: number,
+  variant: number
+): void {
+  const positions = geometry.getAttribute('position');
+  const normals = geometry.getAttribute('normal');
+  const count = positions.count;
+
+  // Get atlas tile UVs for this category
+  const atlasUVs = getAtlasUVs(category, variant);
+  const tileWidth = atlasUVs.u1 - atlasUVs.u0;
+  const tileHeight = atlasUVs.v1 - atlasUVs.v0;
+
+  // Create UV array
+  const uvs = new Float32Array(count * 2);
+
+  // Calculate how many times the texture tiles vertically based on floors
+  const tilesY = Math.max(1, numFloors / ATLAS_CONFIG.floorsPerTile);
+
+  // Track min/max for horizontal extent (for U mapping)
+  let minX = Infinity, maxX = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+
+  // First pass: find bounds for wall vertices
+  for (let i = 0; i < count; i++) {
+    const ny = normals.getY(i);
+
+    // Wall faces have horizontal normals (ny close to 0)
+    const isWall = Math.abs(ny) < 0.5;
+    if (isWall) {
+      const x = positions.getX(i);
+      const z = positions.getZ(i);
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    }
+  }
+
+  // Approximate perimeter from bounds (simple rectangular approximation)
+  const extentX = maxX - minX || 1;
+  const extentZ = maxZ - minZ || 1;
+  const approximatePerimeter = 2 * (extentX + extentZ);
+
+  // How many times the texture tiles horizontally based on perimeter
+  const metersPerTileX = 10; // Each atlas tile represents ~10m of facade
+  const tilesX = Math.max(1, approximatePerimeter / metersPerTileX);
+
+  // Second pass: assign UVs
+  for (let i = 0; i < count; i++) {
+    const nx = normals.getX(i);
+    const ny = normals.getY(i);
+    const nz = normals.getZ(i);
+
+    // Wall faces have horizontal normals (ny close to 0)
+    const isWall = Math.abs(ny) < 0.5;
+
+    if (isWall) {
+      const x = positions.getX(i);
+      const y = positions.getY(i);
+      const z = positions.getZ(i);
+
+      // Calculate U based on position around the perimeter
+      // Use a simple approach: map x and z to a "perimeter distance"
+      // This creates some seams but is fast
+      const normalizedX = (x - minX) / extentX;
+      const normalizedZ = (z - minZ) / extentZ;
+
+      // Compute perimeter position based on which face we're on
+      // Use normal direction to determine which wall we're on
+      let perimeterPos: number;
+      if (Math.abs(nx) > Math.abs(nz)) {
+        // X-facing wall
+        perimeterPos = nx > 0
+          ? normalizedZ // East wall: use Z
+          : 1 - normalizedZ; // West wall: reverse Z
+      } else {
+        // Z-facing wall
+        perimeterPos = nz > 0
+          ? normalizedX // North wall: use X
+          : 1 - normalizedX; // South wall: reverse X
+      }
+
+      // Calculate V based on height (0 at bottom, tilesY at top)
+      // Note: y might be offset due to terrain, so we use relative position
+      const normalizedY = Math.max(0, Math.min(1, y / (height || 1)));
+
+      // Map to atlas tile with tiling
+      // U tiles horizontally, V tiles vertically within the tile region
+      const u = atlasUVs.u0 + (perimeterPos * tilesX % 1) * tileWidth;
+      const v = atlasUVs.v0 + (normalizedY * tilesY % 1) * tileHeight;
+
+      uvs[i * 2] = u;
+      uvs[i * 2 + 1] = v;
+    } else {
+      // Roof/floor faces: use center of tile (or could use separate roof texture)
+      const u = (atlasUVs.u0 + atlasUVs.u1) / 2;
+      const v = (atlasUVs.v0 + atlasUVs.v1) / 2;
+      uvs[i * 2] = u;
+      uvs[i * 2 + 1] = v;
+    }
+  }
+
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+}
+
 // Material cache by category for performance
 const materialCache = new Map<string, THREE.MeshStandardMaterial>();
 
@@ -120,13 +249,11 @@ function getCategoryMaterial(category: string): THREE.MeshStandardMaterial {
   return materialCache.get(category)!;
 }
 
-/**
- * Material that uses vertex colors for individual building variation
- */
-const vertexColorMaterial = new THREE.MeshStandardMaterial({
-  vertexColors: true,
-  roughness: 0.75,
-  metalness: 0.1,
+// Start loading the building atlas in the background
+// This ensures it's ready when we need to create building materials
+loadBuildingAtlas().catch(() => {
+  // Fallback atlas will be created automatically if loading fails
+  console.log('Using fallback building atlas');
 });
 
 /**
@@ -295,7 +422,8 @@ async function createBuildingsForTileInner(
               geometry.setAttribute('color', new THREE.BufferAttribute(result.geometry.colors, 3));
               geometry.setIndex(new THREE.Uint32BufferAttribute(result.geometry.indices, 1));
 
-              const mesh = new THREE.Mesh(geometry, vertexColorMaterial.clone());
+              // Worker geometry uses vertex colors, not atlas textures
+              const mesh = new THREE.Mesh(geometry, createSimpleBuildingMaterial());
               mesh.castShadow = true;
               mesh.receiveShadow = true;
               mesh.name = 'buildings-worker';
@@ -341,13 +469,23 @@ async function createBuildingsForTileInner(
       // Get building-specific color based on Overture subtype/class
       const buildingColor = getBuildingColor(feature);
 
+      // Get number of floors (for UV tiling)
+      const numFloors = feature.properties?.num_floors || Math.round(height / 3);
+
+      // Generate deterministic variant for atlas tile selection
+      const seed = generateSeed(feature);
+      const variant = seed % 4; // 4 variants per category
+
       try {
         if (feature.type === 'Polygon') {
           const geom = createBuildingGeometry(
             feature.coordinates as number[][][],
             height,
             buildingColor,
-            lodLevel
+            lodLevel,
+            category,
+            variant,
+            numFloors
           );
           if (geom) {
             geometries.push(geom);
@@ -356,7 +494,15 @@ async function createBuildingsForTileInner(
           }
         } else if (feature.type === 'MultiPolygon') {
           for (const polygon of feature.coordinates as number[][][][]) {
-            const geom = createBuildingGeometry(polygon, height, buildingColor, lodLevel);
+            const geom = createBuildingGeometry(
+              polygon,
+              height,
+              buildingColor,
+              lodLevel,
+              category,
+              variant,
+              numFloors
+            );
             if (geom) {
               geometries.push(geom);
             } else if (lodLevel === LODLevel.LOW) {
@@ -378,8 +524,22 @@ async function createBuildingsForTileInner(
     try {
       const mergedGeometry = BufferGeometryUtils.mergeGeometries(geometries, false);
       if (mergedGeometry) {
-        // Use vertex colors for individual building variation
-        const mesh = new THREE.Mesh(mergedGeometry, vertexColorMaterial.clone());
+        // Select material based on LOD and atlas availability
+        let material: THREE.MeshStandardMaterial;
+        const atlas = getBuildingAtlas();
+        if (lodLevel !== LODLevel.LOW && atlas) {
+          // Use textured material with atlas for HIGH/MEDIUM LOD
+          material = createBuildingMaterial({
+            atlasTexture: atlas,
+            enableWindows: lodLevel === LODLevel.HIGH,
+            windowEmission: 0.0,
+          }).clone();
+        } else {
+          // Use simple vertex color material for LOW LOD or if atlas not loaded
+          material = createSimpleBuildingMaterial();
+        }
+
+        const mesh = new THREE.Mesh(mergedGeometry, material);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.name = `buildings-${category}`;
@@ -416,14 +576,17 @@ async function createBuildingsForTileInner(
 }
 
 /**
- * Create extruded geometry for a building polygon with vertex colors and LOD support
+ * Create extruded geometry for a building polygon with vertex colors, UVs, and LOD support
  * Buildings follow terrain elevation using the average height of their footprint
  */
 function createBuildingGeometry(
   coordinates: number[][][],
   height: number,
   color: number = 0x888899,
-  lodLevel: LODLevel = LODLevel.HIGH
+  lodLevel: LODLevel = LODLevel.HIGH,
+  category: string = 'commercial',
+  variant: number = 0,
+  numFloors: number = 3
 ): THREE.BufferGeometry | null {
   if (!coordinates || coordinates.length === 0) return null;
 
@@ -570,6 +733,11 @@ function createBuildingGeometry(
     // This prevents the building from appearing to float on the upper slope side
     if (terrainSlope > 1) {
       geometry.translate(0, -terrainSlope * SLOPE_COMPENSATION_FACTOR, 0);
+    }
+
+    // Apply UV mapping for texture atlas (skip for low LOD)
+    if (lodLevel !== LODLevel.LOW) {
+      applyBuildingUVs(geometry, category, height, numFloors, variant);
     }
 
     // Add vertex colors for individual building variation (skip for low LOD for performance)
