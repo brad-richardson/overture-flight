@@ -24,10 +24,9 @@ import type {
 } from './types.js';
 import { getBuildingColor as getColor } from '../building-colors.js';
 
-// LOD levels (must match buildings.ts)
-// LOD_HIGH = 0 (not used here, but defined in buildings.ts)
-const LOD_MEDIUM = 1;
+// LOD level (must match buildings.ts) - used for skipping small buildings and holes at far distances
 const LOD_LOW = 2;
+
 const BUILDING_TERRAIN_OFFSET = 0.5;
 const SLOPE_COMPENSATION_FACTOR = 0.3;
 const MIN_BUILDING_AREA_FAR = 50; // m^2
@@ -57,43 +56,6 @@ function calculatePolygonArea(points: { x: number; z: number }[]): number {
     area += (points[j].x + points[i].x) * (points[j].z - points[i].z);
   }
   return area / 2;
-}
-
-/**
- * Simplify polygon by removing vertices closer than tolerance
- */
-function simplifyPolygon(
-  points: { x: number; z: number }[],
-  tolerance: number
-): { x: number; z: number }[] {
-  if (points.length <= 4) return points;
-
-  const simplified: { x: number; z: number }[] = [points[0]];
-  let prevPoint = points[0];
-
-  for (let i = 1; i < points.length - 1; i++) {
-    const point = points[i];
-    const dx = point.x - prevPoint.x;
-    const dz = point.z - prevPoint.z;
-    const distance = Math.sqrt(dx * dx + dz * dz);
-
-    if (distance >= tolerance) {
-      simplified.push(point);
-      prevPoint = point;
-    }
-  }
-
-  // Always include last point
-  if (points.length > 1) {
-    simplified.push(points[points.length - 1]);
-  }
-
-  // Ensure minimum 3 points
-  if (simplified.length < 3) {
-    return points.length >= 3 ? points.slice(0, 3) : points.slice();
-  }
-
-  return simplified;
 }
 
 /**
@@ -154,11 +116,12 @@ function generateBuildingGeometry(
   if (!outerRing || outerRing.length < 3) return null;
 
   // Convert to world coordinates
-  // Use -world.z to match main thread coordinate convention (buildings.ts uses -world.z)
+  // Main thread uses Vector2(world.x, -world.z) then rotateX(-PI/2) which gives final z = world.z
+  // Worker builds geometry directly in 3D, so we use world.z directly (no rotation step)
   let points: { x: number; z: number }[] = [];
   for (const coord of outerRing) {
     const world = geoToWorld(coord[0], coord[1], 0, origin);
-    points.push({ x: world.x, z: -world.z });
+    points.push({ x: world.x, z: world.z });
   }
 
   // Remove duplicate last point if present
@@ -181,20 +144,20 @@ function generateBuildingGeometry(
     return null;
   }
 
-  // Apply simplification based on LOD
-  if (lodLevel === LOD_MEDIUM) {
-    points = simplifyPolygon(points, 2);
-  } else if (lodLevel === LOD_LOW) {
-    points = simplifyPolygon(points, 5);
-  }
+  // Simplification disabled - caused visual artifacts (jagged edges)
+  // Modern GPUs handle the extra vertices fine
 
   if (points.length < 3) return null;
 
-  // Recalculate area after simplification
+  // Recalculate area
   const finalArea = calculatePolygonArea(points);
   if (Math.abs(finalArea) < 1) return null;
 
-  // Ensure counter-clockwise winding (for correct normals)
+  // Ensure counter-clockwise winding (for correct normals when viewed from +Y)
+  // Worker uses z = world.z directly, while main thread uses y = -world.z
+  // This inverts the sign of the shoelace formula, so:
+  // - Main thread: area < 0 means CW, reverse to get CCW
+  // - Worker: area > 0 means CW (opposite sign), reverse to get CCW
   if (finalArea > 0) {
     points.reverse();
   }
@@ -221,11 +184,11 @@ function generateBuildingGeometry(
 
       holes.push(flatCoords.length / 2); // Start index of hole
 
-      // Use -world.z to match main thread coordinate convention
+      // Use world.z directly (same as outer ring - no rotation in worker)
       let holePoints: { x: number; z: number }[] = [];
       for (const coord of holeRing) {
         const world = geoToWorld(coord[0], coord[1], 0, origin);
-        holePoints.push({ x: world.x, z: -world.z });
+        holePoints.push({ x: world.x, z: world.z });
       }
 
       // Remove duplicate last point
@@ -237,12 +200,9 @@ function generateBuildingGeometry(
         }
       }
 
-      // Simplify holes for medium LOD
-      if (lodLevel === LOD_MEDIUM && holePoints.length > 4) {
-        holePoints = simplifyPolygon(holePoints, 2);
-      }
-
-      // Holes should be clockwise (opposite winding)
+      // Holes should be clockwise (opposite winding from outer ring which is CCW)
+      // Same sign inversion as outer ring: worker uses z directly, main thread uses -z
+      // So worker reverses when area < 0 (opposite of main thread's > 0 check)
       const holeArea = calculatePolygonArea(holePoints);
       if (holeArea < 0) {
         holePoints.reverse();
@@ -289,8 +249,13 @@ function generateBuildingGeometry(
     normals.push(0, 1, 0); // Up
     colors.push(r, g, b);
   }
-  for (const idx of roofIndices) {
-    indices.push(roofStartIndex + idx);
+  // Reverse triangle winding for correct face culling when viewed from above
+  // Earcut produces CCW triangles in 2D (x,z), but Three.js needs them reversed
+  // for front-face visibility when looking down from +Y
+  for (let i = 0; i < roofIndices.length; i += 3) {
+    indices.push(roofStartIndex + roofIndices[i]);
+    indices.push(roofStartIndex + roofIndices[i + 2]);
+    indices.push(roofStartIndex + roofIndices[i + 1]);
   }
 
   // === BOTTOM (base face, if minHeight > 0 for floating buildings) ===
@@ -322,9 +287,11 @@ function generateBuildingGeometry(
     const len = Math.sqrt(dx * dx + dz * dz);
     if (len < 0.01) continue; // Skip degenerate segments
 
-    // Normal pointing outward (right-hand rule)
-    const nx = -dz / len;
-    const nz = dx / len;
+    // Normal pointing outward: perpendicular to travel direction, 90° clockwise
+    // For CCW polygon (when viewed from +Y), this points outward
+    // 90° clockwise rotation of (dx, dz) is (dz, -dx)
+    const nx = dz / len;
+    const nz = -dx / len;
 
     const wallStartIndex = positions.length / 3;
 
@@ -367,9 +334,11 @@ function generateBuildingGeometry(
         const len = Math.sqrt(dx * dx + dz * dz);
         if (len < 0.01) continue;
 
-        // Normal pointing inward for holes (opposite direction)
-        const nx = dz / len;
-        const nz = -dx / len;
+        // Normal pointing inward for holes (opposite of outer walls)
+        // Holes are CW when viewed from above, so 90° CCW rotation points inward
+        // 90° counter-clockwise rotation of (dx, dz) is (-dz, dx)
+        const nx = -dz / len;
+        const nz = dx / len;
 
         const wallStartIndex = positions.length / 3;
         const wallBaseY = minHeight > 0 ? bottomY : baseY;
@@ -398,7 +367,7 @@ function generateBuildingGeometry(
 
 /**
  * Build geometry for all buildings in a tile
- * Returns merged geometry buffers ready for GPU upload
+ * Returns geometry buffers ready for GPU upload
  */
 export function buildBuildingGeometry(
   payload: CreateBuildingGeometryPayload
@@ -430,23 +399,32 @@ export function buildBuildingGeometry(
       continue;
     }
 
+    // Skip main building footprints that have parts - only render the parts
+    // This prevents z-fighting between main footprint and building_part features
+    if (feature.properties.has_parts === true) {
+      buildingsSkipped++;
+      continue;
+    }
+
+    // Get polygon coordinates
+    const polygons = feature.type === 'Polygon'
+      ? [feature.coordinates as number[][][]]
+      : feature.coordinates as number[][][][];
+
     // Get building properties
     const height = getBuildingHeight(feature.properties, defaultHeight);
     const minHeight = typeof feature.properties.min_height === 'number'
       ? feature.properties.min_height : 0;
     const color = getBuildingColor(feature);
 
-    // Get terrain height for this building
+    // Get terrain height
     const terrainData = terrainHeights?.[i];
     const terrainHeight = terrainData ? terrainData[0] : 0;
     const terrainSlope = terrainData ? (terrainData[1] - terrainData[0]) : 0;
 
-    // Process polygon(s)
-    const polygons = feature.type === 'Polygon'
-      ? [feature.coordinates as number[][][]]
-      : feature.coordinates as number[][][][];
-
     for (const polygon of polygons) {
+      if (!polygon || !polygon[0] || polygon[0].length < 3) continue;
+
       try {
         const geom = generateBuildingGeometry(
           polygon,
@@ -491,6 +469,7 @@ export function buildBuildingGeometry(
       }
     }
   }
+
 
   // Create result
   if (allPositions.length === 0) {

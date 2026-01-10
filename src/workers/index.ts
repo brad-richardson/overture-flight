@@ -1164,11 +1164,10 @@ export function compactFeatureToFeature(cf: CompactFeature): ParsedFeature {
       break;
 
     case 5: // MultiPolygon
-      // For MultiPolygon, we need to reconstruct polygon boundaries
-      // This is tricky because ringIndices doesn't track polygon boundaries
-      // For now, treat each ring as a separate polygon (simplified behavior)
-      // In practice, most MultiPolygons from MVT have simple structure
+      // For MultiPolygon, use polygonIndices to reconstruct polygon boundaries
       coordinates = [];
+      const polygonIndices = cf.polygonIndices;
+
       if (ringIndices.length === 0) {
         // No rings, just one polygon with one ring
         const ring: number[][] = [];
@@ -1176,10 +1175,29 @@ export function compactFeatureToFeature(cf: CompactFeature): ParsedFeature {
           ring.push([coords[i], coords[i + 1]]);
         }
         (coordinates as number[][][][]).push([ring]);
+      } else if (polygonIndices && polygonIndices.length > 0) {
+        // Use polygonIndices to correctly group rings into polygons
+        for (let p = 0; p < polygonIndices.length; p++) {
+          const ringStart = polygonIndices[p];
+          const ringEnd = p < polygonIndices.length - 1 ? polygonIndices[p + 1] : ringIndices.length;
+          const polygon: number[][][] = [];
+
+          for (let r = ringStart; r < ringEnd; r++) {
+            const start = ringIndices[r] * 2;
+            const end = r < ringIndices.length - 1 ? ringIndices[r + 1] * 2 : coords.length;
+            const ring: number[][] = [];
+            for (let i = start; i < end; i += 2) {
+              ring.push([coords[i], coords[i + 1]]);
+            }
+            polygon.push(ring);
+          }
+
+          if (polygon.length > 0) {
+            (coordinates as number[][][][]).push(polygon);
+          }
+        }
       } else {
-        // Heuristic: first ring of each polygon is outer, subsequent are holes
-        // This matches typical MVT tile structure
-        let currentPolygon: number[][][] = [];
+        // Fallback: treat each ring as a separate polygon (legacy behavior)
         for (let r = 0; r < ringIndices.length; r++) {
           const start = ringIndices[r] * 2;
           const end = r < ringIndices.length - 1 ? ringIndices[r + 1] * 2 : coords.length;
@@ -1187,13 +1205,7 @@ export function compactFeatureToFeature(cf: CompactFeature): ParsedFeature {
           for (let i = start; i < end; i += 2) {
             ring.push([coords[i], coords[i + 1]]);
           }
-          // Simple heuristic: each ring is a separate polygon (outer ring only)
-          // This works for most cases; complex multipolygons with holes would need
-          // additional metadata from the worker
           (coordinates as number[][][][]).push([ring]);
-        }
-        if (currentPolygon.length > 0) {
-          (coordinates as number[][][][]).push(currentPolygon);
         }
       }
       break;

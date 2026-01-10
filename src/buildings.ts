@@ -30,9 +30,9 @@ const BUILDING_TERRAIN_OFFSET = 0.5;
 // Prevents floating appearance on hillsides (0.3 = 30% of slope height)
 const SLOPE_COMPENSATION_FACTOR = 0.3;
 
-// LOD (Level of Detail) settings (aggressive performance tuning)
-const LOD_NEAR_DISTANCE = 300; // meters - full detail (reduced from 500)
-const LOD_MEDIUM_DISTANCE = 800; // meters - reduced detail (reduced from 2000)
+// LOD (Level of Detail) settings
+const LOD_NEAR_DISTANCE = 1000; // meters - full detail
+const LOD_MEDIUM_DISTANCE = 5000; // meters - reduced detail
 const MIN_BUILDING_AREA_FAR = 50; // m² - skip small buildings at far distances (lowered to show suburban homes)
 
 // LOD levels
@@ -201,7 +201,7 @@ async function createBuildingsForTileInner(
       type: f.type as 'Polygon' | 'MultiPolygon',
       coordinates: f.coordinates as number[][][] | number[][][][],
       properties: (f.properties || {}) as Record<string, unknown>,
-      layer: 'building',
+      layer: f.layer || 'building',
       tileKey
     }));
   storeFeatures(tileKey, storedFeatures);
@@ -270,6 +270,7 @@ async function createBuildingsForTileInner(
             workerFeatures.push({
               type: f.type as 'Polygon' | 'MultiPolygon',
               coordinates: f.coordinates as number[][][] | number[][][][],
+              layer: f.layer,
               properties: f.properties as BuildingFeatureInput['properties'],
             });
           }

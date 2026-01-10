@@ -133,6 +133,8 @@ export interface CompactFeature {
   coords: Float64Array;
   /** Ring/part start indices (for polygons/multi-geometries) */
   ringIndices: Uint32Array;
+  /** Polygon start indices into ringIndices (for MultiPolygon only) - tracks which rings belong to which polygon */
+  polygonIndices?: Uint32Array;
   /** Simplified properties (only commonly used fields for styling) */
   props: {
     subtype?: string;
@@ -152,6 +154,14 @@ export interface CompactFeature {
     highway?: string;
     is_tunnel?: boolean;
     is_underground?: boolean;
+    // Building properties
+    id?: string;
+    building_id?: string;
+    height?: number;
+    num_floors?: number;
+    min_height?: number;
+    num_floors_underground?: number;
+    has_parts?: boolean;
     [key: string]: unknown;
   };
 }
@@ -194,14 +204,19 @@ export interface BuildingFeatureInput {
   type: 'Polygon' | 'MultiPolygon';
   /** Coordinates in GeoJSON format */
   coordinates: number[][][] | number[][][][];
+  /** Layer name (building or building_part) */
+  layer?: string;
   /** Building properties */
   properties: {
+    id?: string;
+    building_id?: string;
     height?: number;
     num_floors?: number;
     min_height?: number;
     subtype?: string;
     class?: string;
     is_underground?: boolean;
+    has_parts?: boolean;
     [key: string]: unknown;
   };
 }

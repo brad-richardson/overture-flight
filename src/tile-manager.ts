@@ -377,6 +377,7 @@ async function getTileData(
 
 /**
  * Load building features for a tile
+ * Loads both 'building' and 'building_part' layers from the PMTiles
  */
 export async function loadBuildingTile(
   x: number,
@@ -389,7 +390,8 @@ export async function loadBuildingTile(
   const data = await getTileData(buildingsPMTiles, zoom, x, y, TilePriority.BUILDINGS);
   if (!data) return [];
 
-  return parseMVTAsync(data, x, y, zoom, 'building');
+  // Load all layers (building + building_part) from the buildings PMTiles
+  return parseMVTAsync(data, x, y, zoom, null);
 }
 
 /**
