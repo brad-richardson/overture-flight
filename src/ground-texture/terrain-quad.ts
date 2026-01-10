@@ -203,13 +203,23 @@ export class TerrainQuad {
    */
   private expandBoundingSphere(heights: Float32Array, verticalExaggeration: number): void {
     // Find min/max elevation (cannot use Math.max(...heights) - 65k items would overflow call stack)
+    // Skip NaN values which indicate missing elevation data
     let minElevation = Infinity;
     let maxElevation = -Infinity;
     for (let i = 0; i < heights.length; i++) {
       const h = heights[i];
-      if (h < minElevation) minElevation = h;
-      if (h > maxElevation) maxElevation = h;
+      if (!Number.isNaN(h)) {
+        if (h < minElevation) minElevation = h;
+        if (h > maxElevation) maxElevation = h;
+      }
     }
+
+    // If all heights were NaN (no valid elevation data), use 0 as fallback
+    if (minElevation === Infinity || maxElevation === -Infinity) {
+      minElevation = 0;
+      maxElevation = 0;
+    }
+
     minElevation *= verticalExaggeration;
     maxElevation *= verticalExaggeration;
 
