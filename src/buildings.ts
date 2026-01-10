@@ -17,7 +17,7 @@ import type { StoredFeature } from './feature-picker.js';
 import { getTileSemaphore, TilePriority } from './semaphore.js';
 import { clearPendingUpdatesForTile } from './elevation-sync.js';
 import { getBuildingGeometryWorkerPool } from './workers/index.js';
-import type { BuildingFeatureInput } from './workers/index.js';
+import type { BuildingFeatureInput, ElevationConfig } from './workers/index.js';
 
 // Default building height when not specified
 const DEFAULT_BUILDING_HEIGHT = 10;
@@ -229,43 +229,12 @@ async function createBuildingsForTileInner(
       if (isSupported) {
         const origin = getSceneOriginForWorker();
         if (origin) {
-          // Convert features to worker format and collect terrain heights
+          // Convert features to worker format
           const workerFeatures: BuildingFeatureInput[] = [];
-          const terrainHeights: { [index: number]: [number, number] } = {};
 
           for (const f of features) {
             if (!isBuildingFeature(f)) continue;
             if (isUndergroundBuilding(f)) continue;
-
-            const featureIndex = workerFeatures.length;
-
-            // Collect terrain heights for this building if terrain is enabled
-            if (ELEVATION.TERRAIN_ENABLED) {
-              const coords = f.type === 'Polygon'
-                ? [f.coordinates as number[][][]]
-                : f.coordinates as number[][][][];
-
-              let minHeight = Infinity;
-              let maxHeight = -Infinity;
-              let validCount = 0;
-
-              for (const polygon of coords) {
-                const outerRing = polygon[0];
-                if (!outerRing) continue;
-                for (const coord of outerRing) {
-                  const h = getTerrainHeight(coord[0], coord[1]);
-                  if (!Number.isNaN(h)) {
-                    minHeight = Math.min(minHeight, h);
-                    maxHeight = Math.max(maxHeight, h);
-                    validCount++;
-                  }
-                }
-              }
-
-              if (validCount > 0) {
-                terrainHeights[featureIndex] = [minHeight, maxHeight];
-              }
-            }
 
             workerFeatures.push({
               type: f.type as 'Polygon' | 'MultiPolygon',
@@ -276,6 +245,14 @@ async function createBuildingsForTileInner(
           }
 
           if (workerFeatures.length > 0) {
+            // Pass elevation config for worker-side terrain lookups (HTTP cache should hit)
+            const elevationConfig: ElevationConfig | undefined = ELEVATION.TERRAIN_ENABLED ? {
+              urlTemplate: ELEVATION.TERRARIUM_URL,
+              zoom: ELEVATION.ZOOM,
+              tileSize: ELEVATION.TILE_SIZE,
+              terrariumOffset: ELEVATION.TERRARIUM_OFFSET,
+            } : undefined;
+
             const result = await workerPool.createBuildingGeometry(
               workerFeatures,
               origin,
@@ -284,7 +261,7 @@ async function createBuildingsForTileInner(
               tileZ,
               lodLevel,
               DEFAULT_BUILDING_HEIGHT,
-              Object.keys(terrainHeights).length > 0 ? terrainHeights : undefined,
+              elevationConfig,
               ELEVATION.VERTICAL_EXAGGERATION
             );
 

@@ -57,6 +57,14 @@ let lastLocationHash: string | null = null;
 let lastHashUpdateTime = 0;
 const HASH_UPDATE_INTERVAL = 1000; // Only check/update URL every 1 second
 
+// UI update throttling - DOM updates don't need to happen every frame
+let lastHudUpdateTime = 0;
+let lastPlayerListUpdateTime = 0;
+let lastMinimapUpdateTime = 0;
+const HUD_UPDATE_INTERVAL = 100; // 10 Hz - humans can't perceive faster HUD changes
+const PLAYER_LIST_UPDATE_INTERVAL = 100; // 10 Hz - player list doesn't change that fast
+const MINIMAP_UPDATE_INTERVAL = 50; // 20 Hz - minimap needs slightly smoother updates
+
 /**
  * Parse location from URL hash in format #z/lat/lng (compatible with explore site)
  * Returns null if hash is invalid or not present
@@ -528,14 +536,25 @@ function gameLoop(time: number): void {
   if (localId) {
     updatePlaneMesh(planeState, localId, localColor);
     players.set(localId, planeState);
-    updatePlayerList(players, localId);
+
+    // Throttle player list updates (DOM rebuild is expensive)
+    if (time - lastPlayerListUpdateTime >= PLAYER_LIST_UPDATE_INTERVAL) {
+      lastPlayerListUpdateTime = time;
+      updatePlayerList(players, localId);
+    }
   }
 
-  // Update HUD
-  updateHUD(planeState);
+  // Throttle HUD updates (humans can't perceive 60Hz text changes)
+  if (time - lastHudUpdateTime >= HUD_UPDATE_INTERVAL) {
+    lastHudUpdateTime = time;
+    updateHUD(planeState);
+  }
 
-  // Update minimap
-  updateMinimap(planeState);
+  // Throttle minimap updates
+  if (time - lastMinimapUpdateTime >= MINIMAP_UPDATE_INTERVAL) {
+    lastMinimapUpdateTime = time;
+    updateMinimap(planeState);
+  }
 
   // Update URL hash with current tile location
   updateLocationHash(planeState.lng, planeState.lat);

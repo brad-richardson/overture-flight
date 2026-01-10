@@ -17,6 +17,7 @@ import type {
   ParsedFeature,
   LandcoverTreeConfig,
   TileBounds,
+  ElevationConfig,
 } from './types.js';
 
 // ============================================================================
@@ -177,6 +178,211 @@ function tileToBounds(x: number, y: number, z: number): TileBounds {
   const east = ((x + 1) / Math.pow(2, z)) * 360 - 180;
 
   return { north, south, west, east };
+}
+
+// ============================================================================
+// ELEVATION TILE HANDLING
+// ============================================================================
+
+interface CachedElevationTile {
+  heights: Float32Array;
+  bounds: { west: number; east: number; north: number; south: number };
+}
+
+// In-memory cache for elevation tiles within this worker
+const elevationCache = new Map<string, CachedElevationTile>();
+
+/**
+ * Convert lng/lat to tile coordinates
+ */
+function lngLatToTile(lng: number, lat: number, zoom: number): [number, number] {
+  const n = Math.pow(2, zoom);
+  const x = Math.floor(((lng + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+  return [x, y];
+}
+
+/**
+ * Get elevation tile bounds
+ */
+function elevationTileToBounds(x: number, y: number, zoom: number): { west: number; east: number; north: number; south: number } {
+  const n = Math.pow(2, zoom);
+  const west = (x / n) * 360 - 180;
+  const east = ((x + 1) / n) * 360 - 180;
+  const north = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * (180 / Math.PI);
+  const south = Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 1)) / n))) * (180 / Math.PI);
+  return { west, east, north, south };
+}
+
+/**
+ * Decode Terrarium RGB to height
+ */
+function decodeTerrarium(r: number, g: number, b: number, offset: number): number {
+  return (r * 256 + g + b / 256) - offset;
+}
+
+/**
+ * Fetch and decode an elevation tile
+ */
+async function fetchElevationTile(
+  x: number,
+  y: number,
+  config: ElevationConfig
+): Promise<CachedElevationTile | null> {
+  const key = `${config.zoom}/${x}/${y}`;
+
+  // Check cache first
+  const cached = elevationCache.get(key);
+  if (cached) return cached;
+
+  const url = config.urlTemplate
+    .replace('{z}', config.zoom.toString())
+    .replace('{x}', x.toString())
+    .replace('{y}', y.toString());
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+
+    const blob = await response.blob();
+    const bitmap = await createImageBitmap(blob);
+
+    // Draw to offscreen canvas to get pixel data
+    const canvas = new OffscreenCanvas(config.tileSize, config.tileSize);
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(bitmap, 0, 0, config.tileSize, config.tileSize);
+
+    const imageData = ctx.getImageData(0, 0, config.tileSize, config.tileSize);
+    const heights = new Float32Array(config.tileSize * config.tileSize);
+
+    for (let i = 0; i < config.tileSize * config.tileSize; i++) {
+      const r = imageData.data[i * 4];
+      const g = imageData.data[i * 4 + 1];
+      const b = imageData.data[i * 4 + 2];
+      heights[i] = decodeTerrarium(r, g, b, config.terrariumOffset);
+    }
+
+    const bounds = elevationTileToBounds(x, y, config.zoom);
+    const tile: CachedElevationTile = { heights, bounds };
+    elevationCache.set(key, tile);
+
+    return tile;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Bilinear interpolation on height grid
+ */
+function bilinearInterpolate(
+  heights: Float32Array,
+  gridX: number,
+  gridY: number,
+  gridSize: number
+): number {
+  const clampedX = Math.max(0, Math.min(gridSize - 1, gridX));
+  const clampedY = Math.max(0, Math.min(gridSize - 1, gridY));
+
+  const x0 = Math.floor(clampedX);
+  const y0 = Math.floor(clampedY);
+  const x1 = Math.min(x0 + 1, gridSize - 1);
+  const y1 = Math.min(y0 + 1, gridSize - 1);
+
+  const fx = clampedX - x0;
+  const fy = clampedY - y0;
+
+  const h00 = heights[y0 * gridSize + x0];
+  const h10 = heights[y0 * gridSize + x1];
+  const h01 = heights[y1 * gridSize + x0];
+  const h11 = heights[y1 * gridSize + x1];
+
+  // Handle NaN values
+  const corners = [h00, h10, h01, h11];
+  const validCorners = corners.filter(h => !Number.isNaN(h));
+  if (validCorners.length === 0) return 0;
+
+  if (validCorners.length < 4) {
+    const avg = validCorners.reduce((a, b) => a + b, 0) / validCorners.length;
+    const h00Safe = Number.isNaN(h00) ? avg : h00;
+    const h10Safe = Number.isNaN(h10) ? avg : h10;
+    const h01Safe = Number.isNaN(h01) ? avg : h01;
+    const h11Safe = Number.isNaN(h11) ? avg : h11;
+    return h00Safe * (1 - fx) * (1 - fy) + h10Safe * fx * (1 - fy) + h01Safe * (1 - fx) * fy + h11Safe * fx * fy;
+  }
+
+  return h00 * (1 - fx) * (1 - fy) + h10 * fx * (1 - fy) + h01 * (1 - fx) * fy + h11 * fx * fy;
+}
+
+/**
+ * Get terrain height at a coordinate using cached elevation tiles
+ */
+function getTerrainHeightFromCache(
+  lng: number,
+  lat: number,
+  config: ElevationConfig
+): number {
+  const [tileX, tileY] = lngLatToTile(lng, lat, config.zoom);
+  const key = `${config.zoom}/${tileX}/${tileY}`;
+
+  const cached = elevationCache.get(key);
+  if (!cached) return 0;
+
+  const { heights, bounds } = cached;
+
+  // Calculate position within tile
+  const relX = (lng - bounds.west) / (bounds.east - bounds.west);
+  const relY = (bounds.north - lat) / (bounds.north - bounds.south);
+
+  const gridX = relX * (config.tileSize - 1);
+  const gridY = relY * (config.tileSize - 1);
+
+  const height = bilinearInterpolate(heights, gridX, gridY, config.tileSize);
+  return Number.isNaN(height) ? 0 : height;
+}
+
+/**
+ * Prefetch all elevation tiles needed for tree positions
+ */
+async function prefetchElevationTilesForTrees(
+  trees: TreeData[],
+  config: ElevationConfig
+): Promise<void> {
+  const neededTiles = new Set<string>();
+
+  // Collect all unique tile coordinates
+  for (const tree of trees) {
+    const [tileX, tileY] = lngLatToTile(tree.lng, tree.lat, config.zoom);
+    neededTiles.add(`${tileX}/${tileY}`);
+  }
+
+  // Fetch all tiles in parallel
+  const fetchPromises: Promise<CachedElevationTile | null>[] = [];
+  for (const tileKey of neededTiles) {
+    const [x, y] = tileKey.split('/').map(Number);
+    fetchPromises.push(fetchElevationTile(x, y, config));
+  }
+
+  await Promise.all(fetchPromises);
+}
+
+/**
+ * Compute terrain heights for all trees
+ */
+async function computeTerrainHeightsForTrees(
+  trees: TreeData[],
+  config: ElevationConfig,
+  verticalExaggeration: number
+): Promise<void> {
+  // Prefetch elevation tiles
+  await prefetchElevationTilesForTrees(trees, config);
+
+  // Compute heights
+  for (const tree of trees) {
+    const rawHeight = getTerrainHeightFromCache(tree.lng, tree.lat, config);
+    tree.terrainHeight = rawHeight * verticalExaggeration;
+  }
 }
 
 // Lower zoom levels to check for water polygons
@@ -721,6 +927,8 @@ interface ProcessTreesPayloadInternal {
   basePMTilesUrl: string;
   buildingsPMTilesUrl: string;
   transportationPMTilesUrl: string;
+  elevationConfig?: ElevationConfig;
+  verticalExaggeration?: number;
 }
 
 async function processTrees(payload: ProcessTreesPayloadInternal): Promise<ProcessTreesResult> {
@@ -735,6 +943,8 @@ async function processTrees(payload: ProcessTreesPayloadInternal): Promise<Proce
     basePMTilesUrl,
     buildingsPMTilesUrl,
     transportationPMTilesUrl,
+    elevationConfig,
+    verticalExaggeration = 1.0,
   } = payload;
 
   // Initialize PMTiles if needed
@@ -792,6 +1002,11 @@ async function processTrees(payload: ProcessTreesPayloadInternal): Promise<Proce
 
     return true;
   });
+
+  // Compute terrain heights for filtered trees (HTTP cache should hit)
+  if (elevationConfig && allTrees.length > 0) {
+    await computeTerrainHeightsForTrees(allTrees, elevationConfig, verticalExaggeration);
+  }
 
   return {
     trees: allTrees,

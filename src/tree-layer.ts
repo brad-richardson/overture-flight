@@ -10,9 +10,8 @@
 
 import * as THREE from 'three';
 import { getScene, geoToWorld } from './scene.js';
-import { getTerrainHeight, getElevationTileKey, isElevationTileLoaded } from './elevation.js';
 import { ELEVATION, OVERTURE_BASE_PMTILES, OVERTURE_BUILDINGS_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from './constants.js';
-import { registerTreesForElevationUpdate, clearPendingUpdatesForTile } from './elevation-sync.js';
+import { clearPendingUpdatesForTile } from './elevation-sync.js';
 import { getTreeProcessingWorkerPool, type TreeData, type LandcoverTreeConfig } from './workers/index.js';
 
 // Re-export TreeData type for external use
@@ -517,6 +516,14 @@ export async function createTreesForTile(
   }
 
   // Process trees in worker (worker fetches its own data to avoid structured clone overhead)
+  // Elevation config for worker-side terrain lookups
+  const elevationConfig = ELEVATION.TERRAIN_ENABLED ? {
+    urlTemplate: ELEVATION.TERRARIUM_URL,
+    zoom: ELEVATION.ZOOM,
+    tileSize: ELEVATION.TILE_SIZE,
+    terrariumOffset: ELEVATION.TERRARIUM_OFFSET,
+  } : undefined;
+
   const pool = getTreeProcessingWorkerPool();
   const result = await pool.processTrees(
     tileX,
@@ -528,7 +535,9 @@ export async function createTreesForTile(
     MAX_OSM_DENSITY_TREES_PER_TILE,
     OVERTURE_BASE_PMTILES,
     OVERTURE_BUILDINGS_PMTILES,
-    OVERTURE_TRANSPORTATION_PMTILES
+    OVERTURE_TRANSPORTATION_PMTILES,
+    elevationConfig,
+    ELEVATION.VERTICAL_EXAGGERATION
   );
 
   const trees = result.trees;
@@ -547,26 +556,12 @@ export async function createTreesForTile(
   const coniferPositions: { x: number; y: number; z: number }[] = [];
   const deciduousPositions: { x: number; y: number; z: number }[] = [];
 
-  // Track trees that need elevation updates
-  const treesNeedingElevationUpdate: {
-    lng: number;
-    lat: number;
-    meshName: string;
-    instanceIndex: number;
-  }[] = [];
-
   for (const tree of trees) {
     const worldPos = geoToWorld(tree.lng, tree.lat, 0);
 
-    let terrainHeight = 0;
-    let elevationMissing = false;
-    if (ELEVATION.TERRAIN_ENABLED) {
-      const elevationKey = getElevationTileKey(tree.lng, tree.lat);
-      if (!isElevationTileLoaded(elevationKey)) {
-        elevationMissing = true;
-      }
-      terrainHeight = getTerrainHeight(tree.lng, tree.lat) * ELEVATION.VERTICAL_EXAGGERATION;
-    }
+    // Use terrain height from worker (already includes vertical exaggeration)
+    // Fall back to 0 if not computed (when elevation is disabled)
+    const terrainHeight = tree.terrainHeight ?? 0;
 
     const position = {
       x: worldPos.x,
@@ -575,49 +570,17 @@ export async function createTreesForTile(
     };
 
     if (tree.leafType === 'needleleaved') {
-      if (elevationMissing) {
-        treesNeedingElevationUpdate.push({
-          lng: tree.lng,
-          lat: tree.lat,
-          meshName: 'conifers',
-          instanceIndex: conifers.length,
-        });
-      }
       conifers.push(tree);
       coniferPositions.push(position);
     } else if (tree.leafType === 'broadleaved') {
-      if (elevationMissing) {
-        treesNeedingElevationUpdate.push({
-          lng: tree.lng,
-          lat: tree.lat,
-          meshName: 'deciduous',
-          instanceIndex: deciduous.length,
-        });
-      }
       deciduous.push(tree);
       deciduousPositions.push(position);
     } else {
       // Use seeded random for consistent assignment (70% deciduous, 30% conifer)
       if (random() < 0.7) {
-        if (elevationMissing) {
-          treesNeedingElevationUpdate.push({
-            lng: tree.lng,
-            lat: tree.lat,
-            meshName: 'deciduous',
-            instanceIndex: deciduous.length,
-          });
-        }
         deciduous.push(tree);
         deciduousPositions.push(position);
       } else {
-        if (elevationMissing) {
-          treesNeedingElevationUpdate.push({
-            lng: tree.lng,
-            lat: tree.lat,
-            meshName: 'conifers',
-            instanceIndex: conifers.length,
-          });
-        }
         conifers.push(tree);
         coniferPositions.push(position);
       }
@@ -646,11 +609,6 @@ export async function createTreesForTile(
 
   if (group.children.length === 0) {
     return null;
-  }
-
-  // Register trees for elevation updates if needed
-  if (treesNeedingElevationUpdate.length > 0) {
-    registerTreesForElevationUpdate(group.name, group, treesNeedingElevationUpdate);
   }
 
   scene.add(group);

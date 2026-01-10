@@ -33,20 +33,27 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case 'CREATE_BUILDING_GEOMETRY': {
         const payload = request.payload as CreateBuildingGeometryPayload;
 
-        // Build geometry buffers
-        const result = buildBuildingGeometry(payload);
+        // Build geometry buffers (async for elevation fetching)
+        buildBuildingGeometry(payload).then(result => {
+          // Get transferable buffers for zero-copy transfer
+          const transferables = getBuildingTransferables(result);
 
-        // Get transferable buffers for zero-copy transfer
-        const transferables = getBuildingTransferables(result);
+          const response: WorkerResponse = {
+            type: 'CREATE_BUILDING_GEOMETRY_RESULT',
+            id: request.id,
+            result,
+          };
 
-        const response: WorkerResponse = {
-          type: 'CREATE_BUILDING_GEOMETRY_RESULT',
-          id: request.id,
-          result,
-        };
-
-        // Transfer ownership of buffers (zero-copy)
-        self.postMessage(response, { transfer: transferables });
+          // Transfer ownership of buffers (zero-copy)
+          self.postMessage(response, { transfer: transferables });
+        }).catch(error => {
+          const response: WorkerResponse = {
+            type: 'ERROR',
+            id: request.id,
+            error: error instanceof Error ? error.message : 'Unknown error in building geometry worker',
+          };
+          self.postMessage(response);
+        });
         break;
       }
 

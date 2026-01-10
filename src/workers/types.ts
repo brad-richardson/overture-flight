@@ -212,6 +212,20 @@ export interface BuildingFeatureInput {
 }
 
 /**
+ * Elevation configuration for worker-side terrain lookups
+ */
+export interface ElevationConfig {
+  /** URL template with {z}, {x}, {y} placeholders */
+  urlTemplate: string;
+  /** Zoom level for elevation tiles */
+  zoom: number;
+  /** Tile size (typically 256) */
+  tileSize: number;
+  /** Terrarium offset constant (32768) */
+  terrariumOffset: number;
+}
+
+/**
  * Payload for building geometry creation
  */
 export interface CreateBuildingGeometryPayload {
@@ -227,11 +241,8 @@ export interface CreateBuildingGeometryPayload {
   lodLevel: number;
   /** Default building height when not specified */
   defaultHeight: number;
-  /** Terrain heights for building footprints (optional, for terrain following) */
-  terrainHeights?: {
-    /** Map from building index to [minHeight, maxHeight] */
-    [buildingIndex: number]: [number, number];
-  };
+  /** Elevation config for worker-side terrain lookups */
+  elevationConfig?: ElevationConfig;
   /** Vertical exaggeration factor for terrain */
   verticalExaggeration: number;
 }
@@ -273,6 +284,7 @@ export interface TreeData {
   lng: number;
   height?: number;
   leafType?: string;  // 'needleleaved' | 'broadleaved'
+  terrainHeight?: number;  // Terrain elevation at tree position (computed in worker)
 }
 
 /**
@@ -306,6 +318,10 @@ export interface ProcessTreesPayload {
   basePMTilesUrl: string;
   buildingsPMTilesUrl: string;
   transportationPMTilesUrl: string;
+  /** Elevation config for worker-side terrain lookups */
+  elevationConfig?: ElevationConfig;
+  /** Vertical exaggeration factor for terrain */
+  verticalExaggeration?: number;
 }
 
 /**

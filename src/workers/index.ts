@@ -21,11 +21,12 @@ import type {
   CreateBuildingGeometryResult,
   ProcessTreesResult,
   LandcoverTreeConfig,
+  ElevationConfig,
 } from './types.js';
 import { WORKERS } from '../constants.js';
 
 // Re-export types for convenience
-export type { TileBounds, ParsedFeature, SceneOrigin, BaseGeometryResult, GeometryBufferGroup, LineGeometryBufferGroup, ParseMVTResult, CompactFeature, BuildingFeatureInput, CreateBuildingGeometryResult, BuildingGeometryBuffers, ProcessTreesResult, TreeData, LandcoverTreeConfig } from './types.js';
+export type { TileBounds, ParsedFeature, SceneOrigin, BaseGeometryResult, GeometryBufferGroup, LineGeometryBufferGroup, ParseMVTResult, CompactFeature, BuildingFeatureInput, CreateBuildingGeometryResult, BuildingGeometryBuffers, ProcessTreesResult, TreeData, LandcoverTreeConfig, ElevationConfig } from './types.js';
 
 /**
  * Get optimal worker pool size based on device capabilities and config
@@ -1451,7 +1452,7 @@ export class BuildingGeometryWorkerPool {
     tileZ: number,
     lodLevel: number,
     defaultHeight: number,
-    terrainHeights: { [buildingIndex: number]: [number, number] } | undefined,
+    elevationConfig: ElevationConfig | undefined,
     verticalExaggeration: number
   ): Promise<CreateBuildingGeometryResult> {
     await this.initialize();
@@ -1468,7 +1469,7 @@ export class BuildingGeometryWorkerPool {
       tileZ,
       lodLevel,
       defaultHeight,
-      terrainHeights,
+      elevationConfig,
       verticalExaggeration,
     };
 
@@ -2222,7 +2223,9 @@ export class TreeProcessingWorkerPool {
     maxOSMDensityTrees: number,
     basePMTilesUrl: string,
     buildingsPMTilesUrl: string,
-    transportationPMTilesUrl: string
+    transportationPMTilesUrl: string,
+    elevationConfig?: ElevationConfig,
+    verticalExaggeration?: number
   ): Promise<ProcessTreesResult> {
     await this.initialize();
 
@@ -2241,6 +2244,8 @@ export class TreeProcessingWorkerPool {
       basePMTilesUrl,
       buildingsPMTilesUrl,
       transportationPMTilesUrl,
+      elevationConfig,
+      verticalExaggeration,
     };
 
     const request: WorkerRequest = {
