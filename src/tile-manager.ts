@@ -134,8 +134,8 @@ let cachedHeadingTrig: HeadingTrig | null = null;
  * Quantizes to integer degrees to improve cache hit rate
  */
 function getHeadingTrig(heading: number): { sinH: number; cosH: number } {
-  // Quantize to integer degrees (0-359)
-  const quantizedHeading = Math.round(heading) % 360;
+  // Quantize to integer degrees (0-359), handling negative values correctly
+  const quantizedHeading = ((Math.round(heading) % 360) + 360) % 360;
 
   // Return cached values if heading hasn't changed
   if (cachedHeadingTrig && cachedHeadingTrig.heading === quantizedHeading) {

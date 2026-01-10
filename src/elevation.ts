@@ -55,16 +55,21 @@ function getTerrainCacheKey(lng: number, lat: number): string {
   return `${qLng},${qLat}`;
 }
 
+// Eviction threshold: only evict when cache exceeds this size
+// Using 1.25x to reduce frequency of expensive sort operations
+const TERRAIN_CACHE_EVICT_THRESHOLD = Math.floor(TERRAIN_CACHE_SIZE * 1.25);
+
 /**
- * Evict oldest entries when cache exceeds size limit
+ * Evict oldest entries when cache exceeds threshold
+ * Uses a higher threshold (1.25x) to avoid sorting on every insert
  */
 function evictOldTerrainCacheEntries(): void {
-  if (terrainHeightCache.size <= TERRAIN_CACHE_SIZE) return;
+  if (terrainHeightCache.size <= TERRAIN_CACHE_EVICT_THRESHOLD) return;
 
-  // Find entries to remove (oldest 25%)
+  // Find entries to remove (down to base size)
   const entries = Array.from(terrainHeightCache.entries());
   entries.sort((a, b) => a[1].age - b[1].age);
-  const removeCount = Math.floor(TERRAIN_CACHE_SIZE * 0.25);
+  const removeCount = terrainHeightCache.size - TERRAIN_CACHE_SIZE;
 
   for (let i = 0; i < removeCount && i < entries.length; i++) {
     terrainHeightCache.delete(entries[i][0]);
