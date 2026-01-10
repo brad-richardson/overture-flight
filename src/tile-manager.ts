@@ -647,6 +647,13 @@ export function getTilesToLoad(
     }
   };
 
+  // Pre-compute heading direction vector (used for predictive loading and sorting)
+  // Heading 0 = North = -Y in tile coords (lower Y = further north)
+  // Heading 90 = East = +X in tile coords
+  const headingRad = (heading * Math.PI) / 180;
+  const headingDx = Math.sin(headingRad);
+  const headingDy = -Math.cos(headingRad); // Negative because tile Y increases southward
+
   // Load tiles in radius around current position
   for (let dx = -TILE_RADIUS; dx <= TILE_RADIUS; dx++) {
     for (let dy = -TILE_RADIUS; dy <= TILE_RADIUS; dy++) {
@@ -656,21 +663,13 @@ export function getTilesToLoad(
 
   // Predictive loading: load tiles ahead based on heading and speed
   if (speed > SPEED_THRESHOLD) {
-    const headingRad = (heading * Math.PI) / 180;
-
-    // Calculate tile offset direction from heading
-    // Heading 0 = North = -Y in tile coords (lower Y = further north)
-    // Heading 90 = East = +X in tile coords
-    const dx = Math.sin(headingRad);
-    const dy = -Math.cos(headingRad); // Negative because tile Y increases southward
-
     // Load tiles ahead based on speed (faster = more tiles ahead)
     const tilesAhead = Math.min(PREDICTIVE_TILES, Math.ceil(speed / SPEED_TO_TILES_DIVISOR));
 
     for (let i = 1; i <= tilesAhead; i++) {
       // Extend in the direction of travel
-      const aheadX = centerX + Math.round(dx * (TILE_RADIUS + i));
-      const aheadY = centerY + Math.round(dy * (TILE_RADIUS + i));
+      const aheadX = centerX + Math.round(headingDx * (TILE_RADIUS + i));
+      const aheadY = centerY + Math.round(headingDy * (TILE_RADIUS + i));
 
       // Add a small cone of tiles in the direction of travel
       addTile(aheadX, aheadY);
@@ -685,6 +684,31 @@ export function getTilesToLoad(
       }
     }
   }
+
+  // Sort tiles by distance from center (plane position) so closest tiles load first
+  // This ensures tiles directly under/around the plane get priority over distant ones
+
+  tiles.sort((a, b) => {
+    const aDx = a.x - centerX;
+    const aDy = a.y - centerY;
+    const bDx = b.x - centerX;
+    const bDy = b.y - centerY;
+
+    // Calculate base distance (Euclidean)
+    const aDist = Math.sqrt(aDx * aDx + aDy * aDy);
+    const bDist = Math.sqrt(bDx * bDx + bDy * bDy);
+
+    // Calculate how aligned each tile is with heading direction (dot product)
+    // Positive = ahead of plane, negative = behind
+    const aAhead = aDx * headingDx + aDy * headingDy;
+    const bAhead = bDx * headingDx + bDy * headingDy;
+
+    // Slight bonus (0.3 tiles) for tiles ahead of the plane
+    const aScore = aDist - aAhead * 0.3;
+    const bScore = bDist - bAhead * 0.3;
+
+    return aScore - bScore;
+  });
 
   return tiles;
 }
