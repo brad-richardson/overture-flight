@@ -300,15 +300,13 @@ export interface LandcoverTreeConfig {
 
 /**
  * Payload for tree processing
- * Note: Worker fetches its own PMTiles data to avoid structured clone overhead
+ * Note: Worker fetches its own PMTiles data and tree hints to avoid structured clone overhead
  */
 export interface ProcessTreesPayload {
   /** Tile coordinates */
   tileX: number;
   tileY: number;
   tileZ: number;
-  /** OSM tree density hint for this tile */
-  tileHint: { count: number; coniferRatio: number } | null;
   /** Landcover tree config */
   landcoverConfig: Record<string, LandcoverTreeConfig>;
   /** Maximum trees per category */
@@ -318,6 +316,10 @@ export interface ProcessTreesPayload {
   basePMTilesUrl: string;
   buildingsPMTilesUrl: string;
   transportationPMTilesUrl: string;
+  /** URL for tree-tiles.bin (OSM tree density hints) */
+  treeTilesUrl: string;
+  /** Zoom level used in tree-tiles.bin (for coordinate conversion) */
+  treeTilesZoom: number;
   /** Elevation config for worker-side terrain lookups */
   elevationConfig?: ElevationConfig;
   /** Vertical exaggeration factor for terrain */

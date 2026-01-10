@@ -68,6 +68,12 @@ interface WorkerState {
 const TASK_TIMEOUT_MS = 10000;
 
 /**
+ * Extended timeout for tree processing (30 seconds)
+ * Tree processing may need to load tree-tiles.bin and initialize PMTiles on first request
+ */
+const TREE_PROCESSING_TIMEOUT_MS = 30000;
+
+/**
  * Geometry worker pool for base layer geometry creation
  * Separate pool from texture workers - uses different worker file
  */
@@ -2194,7 +2200,7 @@ export class TreeProcessingWorkerPool {
         this.pendingTasks.delete(request.id);
         state.pendingCount--;
         reject(new Error('Task timeout'));
-      }, TASK_TIMEOUT_MS);
+      }, TREE_PROCESSING_TIMEOUT_MS);
 
       this.pendingTasks.set(request.id, {
         resolve: resolve as (value: unknown) => void,
@@ -2217,13 +2223,14 @@ export class TreeProcessingWorkerPool {
     tileX: number,
     tileY: number,
     tileZ: number,
-    tileHint: { count: number; coniferRatio: number } | null,
     landcoverConfig: Record<string, LandcoverTreeConfig>,
     maxProceduralTrees: number,
     maxOSMDensityTrees: number,
     basePMTilesUrl: string,
     buildingsPMTilesUrl: string,
     transportationPMTilesUrl: string,
+    treeTilesUrl: string,
+    treeTilesZoom: number,
     elevationConfig?: ElevationConfig,
     verticalExaggeration?: number
   ): Promise<ProcessTreesResult> {
@@ -2237,13 +2244,14 @@ export class TreeProcessingWorkerPool {
       tileX,
       tileY,
       tileZ,
-      tileHint,
       landcoverConfig,
       maxProceduralTrees,
       maxOSMDensityTrees,
       basePMTilesUrl,
       buildingsPMTilesUrl,
       transportationPMTilesUrl,
+      treeTilesUrl,
+      treeTilesZoom,
       elevationConfig,
       verticalExaggeration,
     };

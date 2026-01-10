@@ -18,131 +18,14 @@ import { getTreeProcessingWorkerPool, type TreeData, type LandcoverTreeConfig } 
 export type { TreeData };
 
 // ============================================================================
-// OSM TREE DENSITY DATA (from tree-tiles.bin)
+// TREE TILES CONFIG
 // ============================================================================
 
-// OSM tree density data per tile (from tree-tiles.bin, currently z14)
-interface TileHint {
-  count: number;          // Number of OSM-mapped trees in this tile
-  coniferRatio: number;   // 0-1, ratio of conifers vs deciduous
-}
+// URL for tree-tiles.bin (worker fetches this directly)
+const TREE_TILES_URL = `${import.meta.env.BASE_URL}tree-tiles.bin`;
 
-// Default zoom level for tile hints (can be overridden by file header)
-const DEFAULT_TILE_HINTS_ZOOM = 14;
-
-// Actual zoom level from the loaded file
-let tileHintsZoom = DEFAULT_TILE_HINTS_ZOOM;
-
-// Pre-loaded tile hints data: Map<"x,y" => TileHint>
-let tileHintsData: Map<string, TileHint> | null = null;
-let tileHintsLoadPromise: Promise<void> | null = null;
-let tileHintsLoadError: Error | null = null;
-
-/**
- * Load the tree-tiles.bin file containing pre-computed OSM tree density data
- */
-async function loadTreeHintsData(): Promise<void> {
-  if (tileHintsData !== null) {
-    return; // Already loaded
-  }
-
-  if (tileHintsLoadPromise !== null) {
-    return tileHintsLoadPromise; // Already loading
-  }
-
-  tileHintsLoadPromise = (async () => {
-    try {
-      const response = await fetch(`${import.meta.env.BASE_URL}tree-tiles.bin`);
-      if (!response.ok) {
-        throw new Error(`Failed to load tree-tiles.bin: HTTP ${response.status}`);
-      }
-
-      const buffer = await response.arrayBuffer();
-      const data = new DataView(buffer);
-
-      // Parse header
-      const magic = String.fromCharCode(
-        data.getUint8(0),
-        data.getUint8(1),
-        data.getUint8(2),
-        data.getUint8(3)
-      );
-
-      if (magic !== 'TREE') {
-        throw new Error('Invalid tree-tiles.bin magic bytes');
-      }
-
-      const version = data.getUint8(4);
-      const zoom = data.getUint8(5);
-
-      // Use the zoom level from the file
-      tileHintsZoom = zoom;
-
-      let offset: number;
-      let tileCount: number;
-
-      if (version === 1) {
-        tileCount = data.getUint16(6, true);
-        offset = 8;
-      } else if (version === 2) {
-        tileCount = data.getUint32(6, true);
-        offset = 10;
-      } else {
-        throw new Error(`Unsupported tree-tiles.bin version: ${version}`);
-      }
-
-      // Parse tiles
-      tileHintsData = new Map();
-
-      for (let i = 0; i < tileCount; i++) {
-        const x = data.getUint16(offset, true); offset += 2;
-        const y = data.getUint16(offset, true); offset += 2;
-        const count = data.getUint16(offset, true); offset += 2;
-        const coniferRatio = data.getUint8(offset) / 255; offset += 1;
-
-        tileHintsData.set(`${x},${y}`, { count, coniferRatio });
-      }
-    } catch (error) {
-      tileHintsLoadError = error as Error;
-      console.warn('Failed to load tree hints data:', (error as Error).message);
-      // Graceful degradation: use empty map so procedural trees from landcover still work.
-      tileHintsData = new Map();
-    }
-  })();
-
-  return tileHintsLoadPromise;
-}
-
-/**
- * Get the tile hint for a given hints-zoom tile
- */
-function getTileHint(x: number, y: number): TileHint | null {
-  if (!tileHintsData) {
-    return null;
-  }
-  return tileHintsData.get(`${x},${y}`) || null;
-}
-
-/**
- * Convert detail tile coordinates to hints-zoom tile coordinates
- */
-function detailToHintsTile(tileX: number, tileY: number, tileZ: number): { hx: number; hy: number } {
-  if (tileZ <= tileHintsZoom) {
-    const zoomDiff = tileHintsZoom - tileZ;
-    const scale = Math.pow(2, zoomDiff);
-    return {
-      hx: Math.floor(tileX * scale),
-      hy: Math.floor(tileY * scale),
-    };
-  }
-
-  const zoomDiff = tileZ - tileHintsZoom;
-  const scale = Math.pow(2, zoomDiff);
-  return {
-    hx: Math.floor(tileX / scale),
-    hy: Math.floor(tileY / scale),
-  };
-}
+// Default zoom level for tile hints (worker will read actual zoom from file)
+const DEFAULT_TREE_TILES_ZOOM = 14;
 
 // ============================================================================
 // LANDCOVER CONFIGURATION (passed to worker)
@@ -496,27 +379,7 @@ export async function createTreesForTile(
     return null;
   }
 
-  // Ensure tile hints are loaded
-  await loadTreeHintsData();
-
-  // Get the tile hint for OSM density trees
-  const { hx, hy } = detailToHintsTile(tileX, tileY, tileZ);
-  const hint = getTileHint(hx, hy);
-
-  // Calculate OSM trees per detail tile
-  let tileHint: { count: number; coniferRatio: number } | null = null;
-  if (hint && hint.count > 0) {
-    const zoomDiff = Math.max(0, tileZ - tileHintsZoom);
-    const tilesPerHintTile = Math.pow(2, zoomDiff * 2);
-    const treesPerDetailTile = Math.ceil(hint.count / tilesPerHintTile);
-    tileHint = {
-      count: treesPerDetailTile,
-      coniferRatio: hint.coniferRatio,
-    };
-  }
-
-  // Process trees in worker (worker fetches its own data to avoid structured clone overhead)
-  // Elevation config for worker-side terrain lookups
+  // Process trees in worker (worker fetches tree hints, PMTiles, and elevation data directly)
   const elevationConfig = ELEVATION.TERRAIN_ENABLED ? {
     urlTemplate: ELEVATION.TERRARIUM_URL,
     zoom: ELEVATION.ZOOM,
@@ -529,13 +392,14 @@ export async function createTreesForTile(
     tileX,
     tileY,
     tileZ,
-    tileHint,
     LANDCOVER_TREE_CONFIG,
     MAX_PROCEDURAL_TREES_PER_TILE,
     MAX_OSM_DENSITY_TREES_PER_TILE,
     OVERTURE_BASE_PMTILES,
     OVERTURE_BUILDINGS_PMTILES,
     OVERTURE_TRANSPORTATION_PMTILES,
+    TREE_TILES_URL,
+    DEFAULT_TREE_TILES_ZOOM,
     elevationConfig,
     ELEVATION.VERTICAL_EXAGGERATION
   );
@@ -646,14 +510,16 @@ export function removeTreesGroup(group: THREE.Group): void {
 }
 
 /**
- * Initialize tree layer - call this early to preload the tile hints data
+ * Initialize tree layer
+ * Tree hints are now loaded by the worker on first use (and cached there)
  */
 export async function initTreeLayer(): Promise<void> {
-  await loadTreeHintsData();
+  // No-op: tree hints are now loaded in the tree processing worker
 }
 
 /**
  * Get tree hints data statistics
+ * Note: Data is now managed in the worker, so we can't easily report stats from main thread
  */
 export function getTreeHintsStats(): {
   loaded: boolean;
@@ -661,8 +527,8 @@ export function getTreeHintsStats(): {
   error: string | null;
 } {
   return {
-    loaded: tileHintsData !== null,
-    tileCount: tileHintsData?.size || 0,
-    error: tileHintsLoadError?.message || null,
+    loaded: true, // Worker handles loading
+    tileCount: 0, // Not tracked on main thread
+    error: null,
   };
 }

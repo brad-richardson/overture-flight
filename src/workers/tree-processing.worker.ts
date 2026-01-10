@@ -36,6 +36,124 @@ let basePMTilesUrl: string | null = null;
 let buildingsPMTilesUrl: string | null = null;
 let transportationPMTilesUrl: string | null = null;
 
+// ============================================================================
+// TREE HINTS DATA (from tree-tiles.bin)
+// ============================================================================
+
+interface TileHint {
+  count: number;
+  coniferRatio: number;
+}
+
+// Tree hints data: Map<"x,y" => TileHint>
+let treeHintsData: Map<string, TileHint> | null = null;
+let treeHintsLoadPromise: Promise<void> | null = null;
+let treeHintsUrl: string | null = null;
+let treeHintsZoom: number = 10; // Default, will be updated from file
+
+/**
+ * Load and parse tree-tiles.bin (runs entirely in worker)
+ */
+async function loadTreeHints(url: string): Promise<void> {
+  // Already loaded with same URL
+  if (treeHintsData !== null && treeHintsUrl === url) {
+    return;
+  }
+
+  // Already loading
+  if (treeHintsLoadPromise !== null && treeHintsUrl === url) {
+    return treeHintsLoadPromise;
+  }
+
+  treeHintsUrl = url;
+  treeHintsLoadPromise = (async () => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to load tree-tiles.bin: HTTP ${response.status}`);
+      }
+
+      const buffer = await response.arrayBuffer();
+      const data = new DataView(buffer);
+
+      // Parse header
+      const magic = String.fromCharCode(
+        data.getUint8(0),
+        data.getUint8(1),
+        data.getUint8(2),
+        data.getUint8(3)
+      );
+
+      if (magic !== 'TREE') {
+        throw new Error('Invalid tree-tiles.bin magic bytes');
+      }
+
+      const version = data.getUint8(4);
+      const zoom = data.getUint8(5);
+      treeHintsZoom = zoom;
+
+      let offset: number;
+      let tileCount: number;
+
+      if (version === 1) {
+        tileCount = data.getUint16(6, true);
+        offset = 8;
+      } else if (version === 2) {
+        tileCount = data.getUint32(6, true);
+        offset = 10;
+      } else {
+        throw new Error(`Unsupported tree-tiles.bin version: ${version}`);
+      }
+
+      // Parse tiles
+      treeHintsData = new Map();
+
+      for (let i = 0; i < tileCount; i++) {
+        const x = data.getUint16(offset, true); offset += 2;
+        const y = data.getUint16(offset, true); offset += 2;
+        const count = data.getUint16(offset, true); offset += 2;
+        const coniferRatio = data.getUint8(offset) / 255; offset += 1;
+
+        treeHintsData.set(`${x},${y}`, { count, coniferRatio });
+      }
+    } catch (error) {
+      console.warn('[TreeWorker] Failed to load tree hints:', (error as Error).message);
+      // Graceful degradation: use empty map
+      treeHintsData = new Map();
+    }
+  })();
+
+  return treeHintsLoadPromise;
+}
+
+/**
+ * Get tree hint for a tile (converts from detail zoom to hints zoom)
+ * Uses the treeHintsZoom loaded from the file header
+ */
+function getTileHint(tileX: number, tileY: number, tileZ: number): TileHint | null {
+  if (!treeHintsData) return null;
+
+  // Use the zoom level loaded from the tree-tiles.bin file header
+  const hintsZoom = treeHintsZoom;
+
+  // Convert from detail tile coords to hints tile coords
+  if (tileZ === hintsZoom) {
+    return treeHintsData.get(`${tileX},${tileY}`) || null;
+  } else if (tileZ > hintsZoom) {
+    // Detail tile is smaller, scale down
+    const scale = Math.pow(2, tileZ - hintsZoom);
+    const hx = Math.floor(tileX / scale);
+    const hy = Math.floor(tileY / scale);
+    return treeHintsData.get(`${hx},${hy}`) || null;
+  } else {
+    // Detail tile is larger than hints tile - use center
+    const scale = Math.pow(2, hintsZoom - tileZ);
+    const hx = tileX * scale + Math.floor(scale / 2);
+    const hy = tileY * scale + Math.floor(scale / 2);
+    return treeHintsData.get(`${hx},${hy}`) || null;
+  }
+}
+
 /**
  * Initialize PMTiles sources (called once, lazy)
  */
@@ -920,13 +1038,14 @@ interface ProcessTreesPayloadInternal {
   tileX: number;
   tileY: number;
   tileZ: number;
-  tileHint: { count: number; coniferRatio: number } | null;
   landcoverConfig: Record<string, LandcoverTreeConfig>;
   maxProceduralTrees: number;
   maxOSMDensityTrees: number;
   basePMTilesUrl: string;
   buildingsPMTilesUrl: string;
   transportationPMTilesUrl: string;
+  treeTilesUrl: string;
+  treeTilesZoom: number;
   elevationConfig?: ElevationConfig;
   verticalExaggeration?: number;
 }
@@ -936,19 +1055,26 @@ async function processTrees(payload: ProcessTreesPayloadInternal): Promise<Proce
     tileX,
     tileY,
     tileZ,
-    tileHint,
     landcoverConfig,
     maxProceduralTrees,
     maxOSMDensityTrees,
     basePMTilesUrl,
     buildingsPMTilesUrl,
     transportationPMTilesUrl,
+    treeTilesUrl,
+    // treeTilesZoom is ignored - we read the actual zoom from the file header
     elevationConfig,
     verticalExaggeration = 1.0,
   } = payload;
 
-  // Initialize PMTiles if needed
-  await initializePMTiles(basePMTilesUrl, buildingsPMTilesUrl, transportationPMTilesUrl);
+  // Initialize PMTiles and tree hints in parallel
+  await Promise.all([
+    initializePMTiles(basePMTilesUrl, buildingsPMTilesUrl, transportationPMTilesUrl),
+    loadTreeHints(treeTilesUrl),
+  ]);
+
+  // Look up tile hint from worker-loaded data (uses zoom from file header)
+  const tileHint = getTileHint(tileX, tileY, tileZ);
 
   // Calculate bounds
   const bounds = tileToBounds(tileX, tileY, tileZ);
