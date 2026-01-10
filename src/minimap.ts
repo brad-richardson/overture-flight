@@ -78,6 +78,7 @@ let planeMarker: maplibregl.Marker | null = null;
 let targetMarker: maplibregl.Marker | null = null;
 let isFollowing = true;
 let isOpen = false;
+let isMapInitialized = false; // Defer map creation until first open
 let onTeleportCallback: ((lat: number, lng: number) => void) | null = null;
 let currentPlaneState: PlaneState | null = null;
 
@@ -89,6 +90,7 @@ const DRAG_THRESHOLD = 5; // pixels
 let modal: HTMLElement | null = null;
 let lockBtn: HTMLElement | null = null;
 let coordsDisplay: HTMLElement | null = null;
+let mapContainer: HTMLElement | null = null;
 
 // Event listener references for cleanup
 let escapeKeyHandler: ((e: KeyboardEvent) => void) | null = null;
@@ -344,79 +346,11 @@ function handleFocusTrap(e: KeyboardEvent): void {
 }
 
 /**
- * Opens the minimap modal and sets up focus management.
- * Resets to following mode and centers on the plane position.
+ * Initializes the MapLibre map instance on first open.
+ * This is called lazily to avoid CPU overhead when minimap is never used.
  */
-function openModal(): void {
-  if (!modal || !map) return;
-
-  isOpen = true;
-  modal.classList.add('minimap-modal-open');
-
-  // Reset to following mode when opening
-  isFollowing = true;
-  updateLockButton();
-  hideTargetMarker();
-
-  // Setup focus trap
-  setupFocusTrap();
-
-  // Focus first focusable element
-  setTimeout(() => {
-    firstFocusable?.focus();
-  }, 100);
-
-  // Resize map to fit container
-  setTimeout(() => {
-    if (map) {
-      map.resize();
-
-      // Center on plane if we have state
-      if (currentPlaneState) {
-        map.setCenter([currentPlaneState.lng, currentPlaneState.lat]);
-      }
-    }
-  }, 100);
-}
-
-/**
- * Closes the minimap modal and cleans up state.
- */
-function closeModal(): void {
-  if (!modal) return;
-
-  isOpen = false;
-  modal.classList.remove('minimap-modal-open');
-  hideTargetMarker();
-}
-
-/**
- * Initializes the minimap modal with MapLibre GL.
- *
- * Sets up the map instance, markers, event listeners, and UI controls.
- * This function should be called once during application initialization.
- *
- * @param onTeleport - Callback function invoked when user selects a teleport location.
- *                     Receives latitude and longitude as parameters.
- */
-export function initMinimap(onTeleport: (lat: number, lng: number) => void): void {
-  onTeleportCallback = onTeleport;
-
-  // Get DOM elements
-  modal = document.getElementById('minimap-modal');
-  const globeBtn = document.getElementById('globe-btn');
-  const closeBtn = document.getElementById('minimap-close-btn');
-  lockBtn = document.getElementById('minimap-lock-btn');
-  const mapContainer = document.getElementById('minimap-map');
-  const searchInput = document.getElementById('minimap-search') as HTMLInputElement | null;
-  const searchBtn = document.getElementById('minimap-search-btn');
-  const locationsSelect = document.getElementById('minimap-locations') as HTMLSelectElement | null;
-  coordsDisplay = document.getElementById('minimap-coords');
-
-  if (!modal || !globeBtn || !mapContainer) {
-    console.warn('Minimap elements not found');
-    return;
-  }
+function initializeMap(): void {
+  if (isMapInitialized || !mapContainer) return;
 
   // Ensure PMTiles protocol is registered
   ensurePMTilesProtocol();
@@ -758,7 +692,7 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
         }
       ]
     },
-    center: [0, 0],
+    center: currentPlaneState ? [currentPlaneState.lng, currentPlaneState.lat] : [0, 0],
     zoom: 12,
     attributionControl: false
   });
@@ -772,7 +706,7 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
     anchor: 'center',
     rotationAlignment: 'map'
   })
-    .setLngLat([0, 0])
+    .setLngLat(currentPlaneState ? [currentPlaneState.lng, currentPlaneState.lat] : [0, 0])
     .addTo(map);
 
   // Handle map click (with drag detection)
@@ -787,6 +721,94 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
       updateLockButton();
     }
   });
+
+  isMapInitialized = true;
+}
+
+/**
+ * Opens the minimap modal and sets up focus management.
+ * Resets to following mode and centers on the plane position.
+ */
+function openModal(): void {
+  if (!modal) return;
+
+  // Initialize map on first open (lazy loading)
+  if (!isMapInitialized) {
+    initializeMap();
+  }
+
+  if (!map) return;
+
+  isOpen = true;
+  modal.classList.add('minimap-modal-open');
+
+  // Reset to following mode when opening
+  isFollowing = true;
+  updateLockButton();
+  hideTargetMarker();
+
+  // Setup focus trap
+  setupFocusTrap();
+
+  // Focus first focusable element
+  setTimeout(() => {
+    firstFocusable?.focus();
+  }, 100);
+
+  // Resize map to fit container
+  setTimeout(() => {
+    if (map) {
+      map.resize();
+
+      // Center on plane if we have state
+      if (currentPlaneState) {
+        map.setCenter([currentPlaneState.lng, currentPlaneState.lat]);
+      }
+    }
+  }, 100);
+}
+
+/**
+ * Closes the minimap modal and cleans up state.
+ */
+function closeModal(): void {
+  if (!modal) return;
+
+  isOpen = false;
+  modal.classList.remove('minimap-modal-open');
+  hideTargetMarker();
+}
+
+/**
+ * Initializes the minimap modal with MapLibre GL.
+ *
+ * Sets up the map instance, markers, event listeners, and UI controls.
+ * This function should be called once during application initialization.
+ *
+ * @param onTeleport - Callback function invoked when user selects a teleport location.
+ *                     Receives latitude and longitude as parameters.
+ */
+export function initMinimap(onTeleport: (lat: number, lng: number) => void): void {
+  onTeleportCallback = onTeleport;
+
+  // Get DOM elements
+  modal = document.getElementById('minimap-modal');
+  const globeBtn = document.getElementById('globe-btn');
+  const closeBtn = document.getElementById('minimap-close-btn');
+  lockBtn = document.getElementById('minimap-lock-btn');
+  mapContainer = document.getElementById('minimap-map');
+  const searchInput = document.getElementById('minimap-search') as HTMLInputElement | null;
+  const searchBtn = document.getElementById('minimap-search-btn');
+  const locationsSelect = document.getElementById('minimap-locations') as HTMLSelectElement | null;
+  coordsDisplay = document.getElementById('minimap-coords');
+
+  if (!modal || !globeBtn || !mapContainer) {
+    console.warn('Minimap elements not found');
+    return;
+  }
+
+  // Note: Map is NOT initialized here - it's created lazily on first open
+  // This avoids MapLibre consuming CPU when minimap is never used
 
   // Globe button opens modal
   globeBtn.addEventListener('click', openModal);

@@ -230,7 +230,7 @@ export const WORKERS: WorkersConfig = {
   GEOMETRY_ENABLED: true,         // Geometry workers: Always enabled (uses zero-copy ArrayBuffer transfer)
   MVT_ENABLED: true,              // MVT parsing workers: Always enabled
   ELEVATION_ENABLED: true,        // Elevation workers: Always enabled
-  FULL_PIPELINE_ENABLED: import.meta.env.VITE_FULL_PIPELINE_WORKERS === 'true', // Full pipeline workers: Disabled by default (experimental)
+  FULL_PIPELINE_ENABLED: import.meta.env.VITE_FULL_PIPELINE_WORKERS !== 'false', // Full pipeline workers: Enabled by default
   BUILDING_GEOMETRY_ENABLED: true, // Building geometry workers: Always enabled
   POOL_SIZE: 0,                   // 0 = auto (cores - 1, min 2, max 4)
 };
