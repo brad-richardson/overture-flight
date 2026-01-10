@@ -115,6 +115,44 @@ const SPEED_TO_TILES_DIVISOR = 25;
 const MIN_FALLBACK_ZOOM = 6; // Minimum zoom level for base tile fallback
 const WATER_POLYGON_ZOOM_LEVELS = [10, 8, 6]; // Lower zoom levels to check for larger water polygons
 
+// ============================================================================
+// HEADING TRIGONOMETRY CACHE
+// ============================================================================
+// Cache sin/cos values to avoid recalculating every frame
+// Quantizes heading to integer degrees for cache efficiency
+
+interface HeadingTrig {
+  heading: number;  // Quantized heading (integer degrees)
+  sinH: number;     // sin(heading in radians)
+  cosH: number;     // cos(heading in radians)
+}
+
+let cachedHeadingTrig: HeadingTrig | null = null;
+
+/**
+ * Get cached sin/cos values for a heading
+ * Quantizes to integer degrees to improve cache hit rate
+ */
+function getHeadingTrig(heading: number): { sinH: number; cosH: number } {
+  // Quantize to integer degrees (0-359)
+  const quantizedHeading = Math.round(heading) % 360;
+
+  // Return cached values if heading hasn't changed
+  if (cachedHeadingTrig && cachedHeadingTrig.heading === quantizedHeading) {
+    return { sinH: cachedHeadingTrig.sinH, cosH: cachedHeadingTrig.cosH };
+  }
+
+  // Calculate new values
+  const headingRad = (quantizedHeading * Math.PI) / 180;
+  const sinH = Math.sin(headingRad);
+  const cosH = Math.cos(headingRad);
+
+  // Cache the result
+  cachedHeadingTrig = { heading: quantizedHeading, sinH, cosH };
+
+  return { sinH, cosH };
+}
+
 // Constants for geo conversion
 const METERS_PER_DEGREE_LAT = 111320;
 const metersPerDegreeLng = (lat: number): number => 111320 * Math.cos(lat * Math.PI / 180);
@@ -647,12 +685,13 @@ export function getTilesToLoad(
     }
   };
 
-  // Pre-compute heading direction vector (used for predictive loading and sorting)
+  // Pre-compute heading direction vector using cached sin/cos values
+  // This avoids recalculating every frame when heading doesn't change
   // Heading 0 = North = -Y in tile coords (lower Y = further north)
   // Heading 90 = East = +X in tile coords
-  const headingRad = (heading * Math.PI) / 180;
-  const headingDx = Math.sin(headingRad);
-  const headingDy = -Math.cos(headingRad); // Negative because tile Y increases southward
+  const { sinH, cosH } = getHeadingTrig(heading);
+  const headingDx = sinH;
+  const headingDy = -cosH; // Negative because tile Y increases southward
 
   // Load tiles in radius around current position
   for (let dx = -TILE_RADIUS; dx <= TILE_RADIUS; dx++) {
@@ -676,11 +715,9 @@ export function getTilesToLoad(
 
       // Add adjacent tiles for a wider cone as we go further
       if (i >= 2) {
-        // Perpendicular direction for cone spread
-        const perpX = Math.cos(headingRad);
-        const perpY = Math.sin(headingRad);
-        addTile(aheadX + Math.round(perpX), aheadY + Math.round(perpY));
-        addTile(aheadX - Math.round(perpX), aheadY - Math.round(perpY));
+        // Perpendicular direction for cone spread (cos, sin instead of sin, cos)
+        addTile(aheadX + Math.round(cosH), aheadY + Math.round(sinH));
+        addTile(aheadX - Math.round(cosH), aheadY - Math.round(sinH));
       }
     }
   }

@@ -28,6 +28,50 @@ const elevationCache = new Map<string, ElevationCacheEntry>();
 const pendingLoads = new Map<string, Promise<Float32Array>>();
 
 // ============================================================================
+// TERRAIN HEIGHT RESULT CACHE
+// ============================================================================
+// Simple LRU-style cache for getTerrainHeight results
+// Quantizes coordinates to ~1m resolution to improve cache hit rate
+// Helps with repeated queries for similar positions (e.g., per-frame plane updates)
+
+const TERRAIN_CACHE_SIZE = 1024;
+const TERRAIN_CACHE_PRECISION = 100000; // ~1m precision at equator
+
+interface TerrainCacheEntry {
+  height: number;
+  age: number;
+}
+
+const terrainHeightCache = new Map<string, TerrainCacheEntry>();
+let terrainCacheAge = 0;
+
+/**
+ * Get quantized cache key for a coordinate pair
+ * Quantizes to approximately 1m resolution
+ */
+function getTerrainCacheKey(lng: number, lat: number): string {
+  const qLng = Math.round(lng * TERRAIN_CACHE_PRECISION);
+  const qLat = Math.round(lat * TERRAIN_CACHE_PRECISION);
+  return `${qLng},${qLat}`;
+}
+
+/**
+ * Evict oldest entries when cache exceeds size limit
+ */
+function evictOldTerrainCacheEntries(): void {
+  if (terrainHeightCache.size <= TERRAIN_CACHE_SIZE) return;
+
+  // Find entries to remove (oldest 25%)
+  const entries = Array.from(terrainHeightCache.entries());
+  entries.sort((a, b) => a[1].age - b[1].age);
+  const removeCount = Math.floor(TERRAIN_CACHE_SIZE * 0.25);
+
+  for (let i = 0; i < removeCount && i < entries.length; i++) {
+    terrainHeightCache.delete(entries[i][0]);
+  }
+}
+
+// ============================================================================
 // ELEVATION TILE LOAD EVENT SYSTEM
 // ============================================================================
 
@@ -170,6 +214,7 @@ async function decodeElevationMainThread(url: string): Promise<Float32Array> {
 
 /**
  * Perform bilinear interpolation on a height grid
+ * Optimized: avoids array allocation in common case (all valid corners)
  * Handles partial NaN values by using average of valid corners
  */
 function bilinearInterpolate(
@@ -195,38 +240,49 @@ function bilinearInterpolate(
   const h01 = heights[y1 * gridSize + x0];
   const h11 = heights[y1 * gridSize + x1];
 
-  // Count valid corners and collect values
-  const corners = [h00, h10, h01, h11];
-  const validCorners = corners.filter(h => !Number.isNaN(h));
+  // Fast path: all corners valid (most common case)
+  // Check without creating arrays to avoid allocation
+  const nan00 = Number.isNaN(h00);
+  const nan10 = Number.isNaN(h10);
+  const nan01 = Number.isNaN(h01);
+  const nan11 = Number.isNaN(h11);
 
-  // If all corners are NaN, return NaN (no data)
-  if (validCorners.length === 0) {
-    return NaN;
-  }
-
-  // If some corners are NaN, use average of valid corners as fallback
-  if (validCorners.length < 4) {
-    const avg = validCorners.reduce((a, b) => a + b, 0) / validCorners.length;
-    // Replace NaN corners with average for interpolation
-    const h00Safe = Number.isNaN(h00) ? avg : h00;
-    const h10Safe = Number.isNaN(h10) ? avg : h10;
-    const h01Safe = Number.isNaN(h01) ? avg : h01;
-    const h11Safe = Number.isNaN(h11) ? avg : h11;
-
+  if (!nan00 && !nan10 && !nan01 && !nan11) {
+    // Standard bilinear interpolation (all corners valid)
     return (
-      h00Safe * (1 - fx) * (1 - fy) +
-      h10Safe * fx * (1 - fy) +
-      h01Safe * (1 - fx) * fy +
-      h11Safe * fx * fy
+      h00 * (1 - fx) * (1 - fy) +
+      h10 * fx * (1 - fy) +
+      h01 * (1 - fx) * fy +
+      h11 * fx * fy
     );
   }
 
-  // Standard bilinear interpolation (all corners valid)
+  // Slow path: handle NaN corners
+  // Count valid corners without array allocation
+  let validCount = 0;
+  let sum = 0;
+  if (!nan00) { validCount++; sum += h00; }
+  if (!nan10) { validCount++; sum += h10; }
+  if (!nan01) { validCount++; sum += h01; }
+  if (!nan11) { validCount++; sum += h11; }
+
+  // If all corners are NaN, return NaN (no data)
+  if (validCount === 0) {
+    return NaN;
+  }
+
+  // Use average of valid corners as fallback for NaN values
+  const avg = sum / validCount;
+  const h00Safe = nan00 ? avg : h00;
+  const h10Safe = nan10 ? avg : h10;
+  const h01Safe = nan01 ? avg : h01;
+  const h11Safe = nan11 ? avg : h11;
+
   return (
-    h00 * (1 - fx) * (1 - fy) +
-    h10 * fx * (1 - fy) +
-    h01 * (1 - fx) * fy +
-    h11 * fx * fy
+    h00Safe * (1 - fx) * (1 - fy) +
+    h10Safe * fx * (1 - fy) +
+    h01Safe * (1 - fx) * fy +
+    h11Safe * fx * fy
   );
 }
 
@@ -320,11 +376,21 @@ function getElevationTileInfo(lng: number, lat: number): { key: string; x: numbe
 
 /**
  * Get terrain height at a geographic coordinate using bilinear interpolation
+ * Uses a quantized result cache to avoid redundant calculations
  */
 export function getTerrainHeight(lng: number, lat: number): number {
   // Validate input coordinates
   if (!isValidCoordinate(lng, lat)) {
     return 0;
+  }
+
+  // Check result cache first (quantized to ~1m resolution)
+  const cacheKey = getTerrainCacheKey(lng, lat);
+  const cachedResult = terrainHeightCache.get(cacheKey);
+  if (cachedResult !== undefined) {
+    // Update access age for LRU
+    cachedResult.age = ++terrainCacheAge;
+    return cachedResult.height;
   }
 
   const { key, x, y, z } = getElevationTileInfo(lng, lat);
@@ -351,7 +417,13 @@ export function getTerrainHeight(lng: number, lat: number): number {
   const height = bilinearInterpolate(heights, gridX, gridY, ELEVATION.TILE_SIZE);
 
   // Return 0 for NaN (no data) to avoid physics issues
-  return Number.isNaN(height) ? 0 : height;
+  const result = Number.isNaN(height) ? 0 : height;
+
+  // Cache the result
+  terrainHeightCache.set(cacheKey, { height: result, age: ++terrainCacheAge });
+  evictOldTerrainCacheEntries();
+
+  return result;
 }
 
 /**
@@ -430,6 +502,7 @@ export function sampleElevation(
 
 /**
  * Unload elevation tiles that are far from the given position
+ * Also clears the terrain height result cache to avoid stale data
  */
 export function unloadDistantElevationTiles(
   lng: number,
@@ -443,6 +516,7 @@ export function unloadDistantElevationTiles(
   const z = ELEVATION.ZOOM;
   const [centerX, centerY] = lngLatToTile(lng, lat, z);
 
+  let tilesRemoved = false;
   for (const [key] of elevationCache) {
     const [tz, tx, ty] = key.split('/').map(Number);
     if (tz !== z) continue;
@@ -450,6 +524,13 @@ export function unloadDistantElevationTiles(
     const distance = Math.max(Math.abs(tx - centerX), Math.abs(ty - centerY));
     if (distance > maxDistance) {
       elevationCache.delete(key);
+      tilesRemoved = true;
     }
+  }
+
+  // Clear terrain height cache when tiles are unloaded to avoid stale data
+  if (tilesRemoved) {
+    terrainHeightCache.clear();
+    terrainCacheAge = 0;
   }
 }
