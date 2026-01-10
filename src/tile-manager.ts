@@ -686,6 +686,34 @@ export function getTilesToLoad(
     }
   }
 
+  // Sort tiles by distance from center (plane position) so closest tiles load first
+  // This ensures tiles directly under/around the plane get priority over distant ones
+  const headingRad = (heading * Math.PI) / 180;
+  const headingDx = Math.sin(headingRad);
+  const headingDy = -Math.cos(headingRad);
+
+  tiles.sort((a, b) => {
+    const aDx = a.x - centerX;
+    const aDy = a.y - centerY;
+    const bDx = b.x - centerX;
+    const bDy = b.y - centerY;
+
+    // Calculate base distance (Euclidean)
+    const aDist = Math.sqrt(aDx * aDx + aDy * aDy);
+    const bDist = Math.sqrt(bDx * bDx + bDy * bDy);
+
+    // Calculate how aligned each tile is with heading direction (dot product)
+    // Positive = ahead of plane, negative = behind
+    const aAhead = aDx * headingDx + aDy * headingDy;
+    const bAhead = bDx * headingDx + bDy * headingDy;
+
+    // Slight bonus (0.3 tiles) for tiles ahead of the plane
+    const aScore = aDist - aAhead * 0.3;
+    const bScore = bDist - bAhead * 0.3;
+
+    return aScore - bScore;
+  });
+
   return tiles;
 }
 
