@@ -33,16 +33,9 @@ import {
   removeExpandedTile,
   clearAllExpandedTiles,
 } from './ground-texture/index.js';
-import {
-  createLowDetailGroundForTile,
-  removeLowDetailGroundGroup,
-  getLowDetailTilesToLoad,
-  getLowDetailTilesToUnload,
-  clearAllLowDetailGroundTiles
-} from './ground-texture/low-detail-ground-layer.js';
 import { createTreesForTile, removeTreesGroup } from './tree-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
-import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE, LOW_DETAIL_TERRAIN, EXPANDED_TERRAIN } from './constants.js';
+import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE, EXPANDED_TERRAIN } from './constants.js';
 import { getLoadingGate } from './loading-gate.js';
 import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
 import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
@@ -264,11 +257,6 @@ const players = new Map<string, PlaneState>();
 const tileMeshes = new Map<string, TileMeshes>(); // key -> { buildings: Group, base: Group, transportation: Group }
 const loadingTiles = new Set<string>(); // Track tiles currently being loaded
 
-// Low-detail (Z10) tile meshes tracking
-const lowDetailTileMeshes = new Map<string, THREE.Group>();
-const loadingLowDetailTiles = new Set<string>();
-
-
 /**
  * Load tiles around the current position with predictive loading
  */
@@ -405,46 +393,6 @@ async function updateTiles(
 
     // Prune queue of out-of-range tiles to avoid unnecessary work
     pruneExpandedQueue(lng, lat);
-  }
-
-  // === Low-detail (Z10) tile loading for distant terrain ===
-  if (LOW_DETAIL_TERRAIN.ENABLED && GROUND_TEXTURE.ENABLED) {
-    // Load new Z10 tiles
-    const z10TilesToLoad = getLowDetailTilesToLoad(lng, lat);
-    for (const tile of z10TilesToLoad) {
-      // Skip if already loaded or currently loading
-      if (lowDetailTileMeshes.has(tile.key) || loadingLowDetailTiles.has(tile.key)) {
-        continue;
-      }
-
-      // Skip loading when FPS is critical (same as core tiles)
-      if (shouldThrottleCoreTiles) {
-        continue;
-      }
-
-      loadingLowDetailTiles.add(tile.key);
-      createLowDetailGroundForTile(tile.x, tile.y, tile.z)
-        .then(group => {
-          if (group) {
-            lowDetailTileMeshes.set(tile.key, group);
-          }
-          loadingLowDetailTiles.delete(tile.key);
-        })
-        .catch(e => {
-          console.warn(`Failed to load low-detail tile ${tile.key}:`, e);
-          loadingLowDetailTiles.delete(tile.key);
-        });
-    }
-
-    // Unload distant Z10 tiles
-    const z10TilesToUnload = getLowDetailTilesToUnload(lng, lat);
-    for (const key of z10TilesToUnload) {
-      const mesh = lowDetailTileMeshes.get(key);
-      if (mesh) {
-        removeLowDetailGroundGroup(mesh);
-        lowDetailTileMeshes.delete(key);
-      }
-    }
   }
 }
 
@@ -675,8 +623,6 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
   // Clear ground texture tiles and cache
   clearAllGroundTiles();
   clearAllExpandedTiles();
-  clearAllLowDetailGroundTiles();
-  lowDetailTileMeshes.clear();
 
   // Clear stored features for click picking
   clearAllFeatures();

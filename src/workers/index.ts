@@ -7,13 +7,13 @@ import type {
   WorkerRequest,
   WorkerResponse,
   RenderTileTexturePayload,
-  RenderLowDetailTexturePayload,
   CreateBaseGeometryPayload,
   CreateBuildingGeometryPayload,
   ParseMVTPayload,
   DecodeElevationPayload,
   TileBounds,
   ParsedFeature,
+  CompactFeature,
   SceneOrigin,
   BaseGeometryResult,
   ParseMVTResult,
@@ -193,7 +193,7 @@ export class WorkerPool {
     }
 
     // Handle render results
-    if (response.type === 'RENDER_TILE_TEXTURE_RESULT' || response.type === 'RENDER_LOW_DETAIL_TEXTURE_RESULT') {
+    if (response.type === 'RENDER_TILE_TEXTURE_RESULT') {
       const task = this.pendingTasks.get(response.id);
       if (task) {
         clearTimeout(task.timeoutId);
@@ -358,35 +358,6 @@ export class WorkerPool {
 
     const request: WorkerRequest = {
       type: 'RENDER_TILE_TEXTURE',
-      id: crypto.randomUUID(),
-      payload,
-    };
-
-    return this.sendRequest<ImageBitmap>(request);
-  }
-
-  /**
-   * Render a low-detail tile texture using a worker
-   */
-  async renderLowDetailTexture(
-    baseFeatures: ParsedFeature[],
-    bounds: TileBounds,
-    textureSize: number
-  ): Promise<ImageBitmap> {
-    await this.initialize();
-
-    if (!this.isSupported) {
-      throw new Error('Worker pool not supported');
-    }
-
-    const payload: RenderLowDetailTexturePayload = {
-      baseFeatures,
-      bounds,
-      textureSize,
-    };
-
-    const request: WorkerRequest = {
-      type: 'RENDER_LOW_DETAIL_TEXTURE',
       id: crypto.randomUUID(),
       payload,
     };
@@ -1129,6 +1100,126 @@ export function resetMVTWorkerPool(): void {
     mvtPoolInstance.terminate();
     mvtPoolInstance = null;
   }
+}
+
+// Geometry type mapping (inverse of worker's GEOM_TYPE_MAP)
+const GEOM_TYPE_NAMES: Record<number, string> = {
+  0: 'Point',
+  1: 'MultiPoint',
+  2: 'LineString',
+  3: 'MultiLineString',
+  4: 'Polygon',
+  5: 'MultiPolygon',
+};
+
+/**
+ * Convert CompactFeature (from worker) back to ParsedFeature (for existing code)
+ * Reconstructs nested coordinate arrays from flattened Float64Array + ringIndices
+ */
+export function compactFeatureToFeature(cf: CompactFeature): ParsedFeature {
+  const geomType = GEOM_TYPE_NAMES[cf.typeIndex] || 'Unknown';
+  const coords = cf.coords;
+  const ringIndices = cf.ringIndices;
+
+  let coordinates: number[] | number[][] | number[][][] | number[][][][] = [];
+
+  switch (cf.typeIndex) {
+    case 0: // Point
+      coordinates = [coords[0], coords[1]];
+      break;
+
+    case 1: // MultiPoint
+    case 2: // LineString
+      coordinates = [];
+      for (let i = 0; i < coords.length; i += 2) {
+        (coordinates as number[][]).push([coords[i], coords[i + 1]]);
+      }
+      break;
+
+    case 3: // MultiLineString
+      coordinates = [];
+      for (let r = 0; r < ringIndices.length; r++) {
+        const start = ringIndices[r] * 2;
+        const end = r < ringIndices.length - 1 ? ringIndices[r + 1] * 2 : coords.length;
+        const line: number[][] = [];
+        for (let i = start; i < end; i += 2) {
+          line.push([coords[i], coords[i + 1]]);
+        }
+        (coordinates as number[][][]).push(line);
+      }
+      break;
+
+    case 4: // Polygon
+      // For Polygon, ringIndices marks each ring (outer + holes)
+      coordinates = [];
+      for (let r = 0; r < ringIndices.length; r++) {
+        const start = ringIndices[r] * 2;
+        const end = r < ringIndices.length - 1 ? ringIndices[r + 1] * 2 : coords.length;
+        const ring: number[][] = [];
+        for (let i = start; i < end; i += 2) {
+          ring.push([coords[i], coords[i + 1]]);
+        }
+        (coordinates as number[][][]).push(ring);
+      }
+      break;
+
+    case 5: // MultiPolygon
+      // For MultiPolygon, use polygonIndices to reconstruct polygon boundaries
+      coordinates = [];
+      const polygonIndices = cf.polygonIndices;
+
+      if (ringIndices.length === 0) {
+        // No rings, just one polygon with one ring
+        const ring: number[][] = [];
+        for (let i = 0; i < coords.length; i += 2) {
+          ring.push([coords[i], coords[i + 1]]);
+        }
+        (coordinates as number[][][][]).push([ring]);
+      } else if (polygonIndices && polygonIndices.length > 0) {
+        // Use polygonIndices to correctly group rings into polygons
+        for (let p = 0; p < polygonIndices.length; p++) {
+          const ringStart = polygonIndices[p];
+          const ringEnd = p < polygonIndices.length - 1 ? polygonIndices[p + 1] : ringIndices.length;
+          const polygon: number[][][] = [];
+
+          for (let r = ringStart; r < ringEnd; r++) {
+            const start = ringIndices[r] * 2;
+            const end = r < ringIndices.length - 1 ? ringIndices[r + 1] * 2 : coords.length;
+            const ring: number[][] = [];
+            for (let i = start; i < end; i += 2) {
+              ring.push([coords[i], coords[i + 1]]);
+            }
+            polygon.push(ring);
+          }
+
+          if (polygon.length > 0) {
+            (coordinates as number[][][][]).push(polygon);
+          }
+        }
+      } else {
+        // Fallback: treat each ring as a separate polygon (legacy behavior)
+        for (let r = 0; r < ringIndices.length; r++) {
+          const start = ringIndices[r] * 2;
+          const end = r < ringIndices.length - 1 ? ringIndices[r + 1] * 2 : coords.length;
+          const ring: number[][] = [];
+          for (let i = start; i < end; i += 2) {
+            ring.push([coords[i], coords[i + 1]]);
+          }
+          (coordinates as number[][][][]).push([ring]);
+        }
+      }
+      break;
+
+    default:
+      coordinates = [];
+  }
+
+  return {
+    type: geomType,
+    coordinates,
+    properties: cf.props as Record<string, unknown>,
+    layer: cf.layer,
+  };
 }
 
 /**

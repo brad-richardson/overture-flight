@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { GroundTileData } from './types.js';
-import { TileTextureCache, initTextureCache } from './tile-texture-cache.js';
+import { TileTextureCache } from './tile-texture-cache.js';
 import { TerrainQuad } from './terrain-quad.js';
 import { tileToBounds, lngLatToTile } from '../tile-manager.js';
 import { getTerrainHeight, getElevationDataForTile } from '../elevation.js';
@@ -40,7 +40,10 @@ let expandedTextureCache: TileTextureCache | null = null;
  */
 function getExpandedCache(): TileTextureCache {
   if (!expandedTextureCache) {
-    expandedTextureCache = initTextureCache({
+    // Create a separate cache instance for expanded tiles (not using singleton)
+    // The deferDisposal config is no longer needed - the cache uses the global
+    // texture-disposal utility which automatically handles WebGPU deferral
+    expandedTextureCache = new TileTextureCache({
       maxSize: EXPANDED_TERRAIN.CACHE_MAX_SIZE,
       disposeThreshold: Math.floor(EXPANDED_TERRAIN.CACHE_MAX_SIZE * 0.8),
     });
@@ -232,14 +235,7 @@ async function createExpandedGroundForTileInner(
   // Mark texture as in-use so it won't be evicted while bound to this tile
   cache.markInUse(key);
 
-  // Enable stencil writing: expanded tiles (like core Z14) write to stencil buffer,
-  // which masks Z10 low-detail tiles from rendering in the same area
-  quad.enableStencilWrite();
-
-  // Set render order: must match core Z14 tiles so stencil works correctly
-  // Lower renderOrder = renders earlier in Three.js
   const mesh = quad.getMesh();
-  mesh.renderOrder = -5;
 
   // Check if this tile was promoted to core while we were loading
   // If so, abort - the core tile takes precedence

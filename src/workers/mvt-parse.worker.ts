@@ -25,9 +25,10 @@ const GEOM_TYPE_MAP: Record<string, number> = {
 function flattenCoordinates(
   geomType: string,
   coordinates: number[] | number[][] | number[][][] | number[][][][]
-): { coords: Float64Array; ringIndices: Uint32Array } {
+): { coords: Float64Array; ringIndices: Uint32Array; polygonIndices?: Uint32Array } {
   const flatCoords: number[] = [];
   const ringStarts: number[] = [];
+  const polygonStarts: number[] = []; // Track which ring index starts each polygon
 
   function processRing(ring: number[][]) {
     ringStarts.push(flatCoords.length / 2);
@@ -69,20 +70,30 @@ function flattenCoordinates(
 
     case 'MultiPolygon':
       for (const polygon of coordinates as number[][][][]) {
+        // Track which ring index starts this polygon
+        polygonStarts.push(ringStarts.length);
         processPolygon(polygon);
       }
       break;
   }
 
-  return {
+  const result: { coords: Float64Array; ringIndices: Uint32Array; polygonIndices?: Uint32Array } = {
     coords: new Float64Array(flatCoords),
     ringIndices: new Uint32Array(ringStarts),
   };
+
+  // Only include polygonIndices for MultiPolygon
+  if (geomType === 'MultiPolygon' && polygonStarts.length > 0) {
+    result.polygonIndices = new Uint32Array(polygonStarts);
+  }
+
+  return result;
 }
 
 /**
  * Extract only commonly used properties to minimize transfer size
  * Includes all properties used in tile-texture-renderer.ts for styling
+ * and buildings.ts for building geometry
  */
 function extractProperties(props: Record<string, unknown>): CompactFeature['props'] {
   const result: CompactFeature['props'] = {};
@@ -105,6 +116,15 @@ function extractProperties(props: Record<string, unknown>): CompactFeature['prop
   if (props.highway !== undefined) result.highway = props.highway as string;
   if (props.is_tunnel !== undefined) result.is_tunnel = props.is_tunnel as boolean;
   if (props.is_underground !== undefined) result.is_underground = props.is_underground as boolean;
+
+  // Building properties (buildings.ts, building-geometry-builder.ts)
+  if (props.id !== undefined) result.id = props.id as string;
+  if (props.building_id !== undefined) result.building_id = props.building_id as string;
+  if (props.height !== undefined) result.height = props.height as number;
+  if (props.num_floors !== undefined) result.num_floors = props.num_floors as number;
+  if (props.min_height !== undefined) result.min_height = props.min_height as number;
+  if (props.num_floors_underground !== undefined) result.num_floors_underground = props.num_floors_underground as number;
+  if (props.has_parts !== undefined) result.has_parts = props.has_parts as boolean;
 
   // Handle names object
   if (props.names && typeof props.names === 'object') {
@@ -146,18 +166,25 @@ function parseMVT(
       const geomType = geojson.geometry.type;
 
       // Flatten coordinates to typed arrays
-      const { coords, ringIndices } = flattenCoordinates(
+      const { coords, ringIndices, polygonIndices } = flattenCoordinates(
         geomType,
         geojson.geometry.coordinates
       );
 
-      features.push({
+      const compactFeature: CompactFeature = {
         typeIndex: GEOM_TYPE_MAP[geomType] ?? -1,
         layer: name,
         coords,
         ringIndices,
         props: extractProperties(feature.properties as Record<string, unknown>),
-      });
+      };
+
+      // Only include polygonIndices for MultiPolygon
+      if (polygonIndices) {
+        compactFeature.polygonIndices = polygonIndices;
+      }
+
+      features.push(compactFeature);
     }
   }
 
@@ -175,6 +202,9 @@ function getTransferables(result: ParseMVTResult): ArrayBuffer[] {
     }
     if (feature.ringIndices.buffer instanceof ArrayBuffer) {
       buffers.push(feature.ringIndices.buffer);
+    }
+    if (feature.polygonIndices?.buffer instanceof ArrayBuffer) {
+      buffers.push(feature.polygonIndices.buffer);
     }
   }
   return buffers;

@@ -17,6 +17,7 @@ export interface BuildingColorInput {
   coordinates: number[][][] | number[][][][];
   properties?: {
     id?: string | number;
+    building_id?: string; // For building parts - parent building ID
     subtype?: string;
     class?: string;
     [key: string]: unknown;
@@ -419,12 +420,26 @@ function seededRandom(seed: number): () => number {
 
 /**
  * Generate a deterministic seed from feature properties
- * Uses Overture id property, with coordinates as fallback
+ * For building parts, uses building_id (parent) so all parts share the same color
+ * For main buildings, uses their own id
+ * Falls back to coordinates if no id available
  */
 function generateSeed(feature: BuildingColorInput): number {
   const props = feature.properties;
 
-  // Use Overture id property if available
+  // For building parts, use building_id so all parts of the same building share color
+  // This prevents z-fighting artifacts from being visible (same color = invisible flicker)
+  if (props?.building_id !== undefined) {
+    let hash = 0;
+    const str = String(props.building_id);
+    for (let i = 0; i < str.length; i++) {
+      hash = (hash << 5) - hash + str.charCodeAt(i);
+      hash = hash & hash;
+    }
+    return Math.abs(hash);
+  }
+
+  // Use Overture id property if available (for main buildings)
   if (props?.id !== undefined) {
     let hash = 0;
     const str = String(props.id);

@@ -1,19 +1,28 @@
 import * as THREE from 'three';
 import type { CachedTexture, TileBounds } from './types.js';
+import { disposeTexture, isDeferredDisposalEnabled } from '../renderer/texture-disposal.js';
 
 /**
  * LRU cache for rendered ground textures
  * Manages GPU memory by disposing textures when cache exceeds limits
+ *
+ * Uses the global texture-disposal utility for WebGPU-safe disposal.
+ * The utility handles deferred disposal automatically when WebGPU is active.
  */
 export class TileTextureCache {
   private cache = new Map<string, CachedTexture>();
   private disposeThreshold: number;
   // Track textures that are currently bound to active tiles and should not be evicted
   private inUseTextures = new Set<string>();
+  // Track textures pending "unmark" - they were recently in use and should stay protected
+  private pendingUnmark = new Set<string>();
+  private unmarkScheduled = false;
 
-  constructor(config: { maxSize: number; disposeThreshold?: number }) {
+  constructor(config: { maxSize: number; disposeThreshold?: number; deferDisposal?: boolean }) {
     // Start evicting when we hit 80% of max size (or at specified threshold)
     this.disposeThreshold = config.disposeThreshold ?? Math.floor(config.maxSize * 0.8);
+    // Note: deferDisposal config is now ignored - we use the global texture-disposal utility
+    // which automatically handles deferred disposal based on renderer type
   }
 
   /**
@@ -21,15 +30,55 @@ export class TileTextureCache {
    * In-use textures will not be evicted by LRU
    */
   markInUse(key: string): void {
+    // Cancel any pending unmark for this key
+    this.pendingUnmark.delete(key);
     this.inUseTextures.add(key);
   }
 
   /**
    * Unmark a texture as in-use (tile has been removed)
-   * The texture can now be evicted by LRU if needed
+   * For WebGPU, this is deferred to allow GPU commands to complete.
+   * The texture can be evicted by LRU after the deferral period.
    */
   unmarkInUse(key: string): void {
-    this.inUseTextures.delete(key);
+    if (isDeferredDisposalEnabled()) {
+      // Defer the unmark to allow GPU commands referencing this texture to complete
+      this.pendingUnmark.add(key);
+      this.scheduleUnmark();
+    } else {
+      this.inUseTextures.delete(key);
+    }
+  }
+
+  /**
+   * Schedule deferred unmark of textures
+   * Waits several frames to ensure GPU commands have completed
+   */
+  private scheduleUnmark(): void {
+    if (this.unmarkScheduled) return;
+    this.unmarkScheduled = true;
+
+    // Wait 4 frames (same as texture disposal) before actually unmarking
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            this.flushPendingUnmarks();
+          });
+        });
+      });
+    });
+  }
+
+  /**
+   * Process pending unmarks
+   */
+  private flushPendingUnmarks(): void {
+    for (const key of this.pendingUnmark) {
+      this.inUseTextures.delete(key);
+    }
+    this.pendingUnmark.clear();
+    this.unmarkScheduled = false;
   }
 
   /**
@@ -117,7 +166,8 @@ export class TileTextureCache {
   dispose(key: string): void {
     const cached = this.cache.get(key);
     if (cached) {
-      cached.texture.dispose();
+      // Use global utility for WebGPU-safe disposal
+      disposeTexture(cached.texture);
       this.cache.delete(key);
     }
   }
@@ -127,7 +177,8 @@ export class TileTextureCache {
    */
   clear(): void {
     for (const cached of this.cache.values()) {
-      cached.texture.dispose();
+      // Use global utility for WebGPU-safe disposal
+      disposeTexture(cached.texture);
     }
     this.cache.clear();
   }
@@ -145,23 +196,17 @@ export class TileTextureCache {
       .sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
 
     // Evict oldest (non-in-use) until we're at target size
-    let evicted = 0;
     let index = 0;
     while (this.cache.size > targetSize && index < entries.length) {
       const [key, cached] = entries[index];
       // Double-check it's still not in use (defensive)
       if (!this.inUseTextures.has(key)) {
-        cached.texture.dispose();
+        // Use global utility for WebGPU-safe disposal
+        disposeTexture(cached.texture);
         this.cache.delete(key);
-        evicted++;
       }
       index++;
     }
-
-    // Debug logging removed for production - uncomment for debugging cache behavior
-    // if (evicted > 0) {
-    //   console.log(`TileTextureCache: Evicted ${evicted} textures (LRU), ${this.inUseTextures.size} protected`);
-    // }
   }
 }
 
@@ -186,8 +231,9 @@ export function getTextureCache(): TileTextureCache {
 
 /**
  * Initialize the texture cache with custom config
+ * @param config.deferDisposal Enable deferred disposal for WebGPU compatibility
  */
-export function initTextureCache(config: { maxSize: number; disposeThreshold?: number }): TileTextureCache {
+export function initTextureCache(config: { maxSize: number; disposeThreshold?: number; deferDisposal?: boolean }): TileTextureCache {
   if (cacheInstance) {
     cacheInstance.clear();
   }

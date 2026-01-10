@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 
+// Renderer type (matches scene.ts export)
+type RendererType = 'webgpu' | 'webgl';
+
 /**
  * Sky System for Overture Flight Simulator
  *
@@ -12,6 +15,8 @@ import * as THREE from 'three';
  * Side effects on initialization:
  * - Sets scene.background to null (sky dome replaces solid color)
  * - Adds exponential fog to scene.fog
+ *
+ * Supports both WebGL (GLSL shaders) and WebGPU (TSL nodes) renderers.
  */
 
 // ============================================================================
@@ -25,6 +30,7 @@ export interface SkyConfig {
   cloudAltitude: number;    // Base cloud layer altitude in meters
   fogDensity: number;       // Atmospheric fog density
   fogColor: number;         // Fog color (hex)
+  rendererType: RendererType; // WebGL or WebGPU
 }
 
 const DEFAULT_CONFIG: SkyConfig = {
@@ -33,7 +39,8 @@ const DEFAULT_CONFIG: SkyConfig = {
   cloudDensity: 0.4,
   cloudAltitude: 3000,
   fogDensity: 0.00008,
-  fogColor: 0x9dc4e8
+  fogColor: 0x9dc4e8,
+  rendererType: 'webgl'
 };
 
 // ============================================================================
@@ -271,6 +278,179 @@ const CLOUD_LAYERS: CloudLayerConfig[] = [
 ];
 
 // ============================================================================
+// TSL (Three.js Shading Language) Materials for WebGPU
+// ============================================================================
+
+// WebGPU module types (dynamically imported)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type TSLModule = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type WebGPUModule = any;
+
+// TSL imports - dynamically imported when WebGPU is used
+let tslModule: TSLModule | null = null;
+let webgpuModule: WebGPUModule | null = null;
+
+/**
+ * Load TSL module for node shader functions
+ */
+async function loadTSL(): Promise<TSLModule> {
+  if (!tslModule) {
+    tslModule = await import('three/tsl');
+  }
+  return tslModule;
+}
+
+/**
+ * Load WebGPU module for node materials
+ */
+async function loadWebGPU(): Promise<WebGPUModule> {
+  if (!webgpuModule) {
+    webgpuModule = await import('three/webgpu');
+  }
+  return webgpuModule;
+}
+
+/**
+ * Create WebGPU-compatible sky dome material using TSL nodes
+ */
+async function createWebGPUSkyMaterial(
+  sunPosition: THREE.Vector3,
+  turbidity: number
+): Promise<{
+  material: THREE.Material;
+  uniforms: { sunPosition: THREE.Vector3; turbidity: number };
+}> {
+  // Load both modules - TSL for node functions, WebGPU for material classes
+  const TSL = await loadTSL();
+  const { MeshBasicNodeMaterial } = await loadWebGPU();
+
+  // Create uniform nodes
+  const sunPosUniform = TSL.uniform(sunPosition);
+  const turbidityUniform = TSL.uniform(turbidity);
+
+  // Get world position and normalize for sky direction
+  const worldPos = TSL.positionWorld;
+  const direction = TSL.normalize(worldPos);
+
+  // Height factor: 0 at horizon, 1 at zenith
+  const height = TSL.max(0.0, direction.y);
+
+  // Sky colors
+  const zenithColor = TSL.vec3(0.25, 0.55, 0.95);
+  const horizonColor = TSL.vec3(0.65, 0.82, 0.95);
+
+  // Add slight warmth based on turbidity
+  const hazeAmount = turbidityUniform.sub(1.0).div(9.0);
+  const hazyHorizon = TSL.mix(horizonColor, TSL.vec3(0.85, 0.85, 0.8), hazeAmount.mul(0.3));
+
+  // Smooth gradient
+  const gradientFactor = TSL.pow(height, 0.8);
+  const skyColor = TSL.mix(hazyHorizon, zenithColor, gradientFactor);
+
+  // Sun glow effect
+  const sunDir = TSL.normalize(sunPosUniform);
+  const sunAngle = TSL.dot(direction, sunDir);
+
+  // Atmospheric glow
+  const sunGlow = TSL.pow(TSL.max(0.0, sunAngle), 8.0).mul(0.4);
+  const glowColor = TSL.vec3(1.0, 0.95, 0.8);
+  const withGlow = skyColor.add(glowColor.mul(sunGlow));
+
+  // Golden tint near horizon in sun direction
+  const horizonSunGlow = TSL.pow(TSL.max(0.0, sunAngle), 2.0).mul(TSL.float(1.0).sub(height)).mul(0.15);
+  const finalColor = withGlow.add(TSL.vec3(0.3, 0.2, 0.05).mul(horizonSunGlow));
+
+  // Create node material
+  const material = new MeshBasicNodeMaterial();
+  material.colorNode = finalColor;
+  material.side = THREE.BackSide;
+  material.depthWrite = false;
+
+  return {
+    material,
+    uniforms: { sunPosition, turbidity }
+  };
+}
+
+/**
+ * Create a simple WebGPU-compatible cloud material
+ * Uses a simplified approach without complex noise (TSL noise is still evolving)
+ */
+async function createWebGPUCloudMaterial(
+  sunPosition: THREE.Vector3,
+  cloudDensity: number,
+  opacity: number
+): Promise<{
+  material: THREE.Material;
+  uniforms: { time: { value: number }; cloudDensity: number; sunPosition: THREE.Vector3; opacity: number };
+}> {
+  // Load both modules - TSL for node functions, WebGPU for material classes
+  const TSL = await loadTSL();
+  const { MeshBasicNodeMaterial } = await loadWebGPU();
+
+  // For WebGPU clouds, use a simpler approach with a pre-baked cloud texture
+  // or a simplified procedural pattern (full simplex noise in TSL is complex)
+  const timeUniform = TSL.uniform(0);
+  const densityUniform = TSL.uniform(cloudDensity);
+  const opacityUniform = TSL.uniform(opacity);
+  const sunPosUniform = TSL.uniform(sunPosition);
+
+  // Get UV coordinates
+  const uv = TSL.uv();
+
+  // Simple procedural pattern using sine waves (approximates clouds)
+  const scale = 3.0;
+  const offsetX = timeUniform.mul(0.02);
+  const offsetY = timeUniform.mul(0.015);
+
+  const noise1 = TSL.sin(uv.x.mul(scale).add(offsetX)).mul(TSL.cos(uv.y.mul(scale).add(offsetY)));
+  const noise2 = TSL.sin(uv.x.mul(scale * 2.3).add(offsetX.mul(1.3))).mul(TSL.cos(uv.y.mul(scale * 2.1).add(offsetY.mul(1.2)))).mul(0.5);
+  const noise3 = TSL.sin(uv.x.mul(scale * 4.7).add(offsetX.mul(0.7))).mul(TSL.cos(uv.y.mul(scale * 5.2).add(offsetY.mul(0.8)))).mul(0.25);
+
+  const combinedNoise = noise1.add(noise2).add(noise3).mul(0.5).add(0.5);
+
+  // Shape clouds based on density
+  const cloudShape = TSL.smoothstep(TSL.float(0.4).sub(densityUniform.mul(0.3)), 0.7, combinedNoise);
+
+  // Sun lighting
+  const worldPos = TSL.positionWorld;
+  const sunDir = TSL.normalize(sunPosUniform);
+  const sunInfluence = TSL.dot(TSL.normalize(worldPos), sunDir);
+
+  // Cloud color with lighting
+  const shadowColor = TSL.vec3(0.7, 0.75, 0.8);
+  const sunlitColor = TSL.vec3(1.0, 0.98, 0.95);
+  const cloudColor = TSL.mix(shadowColor, sunlitColor, sunInfluence.mul(0.5).add(0.5));
+
+  // Golden tint near sun
+  const sunProximity = TSL.pow(TSL.max(0.0, sunInfluence), 4.0);
+  const tintedColor = cloudColor.add(TSL.vec3(0.3, 0.2, 0.05).mul(sunProximity));
+
+  // Alpha with edge fade
+  const edgeFade = TSL.float(1.0).sub(TSL.smoothstep(0.3, 0.5, TSL.length(uv.sub(0.5))));
+  const alpha = cloudShape.mul(edgeFade).mul(opacityUniform);
+
+  // Create node material
+  const material = new MeshBasicNodeMaterial();
+  material.colorNode = tintedColor;
+  material.opacityNode = alpha;
+  material.transparent = true;
+  material.depthWrite = false;
+  material.side = THREE.DoubleSide;
+
+  return {
+    material,
+    uniforms: {
+      time: { value: 0 },
+      cloudDensity,
+      sunPosition,
+      opacity
+    }
+  };
+}
+
+// ============================================================================
 // Sky System Class
 // ============================================================================
 
@@ -282,22 +462,39 @@ export class SkySystem {
   private cloudLayers: THREE.Mesh[] = [];
   private skyUniforms: { [key: string]: THREE.IUniform };
   private time: number = 0;
+  private initialized: boolean = false;
+
+  // WebGPU-specific uniform references (for updating cloud time values)
+  private webgpuCloudUniforms: Array<{ time: { value: number }; cloudDensity: number; sunPosition: THREE.Vector3; opacity: number }> = [];
 
   constructor(scene: THREE.Scene, config: Partial<SkyConfig> = {}) {
     this.scene = scene;
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.skyUniforms = {};
-    this.init();
+    // Note: init() is now async and called separately via initAsync()
   }
 
-  private init(): void {
-    this.createSky();
+  /**
+   * Initialize the sky system asynchronously
+   * Must be called after construction for WebGPU support
+   */
+  public async initAsync(): Promise<void> {
+    if (this.initialized) return;
+
+    if (this.config.rendererType === 'webgpu') {
+      await this.createSkyWebGPU();
+      await this.createCloudsWebGPU();
+    } else {
+      this.createSkyWebGL();
+      this.createCloudsWebGL();
+    }
+
     this.createSun();
-    this.createClouds();
     this.setupFog();
+    this.initialized = true;
   }
 
-  private createSky(): void {
+  private createSkyWebGL(): void {
     this.skyUniforms = {
       sunPosition: { value: this.config.sunPosition.clone() },
       turbidity: { value: this.config.turbidity }
@@ -313,6 +510,21 @@ export class SkySystem {
 
     const skyGeometry = new THREE.SphereGeometry(SKY_DOME_RADIUS, 32, 32);
     this.skyMesh = new THREE.Mesh(skyGeometry, skyMaterial);
+    this.skyMesh.renderOrder = -1000;
+    this.scene.add(this.skyMesh);
+
+    // Remove solid color background - sky dome replaces it
+    this.scene.background = null;
+  }
+
+  private async createSkyWebGPU(): Promise<void> {
+    const { material } = await createWebGPUSkyMaterial(
+      this.config.sunPosition,
+      this.config.turbidity
+    );
+
+    const skyGeometry = new THREE.SphereGeometry(SKY_DOME_RADIUS, 32, 32);
+    this.skyMesh = new THREE.Mesh(skyGeometry, material);
     this.skyMesh.renderOrder = -1000;
     this.scene.add(this.skyMesh);
 
@@ -358,7 +570,7 @@ export class SkySystem {
     this.sunMesh.add(outerGlowMesh);
   }
 
-  private createClouds(): void {
+  private createCloudsWebGL(): void {
     CLOUD_LAYERS.forEach((layerConfig, index) => {
       // Create independent uniforms for each layer
       const layerUniforms = {
@@ -391,6 +603,32 @@ export class SkySystem {
     });
   }
 
+  private async createCloudsWebGPU(): Promise<void> {
+    for (let index = 0; index < CLOUD_LAYERS.length; index++) {
+      const layerConfig = CLOUD_LAYERS[index];
+
+      const { material, uniforms } = await createWebGPUCloudMaterial(
+        this.config.sunPosition,
+        this.config.cloudDensity,
+        layerConfig.opacity
+      );
+
+      this.webgpuCloudUniforms.push(uniforms);
+
+      const cloudGeometry = new THREE.PlaneGeometry(layerConfig.size, layerConfig.size, 1, 1);
+      const cloudMesh = new THREE.Mesh(cloudGeometry, material);
+      cloudMesh.rotation.x = -Math.PI / 2;
+      cloudMesh.position.y = this.config.cloudAltitude + layerConfig.altitudeOffset;
+      cloudMesh.renderOrder = -900 + index;
+
+      // Store index for WebGPU uniform updates
+      (cloudMesh as any).webgpuUniformIndex = index;
+
+      this.cloudLayers.push(cloudMesh);
+      this.scene.add(cloudMesh);
+    }
+  }
+
   private setupFog(): void {
     this.scene.fog = new THREE.FogExp2(this.config.fogColor, this.config.fogDensity);
   }
@@ -418,10 +656,16 @@ export class SkySystem {
 
     // Update cloud layers
     this.cloudLayers.forEach((cloud, index) => {
-      // Update time uniform
+      // Update time uniform (WebGL path)
       const uniforms = (cloud as any).cloudUniforms;
       if (uniforms) {
         uniforms.time.value = this.time;
+      }
+
+      // Update time uniform (WebGPU path)
+      const webgpuIndex = (cloud as any).webgpuUniformIndex;
+      if (webgpuIndex !== undefined && this.webgpuCloudUniforms[webgpuIndex]) {
+        this.webgpuCloudUniforms[webgpuIndex].time.value = this.time;
       }
 
       // Apply wind with layer-specific speed multiplier
@@ -528,12 +772,15 @@ let skySystemInstance: SkySystem | null = null;
 
 /**
  * Initialize the sky system
+ * @param scene - Three.js scene
+ * @param config - Sky configuration including rendererType ('webgl' or 'webgpu')
  */
-export function initSkySystem(scene: THREE.Scene, config?: Partial<SkyConfig>): SkySystem {
+export async function initSkySystem(scene: THREE.Scene, config?: Partial<SkyConfig>): Promise<SkySystem> {
   if (skySystemInstance) {
     skySystemInstance.dispose();
   }
   skySystemInstance = new SkySystem(scene, config);
+  await skySystemInstance.initAsync();
   return skySystemInstance;
 }
 
