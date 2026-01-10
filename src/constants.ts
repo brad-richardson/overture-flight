@@ -215,25 +215,23 @@ export const EXPANDED_TERRAIN: ExpandedTerrainConfig = {
   TEXTURE_SIZE: IS_MOBILE ? 512 : 1024, // Lower resolution for distant tiles
 };
 
-// Web Worker settings for tile rendering
+// Web Worker settings for parallel processing
 // Offloads CPU-intensive work to background threads
 export interface WorkersConfig {
-  ENABLED: boolean;               // Enable/disable texture worker rendering
   GEOMETRY_ENABLED: boolean;      // Enable/disable geometry worker creation
   MVT_ENABLED: boolean;           // Enable/disable MVT parsing worker (uses zero-copy ArrayBuffer transfer)
-  ELEVATION_ENABLED: boolean;     // Enable/disable elevation decoding worker (uses OffscreenCanvas)
+  ELEVATION_ENABLED: boolean;     // Enable/disable elevation decoding worker
   FULL_PIPELINE_ENABLED: boolean; // Enable/disable full pipeline workers (fetch+parse+render in worker)
   BUILDING_GEOMETRY_ENABLED: boolean; // Enable/disable building geometry workers (extrusion in worker)
   POOL_SIZE: number;              // Number of workers (0 = auto based on cores)
 }
 
 export const WORKERS: WorkersConfig = {
-  ENABLED: false,                 // Texture workers: Disabled (structured clone overhead negates benefit)
-  GEOMETRY_ENABLED: true,         // Geometry workers: Enabled (uses zero-copy ArrayBuffer transfer)
-  MVT_ENABLED: import.meta.env.VITE_MVT_WORKERS !== 'false', // MVT parsing workers: Enabled by default
-  ELEVATION_ENABLED: import.meta.env.VITE_ELEVATION_WORKERS !== 'false', // Elevation workers: Enabled by default
+  GEOMETRY_ENABLED: true,         // Geometry workers: Always enabled (uses zero-copy ArrayBuffer transfer)
+  MVT_ENABLED: true,              // MVT parsing workers: Always enabled
+  ELEVATION_ENABLED: true,        // Elevation workers: Always enabled
   FULL_PIPELINE_ENABLED: import.meta.env.VITE_FULL_PIPELINE_WORKERS === 'true', // Full pipeline workers: Disabled by default (experimental)
-  BUILDING_GEOMETRY_ENABLED: import.meta.env.VITE_BUILDING_WORKERS !== 'false', // Building geometry workers: Enabled by default
+  BUILDING_GEOMETRY_ENABLED: true, // Building geometry workers: Always enabled
   POOL_SIZE: 0,                   // 0 = auto (cores - 1, min 2, max 4)
 };
 

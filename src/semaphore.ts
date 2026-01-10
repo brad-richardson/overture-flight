@@ -6,9 +6,8 @@ import { TILE_CONCURRENCY, FETCH_CONCURRENCY } from './constants.js';
  */
 export enum TilePriority {
   Z14_GROUND = 1,   // High-detail ground tiles (most important)
-  Z10_GROUND = 2,   // Low-detail distant terrain
-  BUILDINGS = 3,    // Buildings (can wait)
-  EXPANDED_TERRAIN = 4, // Expanded terrain (lowest priority, terrain-only outer ring)
+  BUILDINGS = 2,    // Buildings (can wait)
+  EXPANDED_TERRAIN = 3, // Expanded terrain (lowest priority, terrain-only outer ring)
 }
 
 interface WaitingItem {
@@ -92,7 +91,6 @@ export class PrioritySemaphore {
   getWaitingByPriority(): Record<TilePriority, number> {
     const counts = {
       [TilePriority.Z14_GROUND]: 0,
-      [TilePriority.Z10_GROUND]: 0,
       [TilePriority.BUILDINGS]: 0,
       [TilePriority.EXPANDED_TERRAIN]: 0,
     };

@@ -6,7 +6,6 @@ interface ImportMetaEnv {
   readonly VITE_TRANSPORTATION_PMTILES_URL?: string;
   readonly VITE_PARTYKIT_HOST?: string;
   readonly VITE_BASE_PATH?: string;
-  readonly VITE_ENABLE_Z10_RENDERING?: string;
   readonly BASE_URL: string;
   readonly DEV: boolean;
   readonly PROD: boolean;

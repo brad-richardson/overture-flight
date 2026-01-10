@@ -300,43 +300,63 @@ async function updateTiles(
 
     // Use new texture-based ground rendering if enabled
     if (GROUND_TEXTURE.ENABLED) {
+      // Load terrain and buildings first (high priority)
+      // Trees load in background after terrain is visible
       Promise.all([
         createGroundForTile(tile.x, tile.y, tile.z),
-        createBuildingsForTile(tile.x, tile.y, tile.z),
-        safeCreateTrees()
-      ]).then(([groundGroup, buildingsGroup, treesGroup]) => {
+        createBuildingsForTile(tile.x, tile.y, tile.z)
+      ]).then(([groundGroup, buildingsGroup]) => {
+        // Store partial result - terrain visible immediately
         tileMeshes.set(tile.key, {
           ground: groundGroup,
           base: null,
           transportation: null,
           buildings: buildingsGroup,
-          trees: treesGroup
+          trees: null  // Trees load in background
         });
         loadingTiles.delete(tile.key);
         // Notify loading gate that a tile is ready
         getLoadingGate().onTileLoaded();
+
+        // Now load trees in background (lower priority)
+        safeCreateTrees().then(treesGroup => {
+          const meshes = tileMeshes.get(tile.key);
+          if (meshes && treesGroup) {
+            meshes.trees = treesGroup;
+          }
+        });
       }).catch(e => {
         console.warn(`Failed to load tile ${tile.key}:`, e);
         loadingTiles.delete(tile.key);
       });
     } else {
       // Legacy polygon-based rendering
+      // Load terrain, buildings, roads first (high priority)
+      // Trees load in background after terrain is visible
       Promise.all([
         createBaseLayerForTile(tile.x, tile.y, tile.z),
         createBuildingsForTile(tile.x, tile.y, tile.z),
-        createTransportationForTile(tile.x, tile.y, tile.z),
-        safeCreateTrees()
-      ]).then(([baseGroup, buildingsGroup, transportationGroup, treesGroup]) => {
+        createTransportationForTile(tile.x, tile.y, tile.z)
+      ]).then(([baseGroup, buildingsGroup, transportationGroup]) => {
+        // Store partial result - terrain visible immediately
         tileMeshes.set(tile.key, {
           ground: null,
           base: baseGroup,
           buildings: buildingsGroup,
           transportation: transportationGroup,
-          trees: treesGroup
+          trees: null  // Trees load in background
         });
         loadingTiles.delete(tile.key);
         // Notify loading gate that a tile is ready
         getLoadingGate().onTileLoaded();
+
+        // Now load trees in background (lower priority)
+        safeCreateTrees().then(treesGroup => {
+          const meshes = tileMeshes.get(tile.key);
+          if (meshes && treesGroup) {
+            meshes.trees = treesGroup;
+          }
+        });
       }).catch(e => {
         console.warn(`Failed to load tile ${tile.key}:`, e);
         loadingTiles.delete(tile.key);

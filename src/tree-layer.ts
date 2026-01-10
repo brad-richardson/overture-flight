@@ -598,22 +598,77 @@ async function generateOSMDensityTrees(
 }
 
 /**
- * Check if a point is inside any water polygon
+ * Pre-computed polygon data with bounding box for fast spatial filtering
  */
-function isPointInWater(lng: number, lat: number, waterPolygons: ParsedFeature[]): boolean {
-  for (const feature of waterPolygons) {
+interface PolygonWithBounds {
+  rings: number[][][];  // Outer ring + holes
+  minLng: number;
+  maxLng: number;
+  minLat: number;
+  maxLat: number;
+}
+
+/**
+ * Pre-process polygons to compute bounding boxes for fast spatial filtering
+ * Flattens MultiPolygons into individual polygons with their own bounds
+ */
+function preprocessPolygons(features: ParsedFeature[]): PolygonWithBounds[] {
+  const result: PolygonWithBounds[] = [];
+
+  for (const feature of features) {
     if (feature.type === 'Polygon') {
-      const coords = feature.coordinates as number[][][];
-      if (pointInPolygonWithHoles(lng, lat, coords)) {
-        return true;
+      const rings = feature.coordinates as number[][][];
+      if (rings.length > 0 && rings[0].length > 0) {
+        const bounds = computeRingsBounds(rings);
+        result.push({ rings, ...bounds });
       }
     } else if (feature.type === 'MultiPolygon') {
-      const coords = feature.coordinates as number[][][][];
-      for (const polygon of coords) {
-        if (pointInPolygonWithHoles(lng, lat, polygon)) {
-          return true;
+      const multiCoords = feature.coordinates as number[][][][];
+      for (const rings of multiCoords) {
+        if (rings.length > 0 && rings[0].length > 0) {
+          const bounds = computeRingsBounds(rings);
+          result.push({ rings, ...bounds });
         }
       }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Compute bounding box for polygon rings (outer ring + holes)
+ */
+function computeRingsBounds(rings: number[][][]): { minLng: number; maxLng: number; minLat: number; maxLat: number } {
+  let minLng = Infinity, maxLng = -Infinity;
+  let minLat = Infinity, maxLat = -Infinity;
+
+  // Only need to check outer ring for bounds (holes are inside)
+  const outerRing = rings[0];
+  for (const [lng, lat] of outerRing) {
+    if (lng < minLng) minLng = lng;
+    if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  }
+
+  return { minLng, maxLng, minLat, maxLat };
+}
+
+/**
+ * Check if a point is inside any water polygon
+ * Uses pre-computed bounding boxes for fast rejection
+ */
+function isPointInWater(lng: number, lat: number, waterPolygons: PolygonWithBounds[]): boolean {
+  for (const polygon of waterPolygons) {
+    // Fast bounding box check first
+    if (lng < polygon.minLng || lng > polygon.maxLng || lat < polygon.minLat || lat > polygon.maxLat) {
+      continue;
+    }
+
+    // Point is inside bbox, do full polygon test
+    if (pointInPolygonWithHoles(lng, lat, polygon.rings)) {
+      return true;
     }
   }
   return false;
@@ -642,21 +697,18 @@ function pointInPolygonWithHoles(lng: number, lat: number, rings: number[][][]):
 
 /**
  * Check if a point is inside any building polygon
+ * Uses pre-computed bounding boxes for fast rejection
  */
-function isPointInBuilding(lng: number, lat: number, buildings: ParsedFeature[]): boolean {
-  for (const feature of buildings) {
-    if (feature.type === 'Polygon') {
-      const coords = feature.coordinates as number[][][];
-      if (pointInPolygonWithHoles(lng, lat, coords)) {
-        return true;
-      }
-    } else if (feature.type === 'MultiPolygon') {
-      const coords = feature.coordinates as number[][][][];
-      for (const polygon of coords) {
-        if (pointInPolygonWithHoles(lng, lat, polygon)) {
-          return true;
-        }
-      }
+function isPointInBuilding(lng: number, lat: number, buildings: PolygonWithBounds[]): boolean {
+  for (const polygon of buildings) {
+    // Fast bounding box check first
+    if (lng < polygon.minLng || lng > polygon.maxLng || lat < polygon.minLat || lat > polygon.maxLat) {
+      continue;
+    }
+
+    // Point is inside bbox, do full polygon test
+    if (pointInPolygonWithHoles(lng, lat, polygon.rings)) {
+      return true;
     }
   }
   return false;
@@ -716,18 +768,86 @@ function pointToSegmentDistanceMeters(
 }
 
 /**
- * Check if a point is near any road (within road buffer width)
+ * Pre-computed road data with bounding box for fast spatial filtering
  */
-function isPointNearRoad(lng: number, lat: number, roads: ParsedFeature[]): boolean {
+interface RoadWithBounds {
+  feature: ParsedFeature;
+  bufferMeters: number;
+  minLng: number;
+  maxLng: number;
+  minLat: number;
+  maxLat: number;
+}
+
+/**
+ * Pre-process roads to compute bounding boxes for fast spatial filtering
+ * This dramatically reduces the number of segment checks needed
+ */
+function preprocessRoads(roads: ParsedFeature[]): RoadWithBounds[] {
+  const result: RoadWithBounds[] = [];
+
+  // Buffer in degrees (approximately 20m at equator, conservative)
+  const bufferDegrees = 0.0002;
+
   for (const feature of roads) {
-    // Only check line features (roads are LineStrings)
     if (feature.type !== 'LineString' && feature.type !== 'MultiLineString') {
       continue;
     }
 
-    // Get road class to determine buffer width
     const roadClass = (feature.properties.class as string) || 'default';
     const bufferMeters = ROAD_BUFFER_METERS[roadClass] || ROAD_BUFFER_METERS.default;
+
+    // Compute bounding box
+    let minLng = Infinity, maxLng = -Infinity;
+    let minLat = Infinity, maxLat = -Infinity;
+
+    if (feature.type === 'LineString') {
+      const coords = feature.coordinates as number[][];
+      for (const [lng, lat] of coords) {
+        if (lng < minLng) minLng = lng;
+        if (lng > maxLng) maxLng = lng;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+      }
+    } else {
+      const lines = feature.coordinates as number[][][];
+      for (const line of lines) {
+        for (const [lng, lat] of line) {
+          if (lng < minLng) minLng = lng;
+          if (lng > maxLng) maxLng = lng;
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+        }
+      }
+    }
+
+    // Expand bounds by buffer
+    result.push({
+      feature,
+      bufferMeters,
+      minLng: minLng - bufferDegrees,
+      maxLng: maxLng + bufferDegrees,
+      minLat: minLat - bufferDegrees,
+      maxLat: maxLat + bufferDegrees,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Check if a point is near any road (within road buffer width)
+ * Uses pre-computed bounding boxes to skip distant roads
+ */
+function isPointNearRoad(lng: number, lat: number, roads: RoadWithBounds[]): boolean {
+  for (const road of roads) {
+    // Fast bounding box check first - skip roads that can't possibly contain this point
+    if (lng < road.minLng || lng > road.maxLng || lat < road.minLat || lat > road.maxLat) {
+      continue;
+    }
+
+    const feature = road.feature;
+    const bufferMeters = road.bufferMeters;
 
     if (feature.type === 'LineString') {
       const coords = feature.coordinates as number[][];
@@ -780,22 +900,28 @@ export async function loadAllTreesForTile(
   // Combine both sources
   let allTrees = [...osmTrees, ...proceduralTrees];
 
+  // Pre-compute bounding boxes for fast spatial filtering
+  // This is done once before the loop instead of checking all polygons/segments per tree
+  const processedWater = preprocessPolygons(waterPolygons);
+  const processedBuildings = preprocessPolygons(buildings);
+  const processedRoads = preprocessRoads(roads);
+
   // Filter out trees that are in water, buildings, or on roads
   allTrees = allTrees.filter(tree => {
     const { lng, lat } = tree;
 
-    // Check water
-    if (waterPolygons.length > 0 && isPointInWater(lng, lat, waterPolygons)) {
+    // Check water (uses pre-computed bounding boxes for fast rejection)
+    if (processedWater.length > 0 && isPointInWater(lng, lat, processedWater)) {
       return false;
     }
 
-    // Check buildings
-    if (buildings.length > 0 && isPointInBuilding(lng, lat, buildings)) {
+    // Check buildings (uses pre-computed bounding boxes for fast rejection)
+    if (processedBuildings.length > 0 && isPointInBuilding(lng, lat, processedBuildings)) {
       return false;
     }
 
-    // Check roads
-    if (roads.length > 0 && isPointNearRoad(lng, lat, roads)) {
+    // Check roads (uses pre-computed bounding boxes for fast rejection)
+    if (processedRoads.length > 0 && isPointNearRoad(lng, lat, processedRoads)) {
       return false;
     }
 
