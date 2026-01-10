@@ -38,7 +38,7 @@ import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsy
 import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE, EXPANDED_TERRAIN } from './constants.js';
 import { getLoadingGate } from './loading-gate.js';
 import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
-import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
+import { initFeaturePicker, clearAllFeatures, unregisterTileForLazyPicking } from './feature-picker.js';
 import { initFeatureModal, showFeatureModal } from './feature-modal.js';
 import { setPlayerTarget, updateInterpolation, getInterpolatedState, removeInterpolatedPlayer } from './interpolation.js';
 import * as THREE from 'three';
@@ -56,6 +56,14 @@ interface TileMeshes {
 let lastLocationHash: string | null = null;
 let lastHashUpdateTime = 0;
 const HASH_UPDATE_INTERVAL = 1000; // Only check/update URL every 1 second
+
+// UI update throttling - DOM updates don't need to happen every frame
+let lastHudUpdateTime = 0;
+let lastPlayerListUpdateTime = 0;
+let lastMinimapUpdateTime = 0;
+const HUD_UPDATE_INTERVAL = 100; // 10 Hz - humans can't perceive faster HUD changes
+const PLAYER_LIST_UPDATE_INTERVAL = 100; // 10 Hz - player list doesn't change that fast
+const MINIMAP_UPDATE_INTERVAL = 50; // 20 Hz - minimap needs slightly smoother updates
 
 /**
  * Parse location from URL hash in format #z/lat/lng (compatible with explore site)
@@ -300,46 +308,81 @@ async function updateTiles(
 
     // Use new texture-based ground rendering if enabled
     if (GROUND_TEXTURE.ENABLED) {
+      // Load terrain and buildings first (high priority)
+      // Trees load in background after terrain is visible
       Promise.all([
         createGroundForTile(tile.x, tile.y, tile.z),
-        createBuildingsForTile(tile.x, tile.y, tile.z),
-        safeCreateTrees()
-      ]).then(([groundGroup, buildingsGroup, treesGroup]) => {
+        createBuildingsForTile(tile.x, tile.y, tile.z)
+      ]).then(([groundGroup, buildingsGroup]) => {
+        // Store partial result - terrain visible immediately
         tileMeshes.set(tile.key, {
           ground: groundGroup,
           base: null,
           transportation: null,
           buildings: buildingsGroup,
-          trees: treesGroup
+          trees: null  // Trees load in background
         });
         loadingTiles.delete(tile.key);
         // Notify loading gate that a tile is ready
         getLoadingGate().onTileLoaded();
+
+        // Now load trees in background (lower priority)
+        // Capture reference to this specific tile's meshes to avoid race condition
+        // where tile is unloaded and reloaded before trees finish loading
+        const meshesRef = tileMeshes.get(tile.key);
+        safeCreateTrees().then(treesGroup => {
+          // Verify this is still the same tile instance (not a replacement)
+          if (tileMeshes.get(tile.key) === meshesRef && meshesRef && treesGroup) {
+            meshesRef.trees = treesGroup;
+          } else if (treesGroup) {
+            // Tile was unloaded or replaced while trees were loading - clean up
+            removeTreesGroup(treesGroup);
+          }
+        });
       }).catch(e => {
         console.warn(`Failed to load tile ${tile.key}:`, e);
         loadingTiles.delete(tile.key);
+        // Clean up lazy picking registration on failure to prevent memory leak
+        unregisterTileForLazyPicking(tile.key);
       });
     } else {
       // Legacy polygon-based rendering
+      // Load terrain, buildings, roads first (high priority)
+      // Trees load in background after terrain is visible
       Promise.all([
         createBaseLayerForTile(tile.x, tile.y, tile.z),
         createBuildingsForTile(tile.x, tile.y, tile.z),
-        createTransportationForTile(tile.x, tile.y, tile.z),
-        safeCreateTrees()
-      ]).then(([baseGroup, buildingsGroup, transportationGroup, treesGroup]) => {
+        createTransportationForTile(tile.x, tile.y, tile.z)
+      ]).then(([baseGroup, buildingsGroup, transportationGroup]) => {
+        // Store partial result - terrain visible immediately
         tileMeshes.set(tile.key, {
           ground: null,
           base: baseGroup,
           buildings: buildingsGroup,
           transportation: transportationGroup,
-          trees: treesGroup
+          trees: null  // Trees load in background
         });
         loadingTiles.delete(tile.key);
         // Notify loading gate that a tile is ready
         getLoadingGate().onTileLoaded();
+
+        // Now load trees in background (lower priority)
+        // Capture reference to this specific tile's meshes to avoid race condition
+        const meshesRef = tileMeshes.get(tile.key);
+        safeCreateTrees().then(treesGroup => {
+          // Verify this is still the same tile instance (not a replacement)
+          if (tileMeshes.get(tile.key) === meshesRef && meshesRef && treesGroup) {
+            meshesRef.trees = treesGroup;
+          } else if (treesGroup) {
+            // Tile was unloaded or replaced while trees were loading - clean up
+            removeTreesGroup(treesGroup);
+          }
+        });
       }).catch(e => {
         console.warn(`Failed to load tile ${tile.key}:`, e);
         loadingTiles.delete(tile.key);
+        // Clean up lazy picking registration on failure to prevent memory leak
+        unregisterTileForLazyPicking(tile.key);
       });
     }
   }
@@ -502,14 +545,25 @@ function gameLoop(time: number): void {
   if (localId) {
     updatePlaneMesh(planeState, localId, localColor);
     players.set(localId, planeState);
-    updatePlayerList(players, localId);
+
+    // Throttle player list updates (DOM rebuild is expensive)
+    if (time - lastPlayerListUpdateTime >= PLAYER_LIST_UPDATE_INTERVAL) {
+      lastPlayerListUpdateTime = time;
+      updatePlayerList(players, localId);
+    }
   }
 
-  // Update HUD
-  updateHUD(planeState);
+  // Throttle HUD updates (humans can't perceive 60Hz text changes)
+  if (time - lastHudUpdateTime >= HUD_UPDATE_INTERVAL) {
+    lastHudUpdateTime = time;
+    updateHUD(planeState);
+  }
 
-  // Update minimap
-  updateMinimap(planeState);
+  // Throttle minimap updates
+  if (time - lastMinimapUpdateTime >= MINIMAP_UPDATE_INTERVAL) {
+    lastMinimapUpdateTime = time;
+    updateMinimap(planeState);
+  }
 
   // Update URL hash with current tile location
   updateLocationHash(planeState.lng, planeState.lat);

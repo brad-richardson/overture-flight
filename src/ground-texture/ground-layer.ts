@@ -2,13 +2,12 @@ import * as THREE from 'three';
 import type { GroundTileData } from './types.js';
 import { TileTextureCache } from './tile-texture-cache.js';
 import { TerrainQuad } from './terrain-quad.js';
-import { loadBaseTile, loadTransportationTile, tileToBounds } from '../tile-manager.js';
+import { tileToBounds } from '../tile-manager.js';
 import { getTerrainHeight, getElevationDataForTile } from '../elevation.js';
 import { lngLatToTile } from '../tile-manager.js';
 import { getScene } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
-import { storeFeatures, removeStoredFeatures } from '../feature-picker.js';
-import type { StoredFeature } from '../feature-picker.js';
+import { registerTileForLazyPicking, unregisterTileForLazyPicking } from '../feature-picker.js';
 import { getFullPipelineWorkerPool } from '../workers/index.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
 import * as profiler from '../profiling/tile-profiler.js';
@@ -146,31 +145,9 @@ async function createGroundForTileInner(
     profiler.recordCacheMiss();
   }
 
-  // Always load features for the current tile (needed for click picking)
-  // Even if texture is cached, we need features for interaction
-  profiler.startPhase(key, 'fetch');
-  const [currentTileBase, currentTileTransport] = await Promise.all([
-    loadBaseTile(tileX, tileY, tileZ),
-    loadTransportationTile(tileX, tileY, tileZ),
-  ]);
-  profiler.endPhase(key, 'fetch');
-
-  // Store features for click picking (only from current tile, not neighbors)
-  // Only include layers that are actually rendered (exclude infrastructure, etc.)
-  const RENDERED_LAYERS = ['land', 'land_use', 'land_cover', 'water', 'segment'];
-  const pickableFeatures = [...currentTileBase, ...currentTileTransport];
-  const storedFeatures: StoredFeature[] = pickableFeatures
-    .filter(f => RENDERED_LAYERS.includes(f.layer || ''))
-    .filter(f => f.type === 'Polygon' || f.type === 'MultiPolygon' ||
-                 f.type === 'LineString' || f.type === 'MultiLineString')
-    .map(f => ({
-      type: f.type as StoredFeature['type'],
-      coordinates: f.coordinates as StoredFeature['coordinates'],
-      properties: f.properties || {},
-      layer: f.layer || 'unknown',
-      tileKey: key
-    }));
-  storeFeatures(key, storedFeatures);
+  // Register tile for lazy feature picking
+  // Features are only loaded when user enables feature picking in settings
+  registerTileForLazyPicking(tileX, tileY, tileZ, key);
 
   if (!texture) {
     // Full pipeline: fetches, parses, renders all in worker (avoids structured clone overhead)
@@ -293,8 +270,8 @@ export function removeGroundGroup(group: THREE.Group): void {
     const cache = getCache();
     cache.unmarkInUse(key);
 
-    // Remove stored features for click picking
-    removeStoredFeatures(key);
+    // Unregister from lazy feature picking
+    unregisterTileForLazyPicking(key);
 
     // Clear promoted status so this position can become an expanded tile again
     demoteFromCore(tileData.x, tileData.y, tileData.z);

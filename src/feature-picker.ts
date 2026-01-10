@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { getScene, getCamera, getRenderer, worldToGeo } from './scene.js';
+import { loadBaseTile, loadTransportationTile, lngLatToTile, getTileZoom } from './tile-manager.js';
 
 /**
  * Feature Picker Module
@@ -8,10 +9,11 @@ import { getScene, getCamera, getRenderer, worldToGeo } from './scene.js';
  * Since buildings and base layer features are merged into single meshes for
  * performance, we use a spatial lookup approach:
  *
- * 1. Store feature data (geometry + properties) when loading tiles
- * 2. Raycast to find 3D world click position
- * 3. Convert to geographic coordinates
- * 4. Find features whose geometry contains/intersects that point
+ * 1. Register tile coordinates when loading tiles (lazy - no feature fetch)
+ * 2. When feature picking is enabled, load features for registered tiles
+ * 3. Raycast to find 3D world click position
+ * 4. Convert to geographic coordinates
+ * 5. Find features whose geometry contains/intersects that point
  */
 
 // Feature data storage
@@ -39,6 +41,15 @@ let isEnabled = false;
 let isInitialized = false;
 let clickStartPos: { x: number; y: number } | null = null;
 const CLICK_THRESHOLD = 5; // pixels - max movement to consider a click vs drag
+
+// Lazy loading state
+// Tiles are registered during creation but features are only loaded when picking is enabled
+const registeredTiles = new Map<string, { x: number; y: number; z: number }>();
+const loadedTiles = new Set<string>();
+let isLoadingFeatures = false;
+
+// Layers that are rendered and should be pickable
+const RENDERED_LAYERS = ['land', 'land_use', 'land_cover', 'water', 'segment'];
 
 /**
  * Calculate bounding box for a feature
@@ -111,6 +122,105 @@ export function removeStoredFeatures(tileKey: string): void {
  */
 export function clearAllFeatures(): void {
   featuresByTile.clear();
+}
+
+// ============================================================================
+// LAZY LOADING SYSTEM
+// Tiles are registered during creation, features loaded on-demand when picking enabled
+// ============================================================================
+
+/**
+ * Register a tile for lazy feature loading
+ * Called during tile creation - does NOT fetch features
+ */
+export function registerTileForLazyPicking(x: number, y: number, z: number, key: string): void {
+  registeredTiles.set(key, { x, y, z });
+
+  // If picking is already enabled, load features for this tile
+  if (isEnabled && !loadedTiles.has(key)) {
+    loadFeaturesForTile(key, x, y, z);
+  }
+}
+
+/**
+ * Unregister a tile (called during tile cleanup)
+ */
+export function unregisterTileForLazyPicking(key: string): void {
+  registeredTiles.delete(key);
+  loadedTiles.delete(key);
+  featuresByTile.delete(key);
+}
+
+/**
+ * Load features for a single tile
+ */
+async function loadFeaturesForTile(key: string, x: number, y: number, z: number): Promise<void> {
+  if (loadedTiles.has(key)) return;
+
+  try {
+    const [baseFeatures, transportFeatures] = await Promise.all([
+      loadBaseTile(x, y, z),
+      loadTransportationTile(x, y, z),
+    ]);
+
+    // Filter to only pickable layers and convert to StoredFeature format
+    const allFeatures = [...baseFeatures, ...transportFeatures];
+    const storedFeatures: StoredFeature[] = allFeatures
+      .filter(f => RENDERED_LAYERS.includes(f.layer || ''))
+      .filter(f => f.type === 'Polygon' || f.type === 'MultiPolygon' ||
+                   f.type === 'LineString' || f.type === 'MultiLineString')
+      .map(f => ({
+        type: f.type as StoredFeature['type'],
+        coordinates: f.coordinates as StoredFeature['coordinates'],
+        properties: f.properties || {},
+        layer: f.layer || 'unknown',
+        tileKey: key,
+        bbox: calculateBBox(f.type, f.coordinates as StoredFeature['coordinates']),
+      }));
+
+    // Check if tile was unregistered during async fetch (race condition)
+    if (!registeredTiles.has(key)) {
+      return; // Tile was unloaded, discard results
+    }
+
+    storeFeatures(key, storedFeatures);
+    loadedTiles.add(key);
+  } catch (error) {
+    console.warn(`[FeaturePicker] Failed to load features for tile ${key}:`, error);
+  }
+}
+
+/**
+ * Load features for all registered tiles that haven't been loaded yet
+ * Called when feature picking is enabled
+ */
+async function loadFeaturesForRegisteredTiles(): Promise<void> {
+  if (isLoadingFeatures) return;
+  isLoadingFeatures = true;
+
+  try {
+    const tilesToLoad = [...registeredTiles.entries()]
+      .filter(([key]) => !loadedTiles.has(key));
+
+    if (tilesToLoad.length === 0) {
+      return;
+    }
+
+    console.log(`[FeaturePicker] Loading features for ${tilesToLoad.length} tiles...`);
+
+    // Load tiles in parallel (but limit concurrency to avoid flooding)
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < tilesToLoad.length; i += BATCH_SIZE) {
+      const batch = tilesToLoad.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        batch.map(([key, { x, y, z }]) => loadFeaturesForTile(key, x, y, z))
+      );
+    }
+
+    console.log(`[FeaturePicker] Loaded features for ${tilesToLoad.length} tiles`);
+  } finally {
+    isLoadingFeatures = false;
+  }
 }
 
 /**
@@ -258,9 +368,37 @@ const LAYER_PRIORITY: Record<string, number> = {
 const BACKGROUND_LAYERS = new Set(['bathymetry', 'land', 'land_cover', 'land_use']);
 
 /**
+ * Get tile keys that could contain features at the given location
+ * Includes clicked tile and neighbors to handle edge cases
+ */
+function getRelevantTileKeys(lng: number, lat: number): string[] {
+  const zoom = getTileZoom();
+  const [tileX, tileY] = lngLatToTile(lng, lat, zoom);
+
+  const keys: string[] = [];
+  const prefixes = ['base', 'buildings'];
+
+  // Check clicked tile and immediate neighbors (handles tolerance at tile edges)
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const x = tileX + dx;
+      const y = tileY + dy;
+      for (const prefix of prefixes) {
+        keys.push(`${prefix}-${zoom}/${x}/${y}`);
+      }
+    }
+  }
+
+  return keys;
+}
+
+/**
  * Find features at a geographic location
  * Returns features sorted by priority (buildings first, background layers last)
  * Filters out background layers when more specific features are found
+ *
+ * Optimization: Only searches tiles that could contain the clicked point,
+ * making this O(1) relative to total loaded area instead of O(N).
  */
 export function findFeaturesAtLocation(
   lng: number,
@@ -269,7 +407,13 @@ export function findFeaturesAtLocation(
 ): StoredFeature[] {
   const results: StoredFeature[] = [];
 
-  for (const features of featuresByTile.values()) {
+  // Only search tiles that could contain features at this location
+  const relevantKeys = getRelevantTileKeys(lng, lat);
+
+  for (const key of relevantKeys) {
+    const features = featuresByTile.get(key);
+    if (!features) continue;
+
     for (const feature of features) {
       // Quick bounding box check
       if (feature.bbox) {
@@ -456,9 +600,16 @@ export function initFeaturePicker(
 
 /**
  * Enable/disable feature picker
+ * When enabled, loads features for all registered tiles (lazy loading)
  */
 export function setFeaturePickerEnabled(enabled: boolean): void {
+  const wasEnabled = isEnabled;
   isEnabled = enabled;
+
+  // If enabling and not already enabled, load features for registered tiles
+  if (enabled && !wasEnabled) {
+    loadFeaturesForRegisteredTiles();
+  }
 }
 
 /**

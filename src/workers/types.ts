@@ -23,16 +23,6 @@ export interface ParsedFeature {
 }
 
 /**
- * Payload for rendering a tile texture
- */
-export interface RenderTileTexturePayload {
-  baseFeatures: ParsedFeature[];
-  transportFeatures: ParsedFeature[];
-  bounds: TileBounds;
-  textureSize: number;
-}
-
-/**
  * Scene origin for coordinate conversion
  * Used by geometry workers to convert geo coords to world coords
  */
@@ -222,6 +212,20 @@ export interface BuildingFeatureInput {
 }
 
 /**
+ * Elevation configuration for worker-side terrain lookups
+ */
+export interface ElevationConfig {
+  /** URL template with {z}, {x}, {y} placeholders */
+  urlTemplate: string;
+  /** Zoom level for elevation tiles */
+  zoom: number;
+  /** Tile size (typically 256) */
+  tileSize: number;
+  /** Terrarium offset constant (32768) */
+  terrariumOffset: number;
+}
+
+/**
  * Payload for building geometry creation
  */
 export interface CreateBuildingGeometryPayload {
@@ -237,11 +241,8 @@ export interface CreateBuildingGeometryPayload {
   lodLevel: number;
   /** Default building height when not specified */
   defaultHeight: number;
-  /** Terrain heights for building footprints (optional, for terrain following) */
-  terrainHeights?: {
-    /** Map from building index to [minHeight, maxHeight] */
-    [buildingIndex: number]: [number, number];
-  };
+  /** Elevation config for worker-side terrain lookups */
+  elevationConfig?: ElevationConfig;
   /** Vertical exaggeration factor for terrain */
   verticalExaggeration: number;
 }
@@ -276,24 +277,87 @@ export interface CreateBuildingGeometryResult {
 }
 
 /**
+ * Tree data for rendering
+ */
+export interface TreeData {
+  lat: number;
+  lng: number;
+  height?: number;
+  leafType?: string;  // 'needleleaved' | 'broadleaved'
+  terrainHeight?: number;  // Terrain elevation at tree position (computed in worker)
+}
+
+/**
+ * Landcover configuration for procedural tree generation
+ */
+export interface LandcoverTreeConfig {
+  density: number;
+  coniferRatio: number;
+  minHeight: number;
+  maxHeight: number;
+  heightVariation: number;
+}
+
+/**
+ * Payload for tree processing
+ * Note: Worker fetches its own PMTiles data and tree hints to avoid structured clone overhead
+ */
+export interface ProcessTreesPayload {
+  /** Tile coordinates */
+  tileX: number;
+  tileY: number;
+  tileZ: number;
+  /** Landcover tree config */
+  landcoverConfig: Record<string, LandcoverTreeConfig>;
+  /** Maximum trees per category */
+  maxProceduralTrees: number;
+  maxOSMDensityTrees: number;
+  /** PMTiles URLs for worker to fetch data */
+  basePMTilesUrl: string;
+  buildingsPMTilesUrl: string;
+  transportationPMTilesUrl: string;
+  /** URL for tree-tiles.bin (OSM tree density hints) */
+  treeTilesUrl: string;
+  /** Elevation config for worker-side terrain lookups */
+  elevationConfig?: ElevationConfig;
+  /** Vertical exaggeration factor for terrain */
+  verticalExaggeration?: number;
+}
+
+/**
+ * Result of tree processing
+ */
+export interface ProcessTreesResult {
+  /** Filtered tree data */
+  trees: TreeData[];
+  /** Stats */
+  stats: {
+    osmTrees: number;
+    proceduralTrees: number;
+    filteredOut: number;
+  };
+}
+
+/**
  * Request types (main thread -> worker)
  */
 export type WorkerRequest =
-  | { type: 'RENDER_TILE_TEXTURE'; id: string; payload: RenderTileTexturePayload }
   | { type: 'CREATE_BASE_GEOMETRY'; id: string; payload: CreateBaseGeometryPayload }
   | { type: 'CREATE_BUILDING_GEOMETRY'; id: string; payload: CreateBuildingGeometryPayload }
   | { type: 'PARSE_MVT'; id: string; payload: ParseMVTPayload }
   | { type: 'DECODE_ELEVATION'; id: string; payload: DecodeElevationPayload }
+  | { type: 'PROCESS_TREES'; id: string; payload: ProcessTreesPayload }
   | { type: 'CAPABILITY_CHECK'; id: string };
 
 /**
  * Response types (worker -> main thread)
  */
 export type WorkerResponse =
-  | { type: 'RENDER_TILE_TEXTURE_RESULT'; id: string; result: ImageBitmap }
+  | { type: 'RENDER_TILE_TEXTURE_RESULT'; id: string; result: ImageBitmap }  // Used by full-pipeline worker
   | { type: 'CREATE_BASE_GEOMETRY_RESULT'; id: string; result: BaseGeometryResult }
   | { type: 'CREATE_BUILDING_GEOMETRY_RESULT'; id: string; result: CreateBuildingGeometryResult }
   | { type: 'PARSE_MVT_RESULT'; id: string; result: ParseMVTResult }
   | { type: 'DECODE_ELEVATION_RESULT'; id: string; result: DecodeElevationResult }
+  | { type: 'PROCESS_TREES_RESULT'; id: string; result: ProcessTreesResult }
   | { type: 'CAPABILITY_CHECK_RESULT'; id: string; supported: boolean }
   | { type: 'ERROR'; id: string; error: string };
