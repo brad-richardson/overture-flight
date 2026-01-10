@@ -164,6 +164,8 @@ export async function createBuildingsForTile(
   } catch (error) {
     // Ensure cleanup on error to prevent permanently stuck entries
     loadingBuildingTiles.delete(tileKey);
+    // Clean up stored features to prevent memory leak
+    removeStoredFeatures(tileKey);
     throw error;
   }
 }

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { getScene, getCamera, getRenderer, worldToGeo } from './scene.js';
-import { loadBaseTile, loadTransportationTile } from './tile-manager.js';
+import { loadBaseTile, loadTransportationTile, lngLatToTile, getTileZoom } from './tile-manager.js';
 
 /**
  * Feature Picker Module
@@ -177,6 +177,11 @@ async function loadFeaturesForTile(key: string, x: number, y: number, z: number)
         tileKey: key,
         bbox: calculateBBox(f.type, f.coordinates as StoredFeature['coordinates']),
       }));
+
+    // Check if tile was unregistered during async fetch (race condition)
+    if (!registeredTiles.has(key)) {
+      return; // Tile was unloaded, discard results
+    }
 
     storeFeatures(key, storedFeatures);
     loadedTiles.add(key);
@@ -363,9 +368,37 @@ const LAYER_PRIORITY: Record<string, number> = {
 const BACKGROUND_LAYERS = new Set(['bathymetry', 'land', 'land_cover', 'land_use']);
 
 /**
+ * Get tile keys that could contain features at the given location
+ * Includes clicked tile and neighbors to handle edge cases
+ */
+function getRelevantTileKeys(lng: number, lat: number): string[] {
+  const zoom = getTileZoom();
+  const [tileX, tileY] = lngLatToTile(lng, lat, zoom);
+
+  const keys: string[] = [];
+  const prefixes = ['base', 'buildings'];
+
+  // Check clicked tile and immediate neighbors (handles tolerance at tile edges)
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const x = tileX + dx;
+      const y = tileY + dy;
+      for (const prefix of prefixes) {
+        keys.push(`${prefix}-${zoom}/${x}/${y}`);
+      }
+    }
+  }
+
+  return keys;
+}
+
+/**
  * Find features at a geographic location
  * Returns features sorted by priority (buildings first, background layers last)
  * Filters out background layers when more specific features are found
+ *
+ * Optimization: Only searches tiles that could contain the clicked point,
+ * making this O(1) relative to total loaded area instead of O(N).
  */
 export function findFeaturesAtLocation(
   lng: number,
@@ -374,7 +407,13 @@ export function findFeaturesAtLocation(
 ): StoredFeature[] {
   const results: StoredFeature[] = [];
 
-  for (const features of featuresByTile.values()) {
+  // Only search tiles that could contain features at this location
+  const relevantKeys = getRelevantTileKeys(lng, lat);
+
+  for (const key of relevantKeys) {
+    const features = featuresByTile.get(key);
+    if (!features) continue;
+
     for (const feature of features) {
       // Quick bounding box check
       if (feature.bbox) {

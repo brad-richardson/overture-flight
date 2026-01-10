@@ -38,7 +38,7 @@ import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsy
 import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE, EXPANDED_TERRAIN } from './constants.js';
 import { getLoadingGate } from './loading-gate.js';
 import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
-import { initFeaturePicker, clearAllFeatures } from './feature-picker.js';
+import { initFeaturePicker, clearAllFeatures, unregisterTileForLazyPicking } from './feature-picker.js';
 import { initFeatureModal, showFeatureModal } from './feature-modal.js';
 import { setPlayerTarget, updateInterpolation, getInterpolatedState, removeInterpolatedPlayer } from './interpolation.js';
 import * as THREE from 'three';
@@ -339,6 +339,8 @@ async function updateTiles(
       }).catch(e => {
         console.warn(`Failed to load tile ${tile.key}:`, e);
         loadingTiles.delete(tile.key);
+        // Clean up lazy picking registration on failure to prevent memory leak
+        unregisterTileForLazyPicking(tile.key);
       });
     } else {
       // Legacy polygon-based rendering
@@ -374,6 +376,8 @@ async function updateTiles(
       }).catch(e => {
         console.warn(`Failed to load tile ${tile.key}:`, e);
         loadingTiles.delete(tile.key);
+        // Clean up lazy picking registration on failure to prevent memory leak
+        unregisterTileForLazyPicking(tile.key);
       });
     }
   }
