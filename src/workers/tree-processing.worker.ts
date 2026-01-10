@@ -1071,7 +1071,6 @@ interface ProcessTreesPayloadInternal {
   buildingsPMTilesUrl: string;
   transportationPMTilesUrl: string;
   treeTilesUrl: string;
-  treeTilesZoom: number;
   elevationConfig?: ElevationConfig;
   verticalExaggeration?: number;
 }
@@ -1088,7 +1087,6 @@ async function processTrees(payload: ProcessTreesPayloadInternal): Promise<Proce
     buildingsPMTilesUrl,
     transportationPMTilesUrl,
     treeTilesUrl,
-    // treeTilesZoom is ignored - we read the actual zoom from the file header
     elevationConfig,
     verticalExaggeration = 1.0,
   } = payload;

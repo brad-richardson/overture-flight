@@ -68,10 +68,12 @@ interface WorkerState {
 const TASK_TIMEOUT_MS = 10000;
 
 /**
- * Extended timeout for tree processing (30 seconds)
- * Tree processing may need to load tree-tiles.bin and initialize PMTiles on first request
+ * Timeouts for tree processing
+ * First request is longer because it may need to load tree-tiles.bin and initialize PMTiles
+ * Subsequent requests use standard timeout since data is cached
  */
-const TREE_PROCESSING_TIMEOUT_MS = 30000;
+const TREE_PROCESSING_INITIAL_TIMEOUT_MS = 30000;
+const TREE_PROCESSING_STANDARD_TIMEOUT_MS = 10000;
 
 /**
  * Geometry worker pool for base layer geometry creation
@@ -1982,6 +1984,8 @@ export class TreeProcessingWorkerPool {
   private isSupported = true;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
+  /** Track if first request completed successfully (for adaptive timeout) */
+  private hasCompletedFirstRequest = false;
 
   constructor(private poolSize: number = Math.min(getOptimalPoolSize(), 2)) {
     // Use fewer workers for tree processing (typically 2 is enough)
@@ -2098,6 +2102,8 @@ export class TreeProcessingWorkerPool {
         clearTimeout(task.timeoutId);
         this.pendingTasks.delete(response.id);
         this.workers[task.workerIndex].pendingCount--;
+        // Mark first request complete for adaptive timeout
+        this.hasCompletedFirstRequest = true;
         task.resolve(response.result);
       }
       return;
@@ -2196,11 +2202,16 @@ export class TreeProcessingWorkerPool {
       const workerIndex = this.getLeastLoadedWorker();
       const state = this.workers[workerIndex];
 
+      // Use longer timeout for first request (needs to load tree-tiles.bin and init PMTiles)
+      const timeout = this.hasCompletedFirstRequest
+        ? TREE_PROCESSING_STANDARD_TIMEOUT_MS
+        : TREE_PROCESSING_INITIAL_TIMEOUT_MS;
+
       const timeoutId = setTimeout(() => {
         this.pendingTasks.delete(request.id);
         state.pendingCount--;
         reject(new Error('Task timeout'));
-      }, TREE_PROCESSING_TIMEOUT_MS);
+      }, timeout);
 
       this.pendingTasks.set(request.id, {
         resolve: resolve as (value: unknown) => void,
@@ -2230,7 +2241,6 @@ export class TreeProcessingWorkerPool {
     buildingsPMTilesUrl: string,
     transportationPMTilesUrl: string,
     treeTilesUrl: string,
-    treeTilesZoom: number,
     elevationConfig?: ElevationConfig,
     verticalExaggeration?: number
   ): Promise<ProcessTreesResult> {
@@ -2251,7 +2261,6 @@ export class TreeProcessingWorkerPool {
       buildingsPMTilesUrl,
       transportationPMTilesUrl,
       treeTilesUrl,
-      treeTilesZoom,
       elevationConfig,
       verticalExaggeration,
     };

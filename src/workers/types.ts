@@ -318,8 +318,6 @@ export interface ProcessTreesPayload {
   transportationPMTilesUrl: string;
   /** URL for tree-tiles.bin (OSM tree density hints) */
   treeTilesUrl: string;
-  /** Zoom level used in tree-tiles.bin (for coordinate conversion) */
-  treeTilesZoom: number;
   /** Elevation config for worker-side terrain lookups */
   elevationConfig?: ElevationConfig;
   /** Vertical exaggeration factor for terrain */

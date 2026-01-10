@@ -327,12 +327,15 @@ async function updateTiles(
         getLoadingGate().onTileLoaded();
 
         // Now load trees in background (lower priority)
+        // Capture reference to this specific tile's meshes to avoid race condition
+        // where tile is unloaded and reloaded before trees finish loading
+        const meshesRef = tileMeshes.get(tile.key);
         safeCreateTrees().then(treesGroup => {
-          const meshes = tileMeshes.get(tile.key);
-          if (meshes && treesGroup) {
-            meshes.trees = treesGroup;
+          // Verify this is still the same tile instance (not a replacement)
+          if (tileMeshes.get(tile.key) === meshesRef && meshesRef && treesGroup) {
+            meshesRef.trees = treesGroup;
           } else if (treesGroup) {
-            // Tile was unloaded while trees were loading - clean up orphaned group
+            // Tile was unloaded or replaced while trees were loading - clean up
             removeTreesGroup(treesGroup);
           }
         });
@@ -364,12 +367,14 @@ async function updateTiles(
         getLoadingGate().onTileLoaded();
 
         // Now load trees in background (lower priority)
+        // Capture reference to this specific tile's meshes to avoid race condition
+        const meshesRef = tileMeshes.get(tile.key);
         safeCreateTrees().then(treesGroup => {
-          const meshes = tileMeshes.get(tile.key);
-          if (meshes && treesGroup) {
-            meshes.trees = treesGroup;
+          // Verify this is still the same tile instance (not a replacement)
+          if (tileMeshes.get(tile.key) === meshesRef && meshesRef && treesGroup) {
+            meshesRef.trees = treesGroup;
           } else if (treesGroup) {
-            // Tile was unloaded while trees were loading - clean up orphaned group
+            // Tile was unloaded or replaced while trees were loading - clean up
             removeTreesGroup(treesGroup);
           }
         });

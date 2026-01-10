@@ -21,11 +21,8 @@ export type { TreeData };
 // TREE TILES CONFIG
 // ============================================================================
 
-// URL for tree-tiles.bin (worker fetches this directly)
+// URL for tree-tiles.bin (worker fetches this directly and reads zoom from file header)
 const TREE_TILES_URL = `${import.meta.env.BASE_URL}tree-tiles.bin`;
-
-// Default zoom level for tile hints (worker will read actual zoom from file)
-const DEFAULT_TREE_TILES_ZOOM = 14;
 
 // ============================================================================
 // LANDCOVER CONFIGURATION (passed to worker)
@@ -399,7 +396,6 @@ export async function createTreesForTile(
     OVERTURE_BUILDINGS_PMTILES,
     OVERTURE_TRANSPORTATION_PMTILES,
     TREE_TILES_URL,
-    DEFAULT_TREE_TILES_ZOOM,
     elevationConfig,
     ELEVATION.VERTICAL_EXAGGERATION
   );
