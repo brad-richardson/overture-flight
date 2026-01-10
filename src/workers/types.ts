@@ -266,6 +266,63 @@ export interface CreateBuildingGeometryResult {
 }
 
 /**
+ * Tree data for rendering
+ */
+export interface TreeData {
+  lat: number;
+  lng: number;
+  height?: number;
+  leafType?: string;  // 'needleleaved' | 'broadleaved'
+}
+
+/**
+ * Landcover configuration for procedural tree generation
+ */
+export interface LandcoverTreeConfig {
+  density: number;
+  coniferRatio: number;
+  minHeight: number;
+  maxHeight: number;
+  heightVariation: number;
+}
+
+/**
+ * Payload for tree processing
+ * Note: Worker fetches its own PMTiles data to avoid structured clone overhead
+ */
+export interface ProcessTreesPayload {
+  /** Tile coordinates */
+  tileX: number;
+  tileY: number;
+  tileZ: number;
+  /** OSM tree density hint for this tile */
+  tileHint: { count: number; coniferRatio: number } | null;
+  /** Landcover tree config */
+  landcoverConfig: Record<string, LandcoverTreeConfig>;
+  /** Maximum trees per category */
+  maxProceduralTrees: number;
+  maxOSMDensityTrees: number;
+  /** PMTiles URLs for worker to fetch data */
+  basePMTilesUrl: string;
+  buildingsPMTilesUrl: string;
+  transportationPMTilesUrl: string;
+}
+
+/**
+ * Result of tree processing
+ */
+export interface ProcessTreesResult {
+  /** Filtered tree data */
+  trees: TreeData[];
+  /** Stats */
+  stats: {
+    osmTrees: number;
+    proceduralTrees: number;
+    filteredOut: number;
+  };
+}
+
+/**
  * Request types (main thread -> worker)
  */
 export type WorkerRequest =
@@ -273,6 +330,7 @@ export type WorkerRequest =
   | { type: 'CREATE_BUILDING_GEOMETRY'; id: string; payload: CreateBuildingGeometryPayload }
   | { type: 'PARSE_MVT'; id: string; payload: ParseMVTPayload }
   | { type: 'DECODE_ELEVATION'; id: string; payload: DecodeElevationPayload }
+  | { type: 'PROCESS_TREES'; id: string; payload: ProcessTreesPayload }
   | { type: 'CAPABILITY_CHECK'; id: string };
 
 /**
@@ -284,5 +342,6 @@ export type WorkerResponse =
   | { type: 'CREATE_BUILDING_GEOMETRY_RESULT'; id: string; result: CreateBuildingGeometryResult }
   | { type: 'PARSE_MVT_RESULT'; id: string; result: ParseMVTResult }
   | { type: 'DECODE_ELEVATION_RESULT'; id: string; result: DecodeElevationResult }
+  | { type: 'PROCESS_TREES_RESULT'; id: string; result: ProcessTreesResult }
   | { type: 'CAPABILITY_CHECK_RESULT'; id: string; supported: boolean }
   | { type: 'ERROR'; id: string; error: string };

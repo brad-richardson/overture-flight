@@ -323,6 +323,9 @@ async function updateTiles(
           const meshes = tileMeshes.get(tile.key);
           if (meshes && treesGroup) {
             meshes.trees = treesGroup;
+          } else if (treesGroup) {
+            // Tile was unloaded while trees were loading - clean up orphaned group
+            removeTreesGroup(treesGroup);
           }
         });
       }).catch(e => {
@@ -355,6 +358,9 @@ async function updateTiles(
           const meshes = tileMeshes.get(tile.key);
           if (meshes && treesGroup) {
             meshes.trees = treesGroup;
+          } else if (treesGroup) {
+            // Tile was unloaded while trees were loading - clean up orphaned group
+            removeTreesGroup(treesGroup);
           }
         });
       }).catch(e => {

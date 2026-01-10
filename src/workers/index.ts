@@ -10,6 +10,7 @@ import type {
   CreateBuildingGeometryPayload,
   ParseMVTPayload,
   DecodeElevationPayload,
+  ProcessTreesPayload,
   ParsedFeature,
   CompactFeature,
   SceneOrigin,
@@ -18,11 +19,13 @@ import type {
   DecodeElevationResult,
   BuildingFeatureInput,
   CreateBuildingGeometryResult,
+  ProcessTreesResult,
+  LandcoverTreeConfig,
 } from './types.js';
 import { WORKERS } from '../constants.js';
 
 // Re-export types for convenience
-export type { TileBounds, ParsedFeature, SceneOrigin, BaseGeometryResult, GeometryBufferGroup, LineGeometryBufferGroup, ParseMVTResult, CompactFeature, BuildingFeatureInput, CreateBuildingGeometryResult, BuildingGeometryBuffers } from './types.js';
+export type { TileBounds, ParsedFeature, SceneOrigin, BaseGeometryResult, GeometryBufferGroup, LineGeometryBufferGroup, ParseMVTResult, CompactFeature, BuildingFeatureInput, CreateBuildingGeometryResult, BuildingGeometryBuffers, ProcessTreesResult, TreeData, LandcoverTreeConfig } from './types.js';
 
 /**
  * Get optimal worker pool size based on device capabilities and config
@@ -1958,5 +1961,352 @@ export function resetFullPipelineWorkerPool(): void {
   if (fullPipelinePoolInstance) {
     fullPipelinePoolInstance.terminate();
     fullPipelinePoolInstance = null;
+  }
+}
+
+// =============================================================================
+// Tree Processing Worker Pool
+// Offloads tree generation and spatial filtering to workers
+// =============================================================================
+
+export class TreeProcessingWorkerPool {
+  private workers: WorkerState[] = [];
+  private pendingTasks = new Map<string, PendingTask>();
+  private isSupported = true;
+  private initialized = false;
+  private initPromise: Promise<void> | null = null;
+
+  constructor(private poolSize: number = Math.min(getOptimalPoolSize(), 2)) {
+    // Use fewer workers for tree processing (typically 2 is enough)
+  }
+
+  /**
+   * Initialize the tree processing worker pool
+   */
+  async initialize(): Promise<boolean> {
+    if (this.initialized) return this.isSupported;
+
+    if (this.initPromise) {
+      await this.initPromise;
+      return this.isSupported;
+    }
+
+    this.initPromise = this.doInitialize();
+    await this.initPromise;
+    return this.isSupported;
+  }
+
+  private async doInitialize(): Promise<void> {
+    for (let i = 0; i < this.poolSize; i++) {
+      try {
+        const worker = new Worker(
+          new URL('./tree-processing.worker.ts', import.meta.url),
+          { type: 'module' }
+        );
+
+        const state: WorkerState = {
+          worker,
+          ready: false,
+          pendingCount: 0,
+        };
+
+        worker.onmessage = (event) => this.handleMessage(i, event);
+        worker.onerror = (event) => this.handleError(i, event);
+        worker.onmessageerror = () => this.handleMessageError(i);
+
+        this.workers.push(state);
+      } catch (error) {
+        console.warn(`Failed to create tree processing worker ${i}:`, error);
+      }
+    }
+
+    if (this.workers.length === 0) {
+      console.warn('No tree processing workers could be created, falling back to main thread');
+      this.isSupported = false;
+      this.initialized = true;
+      return;
+    }
+
+    // Check capability
+    try {
+      const supported = await this.checkCapability(0);
+      if (!supported) {
+        console.warn('Tree processing worker capability check failed');
+        this.isSupported = false;
+        this.terminate();
+      }
+    } catch (error) {
+      console.warn('Tree processing worker capability check failed:', error);
+      this.isSupported = false;
+      this.terminate();
+    }
+
+    this.initialized = true;
+  }
+
+  private checkCapability(workerIndex: number): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      const id = crypto.randomUUID();
+      const timeout = setTimeout(() => {
+        this.pendingTasks.delete(id);
+        reject(new Error('Capability check timeout'));
+      }, 5000);
+
+      this.pendingTasks.set(id, {
+        resolve: (result) => resolve(result as boolean),
+        reject,
+        workerIndex,
+        timeoutId: timeout,
+        countIncremented: false,
+      });
+
+      const request: WorkerRequest = { type: 'CAPABILITY_CHECK', id };
+      this.workers[workerIndex].worker.postMessage(request);
+    });
+  }
+
+  private handleMessage(workerIndex: number, event: MessageEvent<WorkerResponse | { type: 'READY' }>): void {
+    const data = event.data;
+
+    if (data.type === 'READY') {
+      this.workers[workerIndex].ready = true;
+      return;
+    }
+
+    const response = data as WorkerResponse;
+
+    if (response.type === 'CAPABILITY_CHECK_RESULT') {
+      const task = this.pendingTasks.get(response.id);
+      if (task) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(response.id);
+        task.resolve(response.supported);
+      }
+      return;
+    }
+
+    if (response.type === 'PROCESS_TREES_RESULT') {
+      const task = this.pendingTasks.get(response.id);
+      if (task) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(response.id);
+        this.workers[task.workerIndex].pendingCount--;
+        task.resolve(response.result);
+      }
+      return;
+    }
+
+    if (response.type === 'ERROR') {
+      const task = this.pendingTasks.get(response.id);
+      if (task) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(response.id);
+        this.workers[task.workerIndex].pendingCount--;
+        task.reject(new Error(response.error));
+      }
+      return;
+    }
+  }
+
+  private handleError(workerIndex: number, event: ErrorEvent): void {
+    console.error(`Tree processing worker ${workerIndex} error:`, event.message);
+
+    for (const [id, task] of this.pendingTasks) {
+      if (task.workerIndex === workerIndex) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(id);
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
+        task.reject(new Error(`Worker error: ${event.message}`));
+      }
+    }
+
+    this.replaceWorker(workerIndex);
+  }
+
+  private handleMessageError(workerIndex: number): void {
+    console.error(`Tree processing worker ${workerIndex} message error`);
+
+    for (const [id, task] of this.pendingTasks) {
+      if (task.workerIndex === workerIndex) {
+        clearTimeout(task.timeoutId);
+        this.pendingTasks.delete(id);
+        if (task.countIncremented) {
+          this.workers[task.workerIndex].pendingCount--;
+        }
+        task.reject(new Error('Worker message error'));
+      }
+    }
+  }
+
+  private replaceWorker(workerIndex: number): void {
+    try {
+      this.workers[workerIndex]?.worker.terminate();
+
+      const worker = new Worker(
+        new URL('./tree-processing.worker.ts', import.meta.url),
+        { type: 'module' }
+      );
+
+      const state: WorkerState = {
+        worker,
+        ready: false,
+        pendingCount: 0,
+      };
+
+      worker.onmessage = (event) => this.handleMessage(workerIndex, event);
+      worker.onerror = (event) => this.handleError(workerIndex, event);
+      worker.onmessageerror = () => this.handleMessageError(workerIndex);
+
+      this.workers[workerIndex] = state;
+    } catch (error) {
+      console.error(`Failed to replace tree processing worker ${workerIndex}:`, error);
+    }
+  }
+
+  private getLeastLoadedWorker(): number {
+    let minLoad = Infinity;
+    let minIndex = 0;
+
+    for (let i = 0; i < this.workers.length; i++) {
+      const state = this.workers[i];
+      if (state.ready && state.pendingCount < minLoad) {
+        minLoad = state.pendingCount;
+        minIndex = i;
+      }
+    }
+
+    return minIndex;
+  }
+
+  private sendRequest<T>(request: WorkerRequest): Promise<T> {
+    if (!this.isSupported || this.workers.length === 0) {
+      return Promise.reject(new Error('Tree processing worker pool not available'));
+    }
+
+    return new Promise((resolve, reject) => {
+      const workerIndex = this.getLeastLoadedWorker();
+      const state = this.workers[workerIndex];
+
+      const timeoutId = setTimeout(() => {
+        this.pendingTasks.delete(request.id);
+        state.pendingCount--;
+        reject(new Error('Task timeout'));
+      }, TASK_TIMEOUT_MS);
+
+      this.pendingTasks.set(request.id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        workerIndex,
+        timeoutId,
+        countIncremented: true,
+      });
+
+      state.pendingCount++;
+      state.worker.postMessage(request);
+    });
+  }
+
+  /**
+   * Process trees using a worker
+   * Worker fetches PMTiles data directly to avoid structured clone overhead
+   */
+  async processTrees(
+    tileX: number,
+    tileY: number,
+    tileZ: number,
+    tileHint: { count: number; coniferRatio: number } | null,
+    landcoverConfig: Record<string, LandcoverTreeConfig>,
+    maxProceduralTrees: number,
+    maxOSMDensityTrees: number,
+    basePMTilesUrl: string,
+    buildingsPMTilesUrl: string,
+    transportationPMTilesUrl: string
+  ): Promise<ProcessTreesResult> {
+    await this.initialize();
+
+    if (!this.isSupported) {
+      throw new Error('Tree processing worker pool not supported');
+    }
+
+    const payload: ProcessTreesPayload = {
+      tileX,
+      tileY,
+      tileZ,
+      tileHint,
+      landcoverConfig,
+      maxProceduralTrees,
+      maxOSMDensityTrees,
+      basePMTilesUrl,
+      buildingsPMTilesUrl,
+      transportationPMTilesUrl,
+    };
+
+    const request: WorkerRequest = {
+      type: 'PROCESS_TREES',
+      id: crypto.randomUUID(),
+      payload,
+    };
+
+    return this.sendRequest<ProcessTreesResult>(request);
+  }
+
+  /**
+   * Check if tree processing worker is supported
+   */
+  async isWorkerSupported(): Promise<boolean> {
+    await this.initialize();
+    return this.isSupported;
+  }
+
+  /**
+   * Terminate all tree processing workers
+   */
+  terminate(): void {
+    for (const [_id, task] of this.pendingTasks) {
+      clearTimeout(task.timeoutId);
+      task.reject(new Error('Tree processing worker pool terminated'));
+    }
+    this.pendingTasks.clear();
+
+    for (const state of this.workers) {
+      state.worker.terminate();
+    }
+    this.workers = [];
+  }
+
+  /**
+   * Get pool statistics
+   */
+  getStats(): { workerCount: number; pendingTasks: number; isSupported: boolean } {
+    return {
+      workerCount: this.workers.length,
+      pendingTasks: this.pendingTasks.size,
+      isSupported: this.isSupported,
+    };
+  }
+}
+
+// Tree processing pool singleton
+let treeProcessingPoolInstance: TreeProcessingWorkerPool | null = null;
+
+/**
+ * Get the global tree processing worker pool instance
+ */
+export function getTreeProcessingWorkerPool(): TreeProcessingWorkerPool {
+  if (!treeProcessingPoolInstance) {
+    treeProcessingPoolInstance = new TreeProcessingWorkerPool();
+  }
+  return treeProcessingPoolInstance;
+}
+
+/**
+ * Reset the tree processing worker pool (for testing)
+ */
+export function resetTreeProcessingWorkerPool(): void {
+  if (treeProcessingPoolInstance) {
+    treeProcessingPoolInstance.terminate();
+    treeProcessingPoolInstance = null;
   }
 }
