@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { ELEVATION } from '../constants.js';
 
 export type RendererType = 'webgpu' | 'webgl';
 
@@ -19,6 +18,9 @@ export interface RendererResult {
  * - WebGPURenderer initializes successfully
  *
  * Falls back to WebGL if any of the above fail.
+ *
+ * Note: GPU terrain displacement now works with both WebGL (onBeforeCompile)
+ * and WebGPU (TSL nodes), so no fallback is required.
  */
 export async function createRenderer(options: {
   antialias?: boolean;
@@ -28,14 +30,7 @@ export async function createRenderer(options: {
   const webgpuParam = urlParams.get('webgpu');
   const webgpuDisabledByParam = webgpuParam === '0';
 
-  // Check for GPU displacement conflict - it uses onBeforeCompile which doesn't work with WebGPU
-  const gpuDisplacementEnabled = ELEVATION.GPU_DISPLACEMENT;
-  if (gpuDisplacementEnabled && !webgpuDisabledByParam) {
-    console.warn('[Renderer] GPU terrain displacement (VITE_GPU_TERRAIN) is incompatible with WebGPU.');
-    console.warn('[Renderer] Falling back to WebGL. Use ?webgpu=0 or disable VITE_GPU_TERRAIN to suppress this warning.');
-  }
-
-  const preferWebGPU = !webgpuDisabledByParam && !gpuDisplacementEnabled && import.meta.env.VITE_PREFER_WEBGPU !== 'false';
+  const preferWebGPU = !webgpuDisabledByParam && import.meta.env.VITE_PREFER_WEBGPU !== 'false';
 
   if (preferWebGPU && 'gpu' in navigator) {
     try {

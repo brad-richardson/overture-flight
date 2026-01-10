@@ -56,8 +56,8 @@ const vertexDisplacementPars = /* glsl */ `
     vec2 localPos = worldPos - uTileCenter;
     vec2 normalizedPos = (localPos / uTileDimensions) + 0.5;
 
-    // Clamp to prevent edge artifacts
-    normalizedPos = clamp(normalizedPos, 0.001, 0.999);
+    // Clamp to valid texture range (ClampToEdgeWrapping handles edge pixels)
+    normalizedPos = clamp(normalizedPos, 0.0, 1.0);
 
     // Sample elevation
     float elevation = texture2D(uElevationMap, normalizedPos).r;

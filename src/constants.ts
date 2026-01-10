@@ -157,7 +157,6 @@ export interface ElevationConfig {
   TERRAIN_SEGMENTS: number;
   TERRAIN_ENABLED: boolean;
   VERTICAL_EXAGGERATION: number;
-  GPU_DISPLACEMENT: boolean;  // Use GPU shader for terrain displacement (experimental)
 }
 
 export const ELEVATION: ElevationConfig = {
@@ -169,7 +168,6 @@ export const ELEVATION: ElevationConfig = {
   TERRAIN_SEGMENTS: 32,       // Subdivisions per terrain mesh (reduced for perf)
   TERRAIN_ENABLED: true,      // Enable/disable terrain elevation
   VERTICAL_EXAGGERATION: 1.0, // Multiply elevation values (1.0 = realistic)
-  GPU_DISPLACEMENT: import.meta.env.VITE_GPU_TERRAIN === 'true', // GPU shader for displacement (experimental)
 };
 
 // Ground texture rendering settings

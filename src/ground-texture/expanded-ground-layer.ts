@@ -3,8 +3,8 @@ import type { GroundTileData } from './types.js';
 import { TileTextureCache } from './tile-texture-cache.js';
 import { TerrainQuad } from './terrain-quad.js';
 import { tileToBounds, lngLatToTile } from '../tile-manager.js';
-import { getTerrainHeight, getElevationDataForTile } from '../elevation.js';
-import { getScene } from '../scene.js';
+import { getElevationDataForTile } from '../elevation.js';
+import { getScene, getRendererType } from '../scene.js';
 import { EXPANDED_TERRAIN, ELEVATION, GROUND_TEXTURE, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
 import { getFullPipelineWorkerPool } from '../workers/index.js';
@@ -208,14 +208,25 @@ async function createExpandedGroundForTileInner(
 
   // Apply terrain elevation
   if (ELEVATION.TERRAIN_ENABLED) {
-    if (ELEVATION.GPU_DISPLACEMENT) {
-      // GPU path: use vertex shader displacement
-      const centerLng = (bounds.west + bounds.east) / 2;
-      const centerLat = (bounds.north + bounds.south) / 2;
-      const [elevTileX, elevTileY] = lngLatToTile(centerLng, centerLat, ELEVATION.ZOOM);
+    // GPU path: use vertex shader displacement
+    // Use integer tile math for deterministic elevation tile selection
+    // Ground tile is Z14, elevation is Z12, so shift by 2 bits (14 - 12 = 2)
+    const zoomDiff = tileZ - ELEVATION.ZOOM;
+    const elevTileX = tileX >> zoomDiff;
+    const elevTileY = tileY >> zoomDiff;
 
-      const elevationData = await getElevationDataForTile(elevTileX, elevTileY);
-      if (elevationData) {
+    const elevationData = await getElevationDataForTile(elevTileX, elevTileY);
+    if (elevationData) {
+      // Use WebGPU or WebGL displacement path based on renderer type
+      const rendererType = getRendererType();
+      if (rendererType === 'webgpu') {
+        await quad.applyGPUDisplacementWebGPU(
+          elevationData.heights,
+          ELEVATION.TILE_SIZE,
+          elevationData.bounds,
+          ELEVATION.VERTICAL_EXAGGERATION
+        );
+      } else {
         quad.applyGPUDisplacement(
           elevationData.heights,
           ELEVATION.TILE_SIZE,
@@ -223,9 +234,6 @@ async function createExpandedGroundForTileInner(
           ELEVATION.VERTICAL_EXAGGERATION
         );
       }
-    } else {
-      // CPU path: iterate over vertices
-      quad.updateElevation(getTerrainHeight, ELEVATION.VERTICAL_EXAGGERATION);
     }
   }
 

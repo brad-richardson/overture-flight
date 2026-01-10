@@ -1,28 +1,26 @@
 import * as THREE from 'three';
 import type { TileBounds } from './types.js';
-import { geoToWorld, worldToGeo } from '../scene.js';
+import { geoToWorld } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
 import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
 import { disposeTexture } from '../renderer/texture-disposal.js';
 
-// Spike detection: vertex must deviate more than this multiple of neighbor standard deviation
-// Higher values = less aggressive smoothing, preserves more terrain features
-const SPIKE_STDDEV_MULTIPLIER = 3.0;
-
-// Minimum absolute deviation to consider as spike (meters) - prevents smoothing small variations
-const SPIKE_MIN_DEVIATION_METERS = 30;
+// Type for material - can be standard or node-based
+type TerrainMaterialType = 'standard' | 'node';
 
 /**
  * Creates a terrain-following quad mesh for rendering ground textures
  */
 export class TerrainQuad {
   private geometry: THREE.PlaneGeometry;
-  private material: THREE.MeshStandardMaterial;
+  private material: THREE.Material;
   private mesh: THREE.Mesh;
   private overlap: number;
   private originalWidth: number;
   private originalHeight: number;
   private elevationTexture: THREE.DataTexture | null = null;
+  private materialType: TerrainMaterialType = 'standard';
+  private setColorTextureCallback: ((texture: THREE.Texture) => void) | null = null;
 
   constructor(bounds: TileBounds, segments: number = GROUND_TEXTURE.TERRAIN_QUAD_SEGMENTS) {
     // Calculate world dimensions
@@ -102,124 +100,6 @@ export class TerrainQuad {
   }
 
   /**
-   * Apply terrain elevation to vertices with spike detection and smoothing
-   * @param getHeight Function that returns terrain height for a given lng/lat
-   * @param verticalExaggeration Multiplier for elevation values
-   */
-  updateElevation(
-    getHeight: (lng: number, lat: number) => number,
-    verticalExaggeration: number = ELEVATION.VERTICAL_EXAGGERATION
-  ): void {
-    const positions = this.geometry.attributes.position;
-    const meshPosition = this.mesh.position;
-
-    // First pass: collect all heights into an array
-    const heights: number[] = new Array(positions.count);
-
-    for (let i = 0; i < positions.count; i++) {
-      // Get vertex position in world space
-      const localX = positions.getX(i);
-      const localZ = positions.getZ(i);
-
-      const worldX = localX + meshPosition.x;
-      const worldZ = localZ + meshPosition.z;
-
-      // Convert to geo coordinates
-      const geo = worldToGeo(worldX, 0, worldZ);
-
-      // Get terrain height
-      const elevation = getHeight(geo.lng, geo.lat);
-      heights[i] = elevation * verticalExaggeration;
-    }
-
-    // Second pass: detect and smooth spikes
-    this.smoothTerrainSpikes(heights);
-
-    // Third pass: apply smoothed heights
-    for (let i = 0; i < positions.count; i++) {
-      positions.setY(i, heights[i]);
-    }
-
-    positions.needsUpdate = true;
-    this.geometry.computeVertexNormals();
-  }
-
-  /**
-   * Detect and smooth terrain spikes
-   * A spike is a vertex that differs significantly from its neighbors
-   */
-  private smoothTerrainSpikes(heights: number[]): void {
-    // Get grid dimensions from geometry parameters
-    const params = this.geometry.parameters;
-    const gridWidth = (params.widthSegments || 1) + 1;
-    const gridHeight = (params.heightSegments || 1) + 1;
-
-    // Helper to get height at grid position
-    const getHeightAt = (x: number, y: number): number | null => {
-      if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) return null;
-      return heights[y * gridWidth + x];
-    };
-
-    // Track which vertices are spikes (to avoid modifying while iterating)
-    const spikes: { idx: number; median: number }[] = [];
-
-    // Check each vertex (skip border vertices to maintain tile seam consistency)
-    for (let gy = 0; gy < gridHeight; gy++) {
-      for (let gx = 0; gx < gridWidth; gx++) {
-        // Skip border vertices - they must match neighboring tiles exactly
-        // Smoothing them would create seams where tiles meet
-        const isEdge = gx === 0 || gx === gridWidth - 1 || gy === 0 || gy === gridHeight - 1;
-        if (isEdge) continue;
-
-        const idx = gy * gridWidth + gx;
-        const height = heights[idx];
-
-        // Skip NaN heights (missing data) - zero is valid for sea-level terrain
-        if (Number.isNaN(height)) continue;
-
-        // Get neighbor heights (8-connected neighborhood)
-        const neighbors: number[] = [];
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            const h = getHeightAt(gx + dx, gy + dy);
-            if (h !== null && !Number.isNaN(h)) {
-              neighbors.push(h);
-            }
-          }
-        }
-
-        // Need at least 3 valid neighbors for reliable spike detection
-        if (neighbors.length < 3) continue;
-
-        // Calculate mean and standard deviation of neighbors
-        const mean = neighbors.reduce((a, b) => a + b, 0) / neighbors.length;
-        const variance = neighbors.reduce((sum, h) => sum + (h - mean) ** 2, 0) / neighbors.length;
-        const stdDev = Math.sqrt(variance);
-
-        // Calculate how far this vertex deviates from neighbor mean
-        const deviation = Math.abs(height - mean);
-
-        // Only flag as spike if:
-        // 1. Deviation exceeds minimum threshold (avoids smoothing small variations)
-        // 2. Deviation is unusually large compared to neighbor variance (outlier detection)
-        //    - If neighbors have high stdDev (steep terrain), threshold is higher
-        //    - If neighbors are consistent (low stdDev), even small deviations are suspicious
-        const dynamicThreshold = Math.max(SPIKE_MIN_DEVIATION_METERS, stdDev * SPIKE_STDDEV_MULTIPLIER);
-
-        if (deviation > dynamicThreshold) {
-          spikes.push({ idx, median: mean });
-        }
-      }
-    }
-
-    // Apply smoothing to detected spikes
-    for (const spike of spikes) {
-      heights[spike.idx] = spike.median;
-    }
-  }
-
-  /**
    * Apply GPU-based terrain displacement using vertex shader
    * @param heights Elevation data as Float32Array (from elevation tile)
    * @param textureSize Size of the elevation texture (e.g., 256)
@@ -244,8 +124,8 @@ export class TerrainQuad {
     const elevWidth = Math.abs(elevSE.x - elevNW.x);
     const elevHeight = Math.abs(elevSE.z - elevNW.z);
 
-    // Apply terrain shader to material
-    applyTerrainShader(this.material, {
+    // Apply terrain shader to material (WebGL path uses onBeforeCompile)
+    applyTerrainShader(this.material as THREE.MeshStandardMaterial, {
       elevationTexture: this.elevationTexture,
       verticalExaggeration,
       bounds: elevationBounds,
@@ -255,22 +135,118 @@ export class TerrainQuad {
         height: elevHeight,
       },
     });
+
+    // Expand bounding sphere to account for GPU displacement
+    // Without this, Three.js frustum culling uses the flat plane bounds
+    // and incorrectly culls tiles when camera is close or turning
+    this.expandBoundingSphere(heights, verticalExaggeration);
+  }
+
+  /**
+   * Apply GPU-based terrain displacement using TSL nodes (WebGPU path)
+   * This is an async method because it dynamically imports TSL modules
+   *
+   * @param heights Elevation data as Float32Array (from elevation tile)
+   * @param textureSize Size of the elevation texture (e.g., 256)
+   * @param elevationBounds Bounds of the elevation tile (Z12) - NOT the ground tile
+   * @param verticalExaggeration Multiplier for elevation values
+   */
+  async applyGPUDisplacementWebGPU(
+    heights: Float32Array,
+    textureSize: number,
+    elevationBounds: TileBounds,
+    verticalExaggeration: number = ELEVATION.VERTICAL_EXAGGERATION
+  ): Promise<void> {
+    // Dynamically import TSL terrain shader to avoid bundling in WebGL build
+    const { createTSLTerrainMaterial, createElevationDataTextureWebGPU } = await import('./terrain-shader-tsl.js');
+
+    // Create elevation texture using HalfFloatType for wider WebGPU compatibility
+    this.elevationTexture = createElevationDataTextureWebGPU(heights, textureSize);
+
+    // Calculate elevation tile's world position and dimensions
+    const elevNW = geoToWorld(elevationBounds.west, elevationBounds.north, 0);
+    const elevSE = geoToWorld(elevationBounds.east, elevationBounds.south, 0);
+    const elevCenterX = (elevNW.x + elevSE.x) / 2;
+    const elevCenterZ = (elevNW.z + elevSE.z) / 2;
+    const elevWidth = Math.abs(elevSE.x - elevNW.x);
+    const elevHeight = Math.abs(elevSE.z - elevNW.z);
+
+    // Get existing color texture if any
+    const existingColorTexture = (this.material as THREE.MeshStandardMaterial).map ?? undefined;
+
+    // Create TSL terrain material
+    const { material: newMaterial, setColorTexture } = await createTSLTerrainMaterial({
+      elevationTexture: this.elevationTexture,
+      verticalExaggeration,
+      tileCenter: new THREE.Vector3(elevCenterX, 0, elevCenterZ),
+      tileDimensions: {
+        width: elevWidth,
+        height: elevHeight,
+      },
+      colorTexture: existingColorTexture,
+    });
+
+    // Dispose old material and replace
+    this.material.dispose();
+    this.material = newMaterial;
+    this.mesh.material = newMaterial;
+    this.materialType = 'node';
+    this.setColorTextureCallback = setColorTexture;
+
+    // Expand bounding sphere to account for GPU displacement
+    this.expandBoundingSphere(heights, verticalExaggeration);
+  }
+
+  /**
+   * Expand bounding sphere to account for GPU vertex displacement
+   * This prevents incorrect frustum culling when terrain is displaced
+   */
+  private expandBoundingSphere(heights: Float32Array, verticalExaggeration: number): void {
+    // Find min/max elevation (cannot use Math.max(...heights) - 65k items would overflow call stack)
+    let minElevation = Infinity;
+    let maxElevation = -Infinity;
+    for (let i = 0; i < heights.length; i++) {
+      const h = heights[i];
+      if (h < minElevation) minElevation = h;
+      if (h > maxElevation) maxElevation = h;
+    }
+    minElevation *= verticalExaggeration;
+    maxElevation *= verticalExaggeration;
+
+    // Compute bounding sphere if not already done
+    this.geometry.computeBoundingSphere();
+
+    if (this.geometry.boundingSphere) {
+      // Lift sphere center to middle of elevation range for tighter culling
+      const elevationMid = (minElevation + maxElevation) / 2;
+      const elevationRange = Math.max(
+        Math.abs(minElevation - elevationMid),
+        Math.abs(maxElevation - elevationMid)
+      );
+
+      this.geometry.boundingSphere.center.y = elevationMid;
+
+      // Expand sphere radius to include full elevation range
+      const originalRadius = this.geometry.boundingSphere.radius;
+      this.geometry.boundingSphere.radius = Math.sqrt(
+        originalRadius * originalRadius + elevationRange * elevationRange
+      );
+    }
   }
 
   /**
    * Set the ground color texture
+   * Handles both WebGL (MeshStandardMaterial.map) and WebGPU (colorNode) paths
    */
   setTexture(texture: THREE.CanvasTexture): void {
-    this.material.map = texture;
-    this.material.needsUpdate = true;
-  }
-
-  /**
-   * Set elevation texture for GPU displacement (legacy method, prefer applyGPUDisplacement)
-   * @deprecated Use applyGPUDisplacement instead
-   */
-  setElevationTexture(_texture: THREE.DataTexture): void {
-    console.warn('setElevationTexture is deprecated. Use applyGPUDisplacement instead.');
+    if (this.materialType === 'node' && this.setColorTextureCallback) {
+      // WebGPU path: use colorNode via callback
+      this.setColorTextureCallback(texture);
+    } else {
+      // WebGL path: use standard material .map property
+      (this.material as THREE.MeshStandardMaterial).map = texture;
+      this.material.needsUpdate = true;
+    }
   }
 
   /**
@@ -290,7 +266,7 @@ export class TerrainQuad {
   /**
    * Get the material
    */
-  getMaterial(): THREE.MeshStandardMaterial {
+  getMaterial(): THREE.Material {
     return this.material;
   }
 
@@ -300,67 +276,23 @@ export class TerrainQuad {
   dispose(): void {
     this.geometry.dispose();
     this.material.dispose();
-    if (this.material.map) {
-      // Use deferred disposal for WebGPU compatibility
-      disposeTexture(this.material.map);
+
+    // Dispose color texture if present (WebGL path only - node materials handle this differently)
+    if (this.materialType === 'standard') {
+      const stdMaterial = this.material as THREE.MeshStandardMaterial;
+      if (stdMaterial.map) {
+        // Use deferred disposal for WebGPU compatibility
+        disposeTexture(stdMaterial.map);
+      }
     }
+
     if (this.elevationTexture) {
       // Use deferred disposal for WebGPU compatibility
       disposeTexture(this.elevationTexture);
       this.elevationTexture = null;
     }
+
+    // Clear callback reference
+    this.setColorTextureCallback = null;
   }
-}
-
-/**
- * Create an elevation data texture from terrain height data
- * @param bounds Tile bounds
- * @param resolution Texture resolution
- * @param getHeight Function to get elevation at a point
- * @returns DataTexture with normalized elevation values
- */
-export function createElevationTexture(
-  bounds: TileBounds,
-  resolution: number,
-  getHeight: (lng: number, lat: number) => number
-): THREE.DataTexture {
-  const data = new Float32Array(resolution * resolution);
-
-  let minElevation = Infinity;
-  let maxElevation = -Infinity;
-
-  // First pass: sample elevations and find range
-  for (let y = 0; y < resolution; y++) {
-    for (let x = 0; x < resolution; x++) {
-      const u = x / (resolution - 1);
-      const v = y / (resolution - 1);
-
-      const lng = bounds.west + u * (bounds.east - bounds.west);
-      const lat = bounds.north - v * (bounds.north - bounds.south); // V increases downward
-
-      const elevation = getHeight(lng, lat);
-      data[y * resolution + x] = elevation;
-
-      minElevation = Math.min(minElevation, elevation);
-      maxElevation = Math.max(maxElevation, elevation);
-    }
-  }
-
-  // Create texture
-  const texture = new THREE.DataTexture(
-    data,
-    resolution,
-    resolution,
-    THREE.RedFormat,
-    THREE.FloatType
-  );
-  texture.needsUpdate = true;
-
-  // Store elevation range in userData for shader use
-  texture.userData = {
-    minElevation,
-    maxElevation,
-  };
-
-  return texture;
 }
