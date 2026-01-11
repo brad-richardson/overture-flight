@@ -129,7 +129,10 @@ export const PLAYER_COLORS: string[] = [
 ];
 
 // 3D model paths - use BASE_URL for GitHub Pages compatibility
-export const PLANE_MODEL_URL: string = `${import.meta.env.BASE_URL}models/plane.glb`;
+// Cessna 172 model by KOG_THORNS (https://skfb.ly/oYXVT) - CC BY 4.0
+// Version parameter for cache busting (increment when model changes)
+const PLANE_MODEL_VERSION = 9;
+export const PLANE_MODEL_URL: string = `${import.meta.env.BASE_URL}models/cessna172-exterior.glb?v=${PLANE_MODEL_VERSION}`;
 
 // Plane rendering settings
 export interface PlaneRenderConfig {
@@ -140,8 +143,8 @@ export interface PlaneRenderConfig {
 }
 
 export const PLANE_RENDER: PlaneRenderConfig = {
-  SCALE: 0.25,          // Scale factor for plane model
-  MOBILE_SCALE: 0.18,   // Smaller scale for mobile devices
+  SCALE: 2.4,           // Scale factor for Cessna 172 model
+  MOBILE_SCALE: 1.9,    // Slightly smaller scale for mobile devices
   LOCAL_VISIBLE: true,  // show local player's plane in chase view
   MIN_TERRAIN_CLEARANCE: 50,  // Minimum altitude above terrain when teleporting (meters)
 };
