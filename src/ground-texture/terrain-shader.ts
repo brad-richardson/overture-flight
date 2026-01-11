@@ -88,12 +88,22 @@ const vertexDisplacementMain = /* glsl */ `
   vec3 worldPos3 = (modelMatrix * vec4(transformed, 1.0)).xyz;
   vec2 worldPos2 = vec2(worldPos3.x, worldPos3.z);
 
-  // Sample elevation and displace
+  // Sample elevation
   float elevation = sampleElevation(worldPos2);
-  transformed.y = elevation;
 
-  // Compute terrain normal
-  objectNormal = computeTerrainNormal(worldPos2, elevation);
+  // Check if this is a skirt vertex (original Y < 0)
+  // Skirt top vertices have Y=0 and get normal displacement
+  // Skirt bottom vertices have Y<0 and extend below the terrain
+  if (transformed.y < -0.5) {
+    // Skirt bottom: extend below terrain surface
+    transformed.y = elevation + transformed.y;
+    // Keep normal pointing outward (already set in geometry)
+  } else {
+    // Normal terrain vertex: set Y to elevation
+    transformed.y = elevation;
+    // Compute terrain normal from gradient
+    objectNormal = computeTerrainNormal(worldPos2, elevation);
+  }
 `;
 
 /**

@@ -8,11 +8,14 @@ import { disposeTexture } from '../renderer/texture-disposal.js';
 // Type for material - can be standard or node-based
 type TerrainMaterialType = 'standard' | 'node';
 
+// Depth of terrain skirts in meters (extends below terrain to hide gaps)
+const SKIRT_DEPTH = 100;
+
 /**
  * Creates a terrain-following quad mesh for rendering ground textures
  */
 export class TerrainQuad {
-  private geometry: THREE.PlaneGeometry;
+  private geometry: THREE.BufferGeometry;
   private material: THREE.Material;
   private mesh: THREE.Mesh;
   private overlap: number;
@@ -37,16 +40,8 @@ export class TerrainQuad {
     // Add small overlap (2 meters) to prevent gaps between tiles
     this.overlap = 2.0;
 
-    // Create subdivided plane with overlap
-    this.geometry = new THREE.PlaneGeometry(
-      this.originalWidth + this.overlap * 2,
-      this.originalHeight + this.overlap * 2,
-      segments,
-      segments
-    );
-
-    // Rotate to lie flat on XZ plane (Y-up)
-    this.geometry.rotateX(-Math.PI / 2);
+    // Create geometry with terrain skirts
+    this.geometry = this.createGeometryWithSkirts(segments);
 
     // Position at tile center
     const centerX = (nw.x + se.x) / 2;
@@ -64,39 +59,175 @@ export class TerrainQuad {
     this.mesh.position.set(centerX, 0, centerZ);
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;
-
-    // Adjust UV mapping for overlap
-    this.setupUVs();
   }
 
   /**
-   * Set up UV coordinates for the quad
-   * Adjusts UVs so the texture maps to the original tile bounds,
-   * with overlap region using clamped edge pixels
+   * Create terrain geometry with skirts extending downward from edges
+   * Skirts hide gaps between adjacent tiles caused by elevation mismatches
    */
-  private setupUVs(): void {
-    const uvs = this.geometry.attributes.uv;
+  private createGeometryWithSkirts(segments: number): THREE.BufferGeometry {
     const expandedWidth = this.originalWidth + this.overlap * 2;
     const expandedHeight = this.originalHeight + this.overlap * 2;
 
-    // Calculate UV offset and scale to map original bounds to 0-1
-    // Overlap areas will have UVs slightly outside 0-1, clamped to edge pixels
-    const uScale = expandedWidth / this.originalWidth;
-    const vScale = expandedHeight / this.originalHeight;
-    const uOffset = this.overlap / this.originalWidth;
-    const vOffset = this.overlap / this.originalHeight;
+    // Create the main plane geometry
+    const planeGeom = new THREE.PlaneGeometry(
+      expandedWidth,
+      expandedHeight,
+      segments,
+      segments
+    );
 
-    for (let i = 0; i < uvs.count; i++) {
-      const u = uvs.getX(i);
-      const v = uvs.getY(i);
-      // Flip V coordinate: After rotateX(-PI/2), geometry UV V=0 ends up at south,
-      // but texture has V=0 at north. Flipping V aligns them correctly.
+    // Rotate to lie flat on XZ plane (Y-up)
+    planeGeom.rotateX(-Math.PI / 2);
+
+    // Get plane attributes
+    const planePositions = planeGeom.attributes.position;
+    const planeUVs = planeGeom.attributes.uv;
+    const planeIndices = planeGeom.index!;
+
+    const planeVertexCount = planePositions.count;
+    const vertsPerRow = segments + 1;
+
+    // Calculate skirt vertices: 4 edges, each with (segments + 1) vertices
+    // Each edge vertex has a corresponding skirt vertex below it
+    const skirtVerticesPerEdge = vertsPerRow;
+    const totalSkirtVertices = skirtVerticesPerEdge * 4;
+
+    // Create arrays for combined geometry
+    const totalVertices = planeVertexCount + totalSkirtVertices;
+    const positions = new Float32Array(totalVertices * 3);
+    const uvs = new Float32Array(totalVertices * 2);
+    const normals = new Float32Array(totalVertices * 3);
+
+    // Copy plane vertices
+    for (let i = 0; i < planeVertexCount; i++) {
+      positions[i * 3] = planePositions.getX(i);
+      positions[i * 3 + 1] = planePositions.getY(i);
+      positions[i * 3 + 2] = planePositions.getZ(i);
+
+      // Adjust UVs for overlap (same logic as setupUVs)
+      const u = planeUVs.getX(i);
+      const v = planeUVs.getY(i);
       const flippedV = 1 - v;
-      // Remap: original 0-1 spans the expanded geometry
-      // We want the center (original tile) to map to 0-1
-      uvs.setXY(i, u * uScale - uOffset, flippedV * vScale - vOffset);
+      const uScale = expandedWidth / this.originalWidth;
+      const vScale = expandedHeight / this.originalHeight;
+      const uOffset = this.overlap / this.originalWidth;
+      const vOffset = this.overlap / this.originalHeight;
+      uvs[i * 2] = u * uScale - uOffset;
+      uvs[i * 2 + 1] = flippedV * vScale - vOffset;
+
+      // Default normal pointing up
+      normals[i * 3] = 0;
+      normals[i * 3 + 1] = 1;
+      normals[i * 3 + 2] = 0;
     }
-    uvs.needsUpdate = true;
+
+    // Helper to get plane vertex index from row/col
+    const getPlaneVertexIndex = (row: number, col: number) => row * vertsPerRow + col;
+
+    // Add skirt vertices and track their indices
+    let skirtVertexOffset = planeVertexCount;
+    const skirtIndices: number[] = [];
+
+    // Edge indices for the 4 edges (in plane vertex space)
+    // Top edge (row 0): vertices 0 to segments
+    // Bottom edge (row segments): vertices segments*vertsPerRow to segments*vertsPerRow + segments
+    // Left edge (col 0): vertices 0, vertsPerRow, 2*vertsPerRow, ...
+    // Right edge (col segments): vertices segments, vertsPerRow+segments, ...
+
+    // Helper to add skirt for an edge
+    const addSkirtEdge = (edgeVertexIndices: number[], isHorizontal: boolean, flipWinding: boolean) => {
+      const skirtStartIndex = skirtVertexOffset;
+
+      // Add skirt vertices (below each edge vertex)
+      for (const planeIdx of edgeVertexIndices) {
+        const x = positions[planeIdx * 3];
+        const z = positions[planeIdx * 3 + 2];
+
+        // Skirt vertex is at same X,Z but Y = -SKIRT_DEPTH
+        positions[skirtVertexOffset * 3] = x;
+        positions[skirtVertexOffset * 3 + 1] = -SKIRT_DEPTH;
+        positions[skirtVertexOffset * 3 + 2] = z;
+
+        // Copy UV from edge vertex
+        uvs[skirtVertexOffset * 2] = uvs[planeIdx * 2];
+        uvs[skirtVertexOffset * 2 + 1] = uvs[planeIdx * 2 + 1];
+
+        // Normal pointing outward (will be approximate)
+        normals[skirtVertexOffset * 3] = 0;
+        normals[skirtVertexOffset * 3 + 1] = 0;
+        normals[skirtVertexOffset * 3 + 2] = isHorizontal ? (flipWinding ? 1 : -1) : 0;
+        if (!isHorizontal) {
+          normals[skirtVertexOffset * 3] = flipWinding ? -1 : 1;
+        }
+
+        skirtVertexOffset++;
+      }
+
+      // Create triangles connecting edge to skirt
+      for (let i = 0; i < edgeVertexIndices.length - 1; i++) {
+        const topLeft = edgeVertexIndices[i];
+        const topRight = edgeVertexIndices[i + 1];
+        const bottomLeft = skirtStartIndex + i;
+        const bottomRight = skirtStartIndex + i + 1;
+
+        if (flipWinding) {
+          // Triangle 1
+          skirtIndices.push(topLeft, bottomLeft, topRight);
+          // Triangle 2
+          skirtIndices.push(topRight, bottomLeft, bottomRight);
+        } else {
+          // Triangle 1
+          skirtIndices.push(topLeft, topRight, bottomLeft);
+          // Triangle 2
+          skirtIndices.push(topRight, bottomRight, bottomLeft);
+        }
+      }
+    };
+
+    // Top edge (row 0, z = -expandedHeight/2)
+    const topEdge = [];
+    for (let col = 0; col < vertsPerRow; col++) {
+      topEdge.push(getPlaneVertexIndex(0, col));
+    }
+    addSkirtEdge(topEdge, true, false);
+
+    // Bottom edge (row segments, z = +expandedHeight/2)
+    const bottomEdge = [];
+    for (let col = 0; col < vertsPerRow; col++) {
+      bottomEdge.push(getPlaneVertexIndex(segments, col));
+    }
+    addSkirtEdge(bottomEdge, true, true);
+
+    // Left edge (col 0, x = -expandedWidth/2)
+    const leftEdge = [];
+    for (let row = 0; row < vertsPerRow; row++) {
+      leftEdge.push(getPlaneVertexIndex(row, 0));
+    }
+    addSkirtEdge(leftEdge, false, true);
+
+    // Right edge (col segments, x = +expandedWidth/2)
+    const rightEdge = [];
+    for (let row = 0; row < vertsPerRow; row++) {
+      rightEdge.push(getPlaneVertexIndex(row, segments));
+    }
+    addSkirtEdge(rightEdge, false, false);
+
+    // Combine plane indices with skirt indices
+    const planeIndexArray = Array.from(planeIndices.array);
+    const allIndices = new Uint32Array([...planeIndexArray, ...skirtIndices]);
+
+    // Create the combined geometry
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(allIndices, 1));
+
+    // Clean up temporary geometry
+    planeGeom.dispose();
+
+    return geometry;
   }
 
   /**
@@ -223,6 +354,9 @@ export class TerrainQuad {
     minElevation *= verticalExaggeration;
     maxElevation *= verticalExaggeration;
 
+    // Account for terrain skirts extending below the minimum elevation
+    minElevation -= SKIRT_DEPTH;
+
     // Compute bounding sphere if not already done
     this.geometry.computeBoundingSphere();
 
@@ -269,7 +403,7 @@ export class TerrainQuad {
   /**
    * Get the geometry
    */
-  getGeometry(): THREE.PlaneGeometry {
+  getGeometry(): THREE.BufferGeometry {
     return this.geometry;
   }
 
