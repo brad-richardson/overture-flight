@@ -396,7 +396,8 @@ function generateBuildingGeometry(
   }
 
   // Calculate base and top Y positions
-  const baseY = terrainHeight * verticalExaggeration + BUILDING_TERRAIN_OFFSET - terrainSlope * SLOPE_COMPENSATION_FACTOR;
+  // Add slope compensation to lift buildings above sloped terrain
+  const baseY = terrainHeight * verticalExaggeration + BUILDING_TERRAIN_OFFSET + terrainSlope * SLOPE_COMPENSATION_FACTOR;
   const topY = baseY + height;
   const bottomY = baseY + minHeight; // For buildings with min_height (floating bases)
 

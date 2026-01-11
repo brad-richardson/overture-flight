@@ -142,6 +142,7 @@ export async function createTSLTerrainMaterial(
   });
 
   // Position node: Displaces vertex Y based on sampled elevation
+  // Handles terrain skirts: vertices with Y < 0 extend below terrain
   const positionNode = TSL.Fn(() => {
     const pos = TSL.positionLocal;
 
@@ -152,12 +153,21 @@ export async function createTSLTerrainMaterial(
     // Sample elevation at this world position
     const elevation = sampleElevation(worldPos2);
 
-    // Return displaced position (only Y changes)
-    return TSL.vec3(pos.x, elevation, pos.z);
+    // Check if this is a skirt bottom vertex (original Y < -0.5)
+    // Skirt bottom vertices extend below terrain; normal vertices get displaced to elevation
+    const isSkirt = pos.y.lessThan(-0.5);
+    const skirtY = elevation.add(pos.y); // Extend below terrain
+    const normalY = elevation; // Normal terrain displacement
+
+    // Select Y based on whether this is a skirt vertex
+    const finalY = TSL.select(isSkirt, skirtY, normalY);
+
+    return TSL.vec3(pos.x, finalY, pos.z);
   })();
 
   // Normal node: Computes terrain normal from elevation gradient
   // CRITICAL: Without this, lighting will be broken on displaced terrain
+  // Skirt vertices keep their original outward-pointing normals
   const normalNode = TSL.Fn(() => {
     const pos = TSL.positionLocal;
 
@@ -166,7 +176,12 @@ export async function createTSLTerrainMaterial(
     const worldPos2 = TSL.vec2(worldPos.x, worldPos.z);
 
     // Compute terrain normal from elevation gradient
-    return computeTerrainNormal(worldPos2);
+    const terrainNormal = computeTerrainNormal(worldPos2);
+
+    // For skirt vertices, keep original normal (already set in geometry)
+    // For normal vertices, use computed terrain normal
+    const isSkirt = pos.y.lessThan(-0.5);
+    return TSL.select(isSkirt, TSL.normalLocal, terrainNormal);
   })();
 
   // Create MeshStandardNodeMaterial with displacement

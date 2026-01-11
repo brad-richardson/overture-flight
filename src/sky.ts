@@ -37,8 +37,8 @@ const DEFAULT_CONFIG: SkyConfig = {
   sunPosition: new THREE.Vector3(1000, 2000, 1000),
   turbidity: 2,
   cloudDensity: 0.4,
-  cloudAltitude: 3000,
-  fogDensity: 0.00008,
+  cloudAltitude: 5000,
+  fogDensity: 0.00006,
   fogColor: 0x9dc4e8,
   rendererType: 'webgl'
 };
@@ -272,9 +272,9 @@ interface CloudLayerConfig {
 }
 
 const CLOUD_LAYERS: CloudLayerConfig[] = [
-  { altitudeOffset: 0, size: 80000, opacity: 0.7 },
-  { altitudeOffset: 500, size: 70000, opacity: 0.5 },
-  { altitudeOffset: 1000, size: 60000, opacity: 0.3 }
+  { altitudeOffset: 0, size: 80000, opacity: 0.5 },
+  { altitudeOffset: 500, size: 70000, opacity: 0.35 },
+  { altitudeOffset: 1000, size: 60000, opacity: 0.2 }
 ];
 
 // ============================================================================
