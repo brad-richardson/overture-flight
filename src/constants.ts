@@ -1,3 +1,5 @@
+import { BUILD_HASH } from './build-info.js';
+
 // Mobile device detection - used to reduce texture sizes and cache limits
 // Detects once at startup for consistent behavior throughout session
 export const IS_MOBILE = typeof navigator !== 'undefined' &&
@@ -183,8 +185,8 @@ export interface GroundTextureConfig {
 
 export const GROUND_TEXTURE: GroundTextureConfig = {
   TEXTURE_SIZE: IS_MOBILE ? 1024 : 2048,              // Half resolution on mobile to reduce GPU memory
-  CACHE_MAX_SIZE: IS_MOBILE ? 30 : 100,               // Fewer cached textures on mobile
-  CACHE_DISPOSE_THRESHOLD: IS_MOBILE ? 20 : 80,       // Earlier eviction on mobile
+  CACHE_MAX_SIZE: IS_MOBILE ? 50 : 150,               // Increased for smoother turning
+  CACHE_DISPOSE_THRESHOLD: IS_MOBILE ? 35 : 120,      // Earlier eviction threshold
   TERRAIN_QUAD_SEGMENTS: IS_MOBILE ? 8 : 16,          // Simpler terrain mesh on mobile
   ENABLED: true,
   SKIP_NEIGHBOR_TILES: IS_MOBILE ? true : false,      // Skip neighbors on mobile to reduce network; load on desktop for full coverage
@@ -209,7 +211,7 @@ export const EXPANDED_TERRAIN: ExpandedTerrainConfig = {
   CORE_RADIUS: 1,                 // 3x3 core with buildings (2*1+1 = 3)
   MAX_CONCURRENT: 1,              // Process only 1 expanded tile at a time
   UNLOAD_DISTANCE: 6,             // Slightly beyond load radius for hysteresis
-  CACHE_MAX_SIZE: IS_MOBILE ? 40 : 80, // Dedicated cache for expanded tiles
+  CACHE_MAX_SIZE: IS_MOBILE ? 60 : 120, // Increased for smoother turning
   TEXTURE_SIZE: IS_MOBILE ? 512 : 1024, // Lower resolution for distant tiles
 };
 
@@ -312,7 +314,7 @@ export interface TextureCacheConfig {
   DB_NAME: string;                // IndexedDB database name
   STORE_NAME: string;             // Object store name for textures
   MAX_ENTRIES: number;            // Maximum cached textures (LRU eviction)
-  VERSION: number;                // Cache version (increment to invalidate)
+  VERSION: string;                // Cache version string (changes on each build to auto-invalidate)
   TTL_MS: number;                 // Time-to-live in milliseconds (0 = no expiry)
 }
 
@@ -336,7 +338,7 @@ export const TEXTURE_CACHE: TextureCacheConfig = {
   ENABLED: textureCacheEnabled,
   DB_NAME: 'overture-flight-textures',
   STORE_NAME: 'textures',
-  MAX_ENTRIES: IS_MOBILE ? 50 : 200,  // Fewer entries on mobile
-  VERSION: 1,                         // Increment to invalidate cache
-  TTL_MS: 24 * 60 * 60 * 1000,        // 1 day (allows quick iteration on rendering bugs)
+  MAX_ENTRIES: IS_MOBILE ? 100 : 500, // Increased for smoother flying when turning
+  VERSION: BUILD_HASH,                // Auto-invalidates cache on new builds
+  TTL_MS: 7 * 24 * 60 * 60 * 1000,    // 7 days (build hash handles version invalidation)
 };
