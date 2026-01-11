@@ -387,7 +387,8 @@ function getOrCreatePlaneMesh(id: string, _color: string): THREE.Object3D | null
   mesh.scale.set(scale, scale, scale);
 
   // Find and track the propeller node for animation
-  // The propeller blades mesh contains 'Body_MAT_0001' (dots stripped by Three.js loader)
+  // Original mesh name: 'Body_MAT_0.001' -> Three.js strips dots -> 'Body_MAT_0001'
+  // Early return once found to capture only the first matching propeller mesh
   mesh.traverse((child) => {
     if (propellerMeshes.has(id)) return;
     const meshChild = child as THREE.Mesh;
@@ -409,7 +410,7 @@ const PROPELLER_BASE_SPEED = 40; // radians per second base rotation
 /**
  * Update a plane's position and rotation
  */
-export function updatePlaneMesh(planeState: PlaneState, id: string, color: string): void {
+export function updatePlaneMesh(planeState: PlaneState, id: string, color: string, deltaTime: number = 0.016): void {
   const mesh = getOrCreatePlaneMesh(id, color);
   if (!mesh) return;
 
@@ -444,7 +445,7 @@ export function updatePlaneMesh(planeState: PlaneState, id: string, color: strin
     const speedFactor = Math.max(0.2, planeState.speed / 50); // Normalize to cruise speed
     const rotationSpeed = PROPELLER_BASE_SPEED * speedFactor;
     // Rotate around Z axis (forward axis in model space) so blades spin in a circle
-    propeller.rotation.z += rotationSpeed * 0.016; // ~60fps delta
+    propeller.rotation.z += rotationSpeed * deltaTime;
   }
 }
 
