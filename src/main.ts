@@ -477,7 +477,7 @@ function gameLoop(time: number): void {
         if (id !== localId) {
           const interpolated = getInterpolatedState(id);
           if (interpolated) {
-            updatePlaneMesh(interpolated, id, interpolated.color);
+            updatePlaneMesh(interpolated, id, interpolated.color, cappedDelta);
           }
         }
       }
@@ -536,14 +536,14 @@ function gameLoop(time: number): void {
     if (id !== localId) {
       const interpolated = getInterpolatedState(id);
       if (interpolated) {
-        updatePlaneMesh(interpolated, id, interpolated.color);
+        updatePlaneMesh(interpolated, id, interpolated.color, cappedDelta);
       }
     }
   }
 
   // Update local plane mesh
   if (localId) {
-    updatePlaneMesh(planeState, localId, localColor);
+    updatePlaneMesh(planeState, localId, localColor, cappedDelta);
     players.set(localId, planeState);
 
     // Throttle player list updates (DOM rebuild is expensive)

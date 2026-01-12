@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { PLANE_MODEL_URL, PLANE_RENDER, DEFAULT_LOCATION } from './constants.js';
 import { isMobileDevice } from './mobile-controls.js';
@@ -13,164 +14,6 @@ export { BufferGeometryUtils };
 // Re-export RendererType for external use
 export type { RendererType };
 
-// Cache for plane textures by color
-const planeTextureCache = new Map<string, THREE.CanvasTexture>();
-
-/**
- * Create a procedural aircraft skin texture with panel lines and weathering
- */
-function createAircraftSkinTexture(playerColor: string): THREE.CanvasTexture {
-  // Check cache first
-  if (planeTextureCache.has(playerColor)) {
-    return planeTextureCache.get(playerColor)!;
-  }
-
-  const canvas = document.createElement('canvas');
-  const size = 512;
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d')!;
-
-  // Base metallic silver/white color
-  const gradient = ctx.createLinearGradient(0, 0, size, size);
-  gradient.addColorStop(0, '#e8e8e8');
-  gradient.addColorStop(0.3, '#f5f5f5');
-  gradient.addColorStop(0.5, '#ffffff');
-  gradient.addColorStop(0.7, '#f0f0f0');
-  gradient.addColorStop(1, '#e0e0e0');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
-
-  // Add subtle noise/grain for metallic texture
-  ctx.globalAlpha = 0.03;
-  for (let i = 0; i < 5000; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const brightness = Math.random() > 0.5 ? '#000000' : '#ffffff';
-    ctx.fillStyle = brightness;
-    ctx.fillRect(x, y, 1, 1);
-  }
-  ctx.globalAlpha = 1;
-
-  // Panel lines - horizontal
-  ctx.strokeStyle = '#b0b0b0';
-  ctx.lineWidth = 1;
-  const panelSpacing = 64;
-  for (let y = panelSpacing; y < size; y += panelSpacing) {
-    ctx.beginPath();
-    ctx.moveTo(0, y + (Math.random() - 0.5) * 4);
-    ctx.lineTo(size, y + (Math.random() - 0.5) * 4);
-    ctx.stroke();
-  }
-
-  // Panel lines - vertical
-  for (let x = panelSpacing; x < size; x += panelSpacing) {
-    ctx.beginPath();
-    ctx.moveTo(x + (Math.random() - 0.5) * 4, 0);
-    ctx.lineTo(x + (Math.random() - 0.5) * 4, size);
-    ctx.stroke();
-  }
-
-  // Rivet dots along panel lines
-  ctx.fillStyle = '#a0a0a0';
-  const rivetSpacing = 16;
-  for (let y = panelSpacing; y < size; y += panelSpacing) {
-    for (let x = rivetSpacing; x < size; x += rivetSpacing) {
-      ctx.beginPath();
-      ctx.arc(x, y, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  // Player color stripe accents (wing markings)
-  ctx.fillStyle = playerColor;
-  ctx.globalAlpha = 0.9;
-
-  // Main wing stripe (horizontal band in middle)
-  ctx.fillRect(0, size * 0.45, size, size * 0.06);
-
-  // Secondary accent stripes
-  ctx.globalAlpha = 0.7;
-  ctx.fillRect(0, size * 0.38, size, size * 0.02);
-  ctx.fillRect(0, size * 0.56, size, size * 0.02);
-
-  // Subtle edge highlights on stripes
-  ctx.globalAlpha = 0.4;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, size * 0.45, size, 2);
-  ctx.fillRect(0, size * 0.51 - 2, size, 2);
-
-  ctx.globalAlpha = 1;
-
-  // Add some weathering/dirt spots
-  ctx.globalAlpha = 0.02;
-  ctx.fillStyle = '#4a4a4a';
-  for (let i = 0; i < 30; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const radius = 5 + Math.random() * 20;
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(2, 2);
-
-  planeTextureCache.set(playerColor, texture);
-  return texture;
-}
-
-/**
- * Create enhanced aircraft materials with realistic texturing
- * Uses differentiated polygon offset values to prevent z-fighting between mesh types
- */
-function createAircraftMaterials(playerColor: string): {
-  fuselage: THREE.MeshStandardMaterial;
-  wings: THREE.MeshStandardMaterial;
-  accent: THREE.MeshStandardMaterial;
-} {
-  const skinTexture = createAircraftSkinTexture(playerColor);
-
-  // Main fuselage material - metallic with panel lines
-  // Largest polygon offset pushes fuselage furthest back in depth buffer
-  const fuselage = new THREE.MeshStandardMaterial({
-    map: skinTexture,
-    roughness: 0.4,
-    metalness: 0.6,
-    envMapIntensity: 0.8,
-    polygonOffset: true,
-    polygonOffsetFactor: 2,
-    polygonOffsetUnits: 2,
-  });
-
-  // Wing material - similar but with more visible color stripes
-  // Medium polygon offset - wings render in front of fuselage
-  const wingTexture = createAircraftSkinTexture(playerColor);
-  wingTexture.repeat.set(1, 3); // Stretch stripes across wing span
-  const wings = new THREE.MeshStandardMaterial({
-    map: wingTexture,
-    roughness: 0.45,
-    metalness: 0.5,
-    polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
-  });
-
-  // Accent material for trim pieces - solid player color
-  // No polygon offset - accent parts render in front of everything
-  const accent = new THREE.MeshStandardMaterial({
-    color: playerColor,
-    roughness: 0.3,
-    metalness: 0.7,
-  });
-
-  return { fuselage, wings, accent };
-}
-
 // Scene components
 let scene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
@@ -178,6 +21,7 @@ let renderer: THREE.WebGLRenderer | null = null;
 let rendererType: RendererType = 'webgl';
 let planeModel: THREE.Group | null = null;
 const planeMeshes = new Map<string, THREE.Object3D>(); // id -> mesh
+const propellerMeshes = new Map<string, THREE.Object3D>(); // id -> propeller node
 
 // World origin (for geo to world conversion)
 let originLng: number = DEFAULT_LOCATION.lng;
@@ -364,13 +208,17 @@ export async function initScene(): Promise<{
 async function loadPlaneModel(): Promise<THREE.Group> {
   return new Promise((resolve) => {
     const loader = new GLTFLoader();
+
+    // Configure Draco decoder for compressed models
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    loader.setDRACOLoader(dracoLoader);
+
     loader.load(
       PLANE_MODEL_URL,
       (gltf) => {
         planeModel = gltf.scene;
-        // Apply differentiated polygon offset to prevent z-fighting
-        // Different meshes get different offsets based on their index
-        let meshIndex = 0;
+        // Configure mesh settings while preserving original textures
         planeModel.traverse((child) => {
           if ((child as THREE.Mesh).isMesh) {
             const mesh = child as THREE.Mesh;
@@ -378,19 +226,6 @@ async function loadPlaneModel(): Promise<THREE.Group> {
             // Disable receiving shadows to prevent shadow acne artifacts
             // when flying through building shadows
             mesh.receiveShadow = false;
-            // Override any existing texture with a neutral white base
-            // This allows player colors to show properly
-            // Use varying polygon offset based on mesh index to prevent z-fighting
-            const offsetFactor = 1 + (meshIndex % 3);
-            mesh.material = new THREE.MeshStandardMaterial({
-              color: 0xffffff,
-              roughness: 0.6,
-              metalness: 0.3,
-              polygonOffset: true,
-              polygonOffsetFactor: offsetFactor,
-              polygonOffsetUnits: offsetFactor,
-            });
-            meshIndex++;
           }
         });
         resolve(planeModel);
@@ -537,7 +372,7 @@ function createFallbackPlane(): THREE.Group {
 /**
  * Get or create a plane mesh for a player
  */
-function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null {
+function getOrCreatePlaneMesh(id: string, _color: string): THREE.Object3D | null {
   if (planeMeshes.has(id)) {
     return planeMeshes.get(id)!;
   }
@@ -551,29 +386,14 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
   const scale = isMobileDevice() ? PLANE_RENDER.MOBILE_SCALE : PLANE_RENDER.SCALE;
   mesh.scale.set(scale, scale, scale);
 
-  // Create enhanced aircraft materials with realistic texturing
-  const materials = createAircraftMaterials(color || '#3b82f6');
-
-  // Apply enhanced materials to the plane
-  const wingParts = ['wing', 'tail', 'stabilizer', 'tip', 'flap', 'aileron'];
-  const accentParts = ['engine', 'nacelle', 'prop', 'spinner'];
-
+  // Find and track the propeller node for animation
+  // Original mesh name: 'Body_MAT_0.001' -> Three.js strips dots -> 'Body_MAT_0001'
+  // Early return once found to capture only the first matching propeller mesh
   mesh.traverse((child) => {
-    if ((child as THREE.Mesh).isMesh) {
-      const meshChild = child as THREE.Mesh;
-      const name = meshChild.name.toLowerCase();
-
-      // Determine which material to use based on mesh name
-      if (accentParts.some(part => name.includes(part))) {
-        // Engine parts get accent color
-        meshChild.material = materials.accent;
-      } else if (wingParts.some(part => name.includes(part))) {
-        // Wing and tail surfaces
-        meshChild.material = materials.wings;
-      } else {
-        // Fuselage and other body parts
-        meshChild.material = materials.fuselage;
-      }
+    if (propellerMeshes.has(id)) return;
+    const meshChild = child as THREE.Mesh;
+    if (meshChild.isMesh && child.name.includes('Body_MAT_0001')) {
+      propellerMeshes.set(id, child);
     }
   });
 
@@ -584,10 +404,13 @@ function getOrCreatePlaneMesh(id: string, color: string): THREE.Object3D | null 
   return mesh;
 }
 
+// Propeller rotation speed constant (radians per second at cruise speed ~50 m/s)
+const PROPELLER_BASE_SPEED = 40; // radians per second base rotation
+
 /**
  * Update a plane's position and rotation
  */
-export function updatePlaneMesh(planeState: PlaneState, id: string, color: string): void {
+export function updatePlaneMesh(planeState: PlaneState, id: string, color: string, deltaTime: number = 0.016): void {
   const mesh = getOrCreatePlaneMesh(id, color);
   if (!mesh) return;
 
@@ -614,6 +437,16 @@ export function updatePlaneMesh(planeState: PlaneState, id: string, color: strin
   mesh.rotation.y = headingRad;
   mesh.rotation.x = pitchRad;
   mesh.rotation.z = rollRad;
+
+  // Animate propeller based on speed
+  const propeller = propellerMeshes.get(id);
+  if (propeller) {
+    // Propeller spins faster with speed, minimum spin when moving
+    const speedFactor = Math.max(0.2, planeState.speed / 50); // Normalize to cruise speed
+    const rotationSpeed = PROPELLER_BASE_SPEED * speedFactor;
+    // Rotate around Z axis (forward axis in model space) so blades spin in a circle
+    propeller.rotation.z += rotationSpeed * deltaTime;
+  }
 }
 
 /**
@@ -624,6 +457,7 @@ export function removePlaneMesh(id: string): void {
   if (mesh && scene) {
     scene.remove(mesh);
     planeMeshes.delete(id);
+    propellerMeshes.delete(id);
   }
 }
 

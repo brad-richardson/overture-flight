@@ -120,7 +120,7 @@ export async function createTSLTerrainMaterial(
   const sampleElevation = TSL.Fn(([worldPos2]: [any]) => {
     const uv = worldToTileUV(worldPos2);
     // Sample red channel of elevation texture
-    const elevation = elevationMapUniform.uv(uv).r;
+    const elevation = elevationMapUniform.sample(uv).r;
     return elevation.mul(vertExaggerationUniform);
   });
 
