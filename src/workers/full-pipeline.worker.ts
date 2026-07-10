@@ -18,6 +18,8 @@ import { renderTileTextureToCanvas } from './offscreen-renderer.js';
 // PMTiles sources (lazy initialized)
 let basePMTiles: PMTiles | null = null;
 let transportationPMTiles: PMTiles | null = null;
+let baseMaxZoom: number | null = null;
+let transportationMaxZoom: number | null = null;
 let pmtilesInitialized = false;
 let pmtilesInitPromise: Promise<void> | null = null;
 
@@ -100,16 +102,20 @@ async function initializePMTiles(baseUrl: string, transportUrl: string): Promise
       transportationPMTiles = new PMTiles(transportUrl);
 
       // Verify headers are accessible (validates CORS)
-      await Promise.all([
+      const [baseHeader, transportationHeader] = await Promise.all([
         basePMTiles.getHeader(),
         transportationPMTiles.getHeader(),
       ]);
+      baseMaxZoom = baseHeader.maxZoom;
+      transportationMaxZoom = transportationHeader.maxZoom;
 
       pmtilesInitialized = true;
     } catch (error) {
       console.error('[FullPipelineWorker] Failed to initialize PMTiles:', error);
       basePMTiles = null;
       transportationPMTiles = null;
+      baseMaxZoom = null;
+      transportationMaxZoom = null;
       basePMTilesUrl = null;
       transportationPMTilesUrl = null;
       pmtilesInitialized = false;
@@ -123,6 +129,35 @@ async function initializePMTiles(baseUrl: string, transportUrl: string): Promise
     // Always clear promise to allow retries after transient failures
     pmtilesInitPromise = null;
   }
+}
+
+interface SourceTileCoordinates {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Map a requested tile to the highest zoom available from a source. */
+function mapTileToSourceZoom(
+  x: number,
+  y: number,
+  zoom: number,
+  maxZoom: number
+): SourceTileCoordinates {
+  if (zoom <= maxZoom) {
+    return { x, y, z: zoom };
+  }
+
+  const scale = Math.pow(2, zoom - maxZoom);
+  return {
+    x: Math.floor(x / scale),
+    y: Math.floor(y / scale),
+    z: maxZoom,
+  };
+}
+
+function tileKey(tile: SourceTileCoordinates): string {
+  return `${tile.z}/${tile.x}/${tile.y}`;
 }
 
 /**
@@ -213,13 +248,17 @@ async function loadLowerZoomWater(
   tileY: number,
   tileZ: number
 ): Promise<ParsedFeature[]> {
-  if (!basePMTiles) return [];
+  if (!basePMTiles || baseMaxZoom === null) return [];
 
   const waterPolygons: ParsedFeature[] = [];
   const seenAreas = new Set<string>(); // Track polygons to avoid duplicates
+  const detailSourceZoom = Math.min(tileZ, baseMaxZoom);
 
   for (const lowerZoom of WATER_POLYGON_ZOOM_LEVELS) {
-    if (lowerZoom >= tileZ) continue; // Only check lower (zoomed out) levels
+    // The detail source tile is loaded separately with all layers, including water.
+    // Only fetch genuinely lower zooms here to avoid duplicate parsing/features.
+    if (lowerZoom >= detailSourceZoom) continue;
+    if (lowerZoom > baseMaxZoom) continue; // Never request beyond the source's advertised range
 
     // Calculate which lower-zoom tile contains this tile
     const scale = Math.pow(2, tileZ - lowerZoom);
@@ -278,33 +317,36 @@ async function loadBaseFeatures(
   tileZ: number,
   includeNeighbors: boolean
 ): Promise<ParsedFeature[]> {
-  if (!basePMTiles) return [];
+  if (!basePMTiles || baseMaxZoom === null) return [];
 
   // Start all fetches in parallel
   const promises: Promise<ParsedFeature[]>[] = [];
+  const scheduledBaseTiles = new Set<string>();
+
+  const scheduleBaseTile = (tile: SourceTileCoordinates): void => {
+    const key = tileKey(tile);
+    if (scheduledBaseTiles.has(key)) return;
+
+    scheduledBaseTiles.add(key);
+    promises.push(
+      fetchTileData(basePMTiles!, tile.z, tile.x, tile.y).then(data => {
+        if (!data) return [];
+        return parseMVT(data, tile.x, tile.y, tile.z);
+      })
+    );
+  };
 
   // 1. Load lower-zoom water for ocean coverage (loads z10, z8, z6 and merges results)
   promises.push(loadLowerZoomWater(tileX, tileY, tileZ));
 
   // 2. Load lower-zoom base features for land_cover background (z12)
-  const lowerZoom = Math.max(10, tileZ - 2);
-  const scale = Math.pow(2, tileZ - lowerZoom);
-  const lowerX = Math.floor(tileX / scale);
-  const lowerY = Math.floor(tileY / scale);
-  promises.push(
-    fetchTileData(basePMTiles, lowerZoom, lowerX, lowerY).then(data => {
-      if (!data) return [];
-      return parseMVT(data, lowerX, lowerY, lowerZoom);
-    })
-  );
+  const lowerZoom = Math.min(baseMaxZoom, Math.max(10, tileZ - 2));
+  if (lowerZoom < tileZ) {
+    scheduleBaseTile(mapTileToSourceZoom(tileX, tileY, tileZ, lowerZoom));
+  }
 
-  // 3. Load center tile
-  promises.push(
-    fetchTileData(basePMTiles, tileZ, tileX, tileY).then(data => {
-      if (!data) return [];
-      return parseMVT(data, tileX, tileY, tileZ);
-    })
-  );
+  // 3. Load the highest-detail source tile that covers the center tile
+  scheduleBaseTile(mapTileToSourceZoom(tileX, tileY, tileZ, baseMaxZoom));
 
   // 4. Load neighbor tiles if requested
   if (includeNeighbors) {
@@ -315,12 +357,9 @@ async function loadBaseFeatures(
         const nx = tileX + dx;
         const ny = tileY + dy;
 
-        promises.push(
-          fetchTileData(basePMTiles!, tileZ, nx, ny).then(data => {
-            if (!data) return [];
-            return parseMVT(data, nx, ny, tileZ);
-          })
-        );
+        // Several requested neighbors can map to the same parent source tile.
+        // scheduleBaseTile deduplicates those requests before fetching.
+        scheduleBaseTile(mapTileToSourceZoom(nx, ny, tileZ, baseMaxZoom));
       }
     }
   }
@@ -345,12 +384,24 @@ async function loadTransportationFeatures(
   tileY: number,
   tileZ: number
 ): Promise<ParsedFeature[]> {
-  if (!transportationPMTiles) return [];
+  if (!transportationPMTiles || transportationMaxZoom === null) return [];
 
-  const data = await fetchTileData(transportationPMTiles, tileZ, tileX, tileY);
+  const sourceTile = mapTileToSourceZoom(
+    tileX,
+    tileY,
+    tileZ,
+    transportationMaxZoom
+  );
+
+  const data = await fetchTileData(
+    transportationPMTiles,
+    sourceTile.z,
+    sourceTile.x,
+    sourceTile.y
+  );
   if (!data) return [];
 
-  return parseMVT(data, tileX, tileY, tileZ);
+  return parseMVT(data, sourceTile.x, sourceTile.y, sourceTile.z);
 }
 
 /**

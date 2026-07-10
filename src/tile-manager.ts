@@ -53,6 +53,9 @@ interface InitStatus {
 let buildingsPMTiles: PMTiles | null = null;
 let basePMTiles: PMTiles | null = null;
 let transportationPMTiles: PMTiles | null = null;
+let buildingsMaxZoom: number | null = null;
+let baseMaxZoom: number | null = null;
+let transportationMaxZoom: number | null = null;
 
 // Track initialization errors for user feedback
 let initErrors: string[] = [];
@@ -106,7 +109,8 @@ interface InFlightRequest {
 const inFlightRequests = new Map<string, InFlightRequest>();
 
 // Tile loading settings (aggressive performance tuning)
-const TILE_ZOOM = 14; // Zoom level for tile loading (max available in PMTiles)
+// Simulation detail zoom; each PMTiles source is capped independently from its header.
+const TILE_ZOOM = 14;
 const TILE_RADIUS = 1; // Load tiles within this radius of center (3x3 grid)
 const PREDICTIVE_TILES = 2; // Max tiles ahead to load based on heading (reduced from 4 for perf)
 const SPEED_THRESHOLD = 10; // m/s (~22 mph) - lowered to trigger predictive loading at slower speeds
@@ -163,6 +167,9 @@ const metersPerDegreeLng = (lat: number): number => 111320 * Math.cos(lat * Math
  */
 export async function initTileManager(): Promise<InitStatus> {
   initErrors = [];
+  buildingsMaxZoom = null;
+  baseMaxZoom = null;
+  transportationMaxZoom = null;
 
   // Also initialize here so direct users of the tile manager cannot bypass
   // the application's Overture source bootstrap.
@@ -171,7 +178,7 @@ export async function initTileManager(): Promise<InitStatus> {
   // Placeholder sources represent a known discovery failure. Do not run the
   // normal network retry/backoff loop for them, which would delay partial app
   // startup by several seconds per unavailable theme.
-  const initializeSource = async (url: string, label: string): Promise<PMTiles | null> => {
+  const initializeSource = async (url: string, label: string): Promise<{ pmtiles: PMTiles; maxZoom: number } | null> => {
     if (isUnavailableOvertureSource(url)) {
       const msg = `Failed to load ${label} data: latest Overture release is unavailable`;
       console.warn(msg);
@@ -181,8 +188,8 @@ export async function initTileManager(): Promise<InitStatus> {
 
     const source = new PMTiles(url);
     try {
-      await retryWithBackoff(() => source.getHeader(), 3, 1000);
-      return source;
+      const header = await retryWithBackoff(() => source.getHeader(), 3, 1000);
+      return { pmtiles: source, maxZoom: header.maxZoom };
     } catch (e) {
       const error = e as Error;
       const msg = `Failed to load ${label} data: ${error.message || 'Network error'}`;
@@ -192,11 +199,18 @@ export async function initTileManager(): Promise<InitStatus> {
     }
   };
 
-  [buildingsPMTiles, basePMTiles, transportationPMTiles] = await Promise.all([
+  const [buildingsResult, baseResult, transportResult] = await Promise.all([
     initializeSource(overtureSources.buildings, 'buildings'),
     initializeSource(overtureSources.base, 'terrain'),
     initializeSource(overtureSources.transportation, 'transportation'),
   ]);
+
+  buildingsPMTiles = buildingsResult?.pmtiles ?? null;
+  buildingsMaxZoom = buildingsResult?.maxZoom ?? null;
+  basePMTiles = baseResult?.pmtiles ?? null;
+  baseMaxZoom = baseResult?.maxZoom ?? null;
+  transportationPMTiles = transportResult?.pmtiles ?? null;
+  transportationMaxZoom = transportResult?.maxZoom ?? null;
 
   // Return status for caller to handle
   return {
@@ -204,6 +218,34 @@ export async function initTileManager(): Promise<InitStatus> {
     base: basePMTiles !== null,
     transportation: transportationPMTiles !== null,
     errors: initErrors
+  };
+}
+
+interface SourceTileCoordinates {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * Map a requested tile to the highest-detail tile available in a PMTiles source.
+ * A source tile can cover multiple requested tiles when its max zoom is lower.
+ */
+function mapTileToSourceZoom(
+  x: number,
+  y: number,
+  zoom: number,
+  maxZoom: number
+): SourceTileCoordinates {
+  if (zoom <= maxZoom) {
+    return { x, y, z: zoom };
+  }
+
+  const scale = Math.pow(2, zoom - maxZoom);
+  return {
+    x: Math.floor(x / scale),
+    y: Math.floor(y / scale),
+    z: maxZoom,
   };
 }
 
@@ -422,14 +464,22 @@ export async function loadBuildingTile(
   y: number,
   zoom: number = TILE_ZOOM
 ): Promise<ParsedFeature[]> {
-  if (!buildingsPMTiles) return [];
+  if (!buildingsPMTiles || buildingsMaxZoom === null) return [];
+
+  const sourceTile = mapTileToSourceZoom(x, y, zoom, buildingsMaxZoom);
 
   // Buildings have lowest priority in fetch queue
-  const data = await getTileData(buildingsPMTiles, zoom, x, y, TilePriority.BUILDINGS);
+  const data = await getTileData(
+    buildingsPMTiles,
+    sourceTile.z,
+    sourceTile.x,
+    sourceTile.y,
+    TilePriority.BUILDINGS
+  );
   if (!data) return [];
 
   // Load all layers (building + building_part) from the buildings PMTiles
-  return parseMVTAsync(data, x, y, zoom, null);
+  return parseMVTAsync(data, sourceTile.x, sourceTile.y, sourceTile.z, null);
 }
 
 /**
@@ -444,13 +494,15 @@ export async function loadBaseTile(
   zoom: number = TILE_ZOOM,
   priority: TilePriority = TilePriority.Z14_GROUND
 ): Promise<ParsedFeature[]> {
-  if (!basePMTiles) {
+  if (!basePMTiles || baseMaxZoom === null) {
     console.warn('Base PMTiles not initialized');
     return [];
   }
 
+  const sourceTile = mapTileToSourceZoom(x, y, zoom, baseMaxZoom);
+
   // Check deduplication cache - key includes source and layer (__ALL__ = all layers)
-  const dedupeKey = `base:${zoom}/${x}/${y}:__ALL__`;
+  const dedupeKey = `base:${sourceTile.z}/${sourceTile.x}/${sourceTile.y}:__ALL__`;
   const existing = inFlightRequests.get(dedupeKey);
   // Only dedupe if existing request has same or higher priority (lower number)
   // Higher priority requests skip dedupe to avoid being delayed by lower priority ones
@@ -460,18 +512,24 @@ export async function loadBaseTile(
 
   // Create the loading promise
   const loadPromise = (async (): Promise<ParsedFeature[]> => {
-    const data = await getTileData(basePMTiles, zoom, x, y, priority);
+    const data = await getTileData(
+      basePMTiles,
+      sourceTile.z,
+      sourceTile.x,
+      sourceTile.y,
+      priority
+    );
     if (data) {
       // Base PMTiles has layers: water, land, land_use, land_cover, infrastructure
-      return parseMVTAsync(data, x, y, zoom);
+      return parseMVTAsync(data, sourceTile.x, sourceTile.y, sourceTile.z);
     }
 
-    // Try fallback zoom levels from zoom-1 down to MIN_FALLBACK_ZOOM
+    // Try fallback zoom levels from the source's highest available zoom down to MIN_FALLBACK_ZOOM
     // Water and land data may only be available at certain zoom levels in the PMTiles
-    for (let fallbackZoom = zoom - 1; fallbackZoom >= MIN_FALLBACK_ZOOM; fallbackZoom--) {
-      const scale = Math.pow(2, zoom - fallbackZoom);
-      const fallbackX = Math.floor(x / scale);
-      const fallbackY = Math.floor(y / scale);
+    for (let fallbackZoom = sourceTile.z - 1; fallbackZoom >= MIN_FALLBACK_ZOOM; fallbackZoom--) {
+      const scale = Math.pow(2, sourceTile.z - fallbackZoom);
+      const fallbackX = Math.floor(sourceTile.x / scale);
+      const fallbackY = Math.floor(sourceTile.y / scale);
 
       const fallbackData = await getTileData(basePMTiles, fallbackZoom, fallbackX, fallbackY, priority);
       if (fallbackData) {
@@ -513,7 +571,7 @@ export async function loadWaterPolygonsFromLowerZooms(
   priority: TilePriority = TilePriority.Z14_GROUND,
   fastMode: boolean = false
 ): Promise<ParsedFeature[]> {
-  if (!basePMTiles) {
+  if (!basePMTiles || baseMaxZoom === null) {
     return [];
   }
 
@@ -521,7 +579,12 @@ export async function loadWaterPolygonsFromLowerZooms(
   const seenAreas = new Set<string>(); // Track polygons to avoid duplicates
 
   // In fast mode, only check z10; otherwise check all levels
-  const zoomLevels = fastMode ? [10] : WATER_POLYGON_ZOOM_LEVELS;
+  const requestedZoomLevels = fastMode ? [10] : WATER_POLYGON_ZOOM_LEVELS;
+  // A release may advertise less detail than our preferred fallback levels.
+  // Clamp to the header and deduplicate levels that collapse to the same tile.
+  const zoomLevels = [...new Set(
+    requestedZoomLevels.map(lowerZoom => Math.min(lowerZoom, baseMaxZoom!))
+  )];
 
   for (const lowerZoom of zoomLevels) {
     if (lowerZoom >= zoom) continue; // Only check lower (zoomed out) levels
@@ -630,10 +693,12 @@ export async function loadTransportationTile(
   zoom: number = TILE_ZOOM,
   priority: TilePriority = TilePriority.Z14_GROUND
 ): Promise<ParsedFeature[]> {
-  if (!transportationPMTiles) return [];
+  if (!transportationPMTiles || transportationMaxZoom === null) return [];
+
+  const sourceTile = mapTileToSourceZoom(x, y, zoom, transportationMaxZoom);
 
   // Check deduplication cache
-  const dedupeKey = `transport:${zoom}/${x}/${y}:__ALL__`;
+  const dedupeKey = `transport:${sourceTile.z}/${sourceTile.x}/${sourceTile.y}:__ALL__`;
   const existing = inFlightRequests.get(dedupeKey);
   // Only dedupe if existing request has same or higher priority (lower number)
   if (existing && existing.priority <= priority) {
@@ -642,11 +707,17 @@ export async function loadTransportationTile(
 
   // Create the loading promise
   const loadPromise = (async (): Promise<ParsedFeature[]> => {
-    const data = await getTileData(transportationPMTiles, zoom, x, y, priority);
+    const data = await getTileData(
+      transportationPMTiles,
+      sourceTile.z,
+      sourceTile.x,
+      sourceTile.y,
+      priority
+    );
     if (!data) return [];
 
     // Transportation PMTiles has layers: segment, connector
-    return parseMVTAsync(data, x, y, zoom);
+    return parseMVTAsync(data, sourceTile.x, sourceTile.y, sourceTile.z);
   })();
 
   // Store in deduplication cache and clean up when done
