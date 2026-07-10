@@ -6,6 +6,7 @@ import {
   isUndergroundBuilding,
   isBuildingFeature,
 } from './building-materials.js';
+import { loadBuildingAtlas, getBuildingAtlas } from './building-atlas.js';
 import { registerBuildingColliders, unregisterBuildingColliders } from './collision.js';
 import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
 import type { StoredFeature } from './feature-picker.js';
@@ -87,14 +88,26 @@ function finishBuildingLoad(tileKey: string, loadEpoch: number): boolean {
   return true;
 }
 
-/**
- * Material that uses vertex colors for individual building variation
- */
 const vertexColorMaterial = new THREE.MeshStandardMaterial({
   vertexColors: true,
   roughness: 0.75,
   metalness: 0.1,
 });
+
+loadBuildingAtlas().catch(() => console.log('Using fallback building atlas'));
+
+function getTexturedMaterial(): THREE.MeshStandardMaterial {
+  const atlas = getBuildingAtlas();
+  if (atlas) {
+    return new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.8,
+      metalness: 0.05,
+      map: atlas,
+    });
+  }
+  return vertexColorMaterial.clone();
+}
 
 /**
  * Create building meshes from tile features with LOD-based detail reduction
@@ -236,14 +249,16 @@ async function createBuildingsForTileInner(
           );
 
           if (result.geometry) {
-            // Create Three.js BufferGeometry from worker result
             const geometry = new THREE.BufferGeometry();
             geometry.setAttribute('position', new THREE.BufferAttribute(result.geometry.positions, 3));
             geometry.setAttribute('normal', new THREE.BufferAttribute(result.geometry.normals, 3));
             geometry.setAttribute('color', new THREE.BufferAttribute(result.geometry.colors, 3));
             geometry.setIndex(new THREE.Uint32BufferAttribute(result.geometry.indices, 1));
+            if (result.geometry.uvs) {
+              geometry.setAttribute('uv', new THREE.BufferAttribute(result.geometry.uvs, 2));
+            }
 
-            const mesh = new THREE.Mesh(geometry, vertexColorMaterial.clone());
+            const mesh = new THREE.Mesh(geometry, getTexturedMaterial());
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             mesh.name = 'buildings-worker';

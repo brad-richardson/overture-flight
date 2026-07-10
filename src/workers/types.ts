@@ -247,18 +247,12 @@ export interface CreateBuildingGeometryPayload {
   verticalExaggeration: number;
 }
 
-/**
- * Single building geometry result
- */
 export interface BuildingGeometryBuffers {
-  /** Vertex positions (x, y, z interleaved) */
   positions: Float32Array;
-  /** Vertex normals (x, y, z interleaved) */
   normals: Float32Array;
-  /** Vertex colors (r, g, b interleaved, 0-1 range) */
   colors: Float32Array;
-  /** Triangle indices */
   indices: Uint32Array;
+  uvs?: Float32Array;
 }
 
 /**
