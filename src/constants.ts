@@ -1,5 +1,5 @@
-// Mobile device detection - used to reduce texture sizes and cache limits
-// Detects once at startup for consistent behavior throughout session
+import { BUILD_HASH } from './build-info.js';
+
 export const IS_MOBILE = typeof navigator !== 'undefined' &&
   /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
@@ -167,12 +167,12 @@ export interface GroundTextureConfig {
 }
 
 export const GROUND_TEXTURE: GroundTextureConfig = {
-  TEXTURE_SIZE: IS_MOBILE ? 1024 : 2048,              // Half resolution on mobile to reduce GPU memory
-  CACHE_MAX_SIZE: IS_MOBILE ? 30 : 100,               // Fewer cached textures on mobile
-  CACHE_DISPOSE_THRESHOLD: IS_MOBILE ? 20 : 80,       // Earlier eviction on mobile
-  TERRAIN_QUAD_SEGMENTS: IS_MOBILE ? 8 : 16,          // Simpler terrain mesh on mobile
+  TEXTURE_SIZE: IS_MOBILE ? 1024 : 2048,
+  CACHE_MAX_SIZE: IS_MOBILE ? 50 : 150,
+  CACHE_DISPOSE_THRESHOLD: IS_MOBILE ? 35 : 120,
+  TERRAIN_QUAD_SEGMENTS: IS_MOBILE ? 8 : 16,
   ENABLED: true,
-  SKIP_NEIGHBOR_TILES: IS_MOBILE ? true : false,      // Skip neighbors on mobile to reduce network; load on desktop for full coverage
+  SKIP_NEIGHBOR_TILES: IS_MOBILE ? true : false,
 };
 
 // Expanded terrain settings (Z14 terrain-only outer ring)
@@ -190,12 +190,12 @@ export interface ExpandedTerrainConfig {
 
 export const EXPANDED_TERRAIN: ExpandedTerrainConfig = {
   ENABLED: true,
-  TILE_RADIUS: 4,                 // 9x9 grid total (2*4+1 = 9)
-  CORE_RADIUS: 1,                 // 3x3 core with buildings (2*1+1 = 3)
-  MAX_CONCURRENT: 1,              // Process only 1 expanded tile at a time
-  UNLOAD_DISTANCE: 6,             // Slightly beyond load radius for hysteresis
-  CACHE_MAX_SIZE: IS_MOBILE ? 40 : 80, // Dedicated cache for expanded tiles
-  TEXTURE_SIZE: IS_MOBILE ? 512 : 1024, // Lower resolution for distant tiles
+  TILE_RADIUS: 4,
+  CORE_RADIUS: 1,
+  MAX_CONCURRENT: 1,
+  UNLOAD_DISTANCE: 6,
+  CACHE_MAX_SIZE: IS_MOBILE ? 60 : 120,
+  TEXTURE_SIZE: IS_MOBILE ? 512 : 1024,
 };
 
 // Web Worker settings for parallel processing
@@ -295,12 +295,12 @@ export const PROCESS_CHAINING: ProcessChainingConfig = {
 // Disabled by default in dev/PR builds, enabled in prod
 // Override with VITE_TEXTURE_CACHE env variable
 export interface TextureCacheConfig {
-  ENABLED: boolean;               // Enable/disable IndexedDB texture caching
-  DB_NAME: string;                // IndexedDB database name
-  STORE_NAME: string;             // Object store name for textures
-  MAX_ENTRIES: number;            // Maximum cached textures (LRU eviction)
-  VERSION: number;                // Cache version (increment to invalidate)
-  TTL_MS: number;                 // Time-to-live in milliseconds (0 = no expiry)
+  ENABLED: boolean;
+  DB_NAME: string;
+  STORE_NAME: string;
+  MAX_ENTRIES: number;
+  VERSION: string;
+  TTL_MS: number;
 }
 
 // Check URL parameter first (for debugging)
@@ -323,7 +323,7 @@ export const TEXTURE_CACHE: TextureCacheConfig = {
   ENABLED: textureCacheEnabled,
   DB_NAME: 'overture-flight-textures',
   STORE_NAME: 'textures',
-  MAX_ENTRIES: IS_MOBILE ? 50 : 200,  // Fewer entries on mobile
-  VERSION: 1,                         // Increment to invalidate cache
-  TTL_MS: 24 * 60 * 60 * 1000,        // 1 day (allows quick iteration on rendering bugs)
+  MAX_ENTRIES: IS_MOBILE ? 100 : 500,
+  VERSION: BUILD_HASH,
+  TTL_MS: 7 * 24 * 60 * 60 * 1000,
 };
