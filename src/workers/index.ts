@@ -23,23 +23,12 @@ import type {
   LandcoverTreeConfig,
   ElevationConfig,
 } from './types.js';
-import { WORKERS } from '../constants.js';
+import { getWorkerPoolSize } from './budget.js';
 
 // Re-export types for convenience
 export type { TileBounds, ParsedFeature, SceneOrigin, BaseGeometryResult, GeometryBufferGroup, LineGeometryBufferGroup, ParseMVTResult, CompactFeature, BuildingFeatureInput, CreateBuildingGeometryResult, BuildingGeometryBuffers, ProcessTreesResult, TreeData, LandcoverTreeConfig, ElevationConfig } from './types.js';
-
-/**
- * Get optimal worker pool size based on device capabilities and config
- */
-function getOptimalPoolSize(): number {
-  // Use configured size if > 0, otherwise auto-detect
-  if (WORKERS.POOL_SIZE > 0) {
-    return WORKERS.POOL_SIZE;
-  }
-  const cores = navigator.hardwareConcurrency || 4;
-  // Use cores - 1 (leave one for main thread), minimum 2, maximum 4
-  return Math.max(2, Math.min(cores - 1, 4));
-}
+export { getWorkerBudgetPlan } from './budget.js';
+export type { WorkerBudgetPlan, WorkerPoolKind } from './budget.js';
 
 /**
  * Pending task tracking
@@ -86,7 +75,7 @@ export class GeometryWorkerPool {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
 
-  constructor(private poolSize: number = getOptimalPoolSize()) {}
+  constructor(private poolSize: number = getWorkerPoolSize('geometry')) {}
 
   /**
    * Initialize the geometry worker pool
@@ -422,7 +411,7 @@ export class MVTWorkerPool {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
 
-  constructor(private poolSize: number = getOptimalPoolSize()) {}
+  constructor(private poolSize: number = getWorkerPoolSize('mvt')) {}
 
   /**
    * Initialize the MVT worker pool
@@ -883,9 +872,7 @@ export class ElevationWorkerPool {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
 
-  constructor(private poolSize: number = Math.min(getOptimalPoolSize(), 2)) {
-    // Use fewer workers for elevation (typically 2 is enough)
-  }
+  constructor(private poolSize: number = getWorkerPoolSize('elevation')) {}
 
   /**
    * Initialize the elevation worker pool
@@ -1218,7 +1205,7 @@ export class BuildingGeometryWorkerPool {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
 
-  constructor(private poolSize: number = getOptimalPoolSize()) {}
+  constructor(private poolSize: number = getWorkerPoolSize('buildingGeometry')) {}
 
   /**
    * Initialize the building geometry worker pool
@@ -1581,7 +1568,7 @@ export class FullPipelineWorkerPool {
   private pmtilesInitialized = false;
   private recoveringWorkers = new Set<number>(); // Prevent concurrent recovery of same worker
 
-  constructor(private poolSize: number = getOptimalPoolSize()) {}
+  constructor(private poolSize: number = getWorkerPoolSize('fullPipeline')) {}
 
   /**
    * Initialize the full pipeline worker pool
@@ -1987,9 +1974,7 @@ export class TreeProcessingWorkerPool {
   /** Track if first request completed successfully (for adaptive timeout) */
   private hasCompletedFirstRequest = false;
 
-  constructor(private poolSize: number = Math.min(getOptimalPoolSize(), 2)) {
-    // Use fewer workers for tree processing (typically 2 is enough)
-  }
+  constructor(private poolSize: number = getWorkerPoolSize('treeProcessing')) {}
 
   /**
    * Initialize the tree processing worker pool

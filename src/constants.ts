@@ -206,8 +206,10 @@ export interface WorkersConfig {
   ELEVATION_ENABLED: boolean;     // Enable/disable elevation decoding worker
   FULL_PIPELINE_ENABLED: boolean; // Enable/disable full pipeline workers (fetch+parse+render in worker)
   BUILDING_GEOMETRY_ENABLED: boolean; // Enable/disable building geometry workers (extrusion in worker)
-  POOL_SIZE: number;              // Number of workers (0 = auto based on cores)
+  TOTAL_BUDGET: number;           // Total workers across all pools (0 = auto based on device)
 }
+
+const workerBudgetOverride = Number.parseInt(import.meta.env.VITE_WORKER_BUDGET || '0', 10);
 
 export const WORKERS: WorkersConfig = {
   GEOMETRY_ENABLED: true,         // Geometry workers: Always enabled (uses zero-copy ArrayBuffer transfer)
@@ -215,7 +217,7 @@ export const WORKERS: WorkersConfig = {
   ELEVATION_ENABLED: true,        // Elevation workers: Always enabled
   FULL_PIPELINE_ENABLED: import.meta.env.VITE_FULL_PIPELINE_WORKERS !== 'false', // Full pipeline workers: Enabled by default
   BUILDING_GEOMETRY_ENABLED: true, // Building geometry workers: Always enabled
-  POOL_SIZE: 0,                   // 0 = auto (cores - 1, min 2, max 4)
+  TOTAL_BUDGET: Number.isFinite(workerBudgetOverride) ? Math.max(0, workerBudgetOverride) : 0,
 };
 
 // Loading gate settings for initial tile loading
