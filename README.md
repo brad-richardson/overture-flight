@@ -167,6 +167,7 @@ Key environment variables:
 | `VITE_DIVISIONS_PMTILES_URL` | Administrative boundaries PMTiles source |
 | `VITE_PARTYKIT_HOST` | Multiplayer server host |
 | `VITE_PROFILING` | Enable performance profiling |
+| `VITE_WORKER_BUDGET` | Optional total browser-worker budget across all six worker protocols. Automatic sizing is used when unset; values below 6 are raised to the six-protocol compatibility floor. |
 
 By default, the app resolves Overture's latest stable release from the official
 STAC catalog at startup and constructs the four PMTiles URLs from that release.
