@@ -28,6 +28,9 @@ import type {
 let basePMTiles: PMTiles | null = null;
 let buildingsPMTiles: PMTiles | null = null;
 let transportationPMTiles: PMTiles | null = null;
+let baseMaxZoom: number | null = null;
+let buildingsMaxZoom: number | null = null;
+let transportationMaxZoom: number | null = null;
 let pmtilesInitialized = false;
 let pmtilesInitPromise: Promise<void> | null = null;
 
@@ -224,11 +227,14 @@ async function initializePMTiles(
       transportationPMTiles = new PMTiles(transportUrl);
 
       // Verify headers are accessible (validates CORS)
-      await Promise.all([
+      const [baseHeader, buildingsHeader, transportationHeader] = await Promise.all([
         basePMTiles.getHeader(),
         buildingsPMTiles.getHeader(),
         transportationPMTiles.getHeader(),
       ]);
+      baseMaxZoom = baseHeader.maxZoom;
+      buildingsMaxZoom = buildingsHeader.maxZoom;
+      transportationMaxZoom = transportationHeader.maxZoom;
 
       pmtilesInitialized = true;
     } catch (error) {
@@ -236,6 +242,9 @@ async function initializePMTiles(
       basePMTiles = null;
       buildingsPMTiles = null;
       transportationPMTiles = null;
+      baseMaxZoom = null;
+      buildingsMaxZoom = null;
+      transportationMaxZoom = null;
       basePMTilesUrl = null;
       buildingsPMTilesUrl = null;
       transportationPMTilesUrl = null;
@@ -249,6 +258,31 @@ async function initializePMTiles(
   } finally {
     pmtilesInitPromise = null;
   }
+}
+
+interface SourceTileCoordinates {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Map a requested tile to the highest zoom advertised by a PMTiles source. */
+function mapTileToSourceZoom(
+  x: number,
+  y: number,
+  zoom: number,
+  maxZoom: number
+): SourceTileCoordinates {
+  if (zoom <= maxZoom) {
+    return { x, y, z: zoom };
+  }
+
+  const scale = Math.pow(2, zoom - maxZoom);
+  return {
+    x: Math.floor(x / scale),
+    y: Math.floor(y / scale),
+    z: maxZoom,
+  };
 }
 
 // ============================================================================
@@ -536,11 +570,13 @@ const WATER_ZOOM_LEVELS = [12, 11, 10, 9, 8];
  * Load base tile features
  */
 async function loadBaseTile(x: number, y: number, zoom: number): Promise<ParsedFeature[]> {
-  if (!basePMTiles) return [];
+  if (!basePMTiles || baseMaxZoom === null) return [];
 
-  const data = await fetchTileData(basePMTiles, zoom, x, y);
+  const sourceTile = mapTileToSourceZoom(x, y, zoom, baseMaxZoom);
+
+  const data = await fetchTileData(basePMTiles, sourceTile.z, sourceTile.x, sourceTile.y);
   if (data) {
-    return parseMVT(data, x, y, zoom);
+    return parseMVT(data, sourceTile.x, sourceTile.y, sourceTile.z);
   }
   return [];
 }
@@ -549,12 +585,15 @@ async function loadBaseTile(x: number, y: number, zoom: number): Promise<ParsedF
  * Load water polygons from lower zoom levels for better coverage
  */
 async function loadWaterPolygons(x: number, y: number, zoom: number): Promise<ParsedFeature[]> {
-  if (!basePMTiles) return [];
+  if (!basePMTiles || baseMaxZoom === null) return [];
 
   const features: ParsedFeature[] = [];
   const seenPolygons = new Set<string>();
+  const sourceZoomLevels = [...new Set(
+    WATER_ZOOM_LEVELS.map(fallbackZoom => Math.min(fallbackZoom, baseMaxZoom!))
+  )];
 
-  for (const fallbackZoom of WATER_ZOOM_LEVELS) {
+  for (const fallbackZoom of sourceZoomLevels) {
     if (fallbackZoom > zoom) continue;
 
     const scale = Math.pow(2, zoom - fallbackZoom);
@@ -584,11 +623,13 @@ async function loadWaterPolygons(x: number, y: number, zoom: number): Promise<Pa
  * Load building tile features
  */
 async function loadBuildingTile(x: number, y: number, zoom: number): Promise<ParsedFeature[]> {
-  if (!buildingsPMTiles) return [];
+  if (!buildingsPMTiles || buildingsMaxZoom === null) return [];
 
-  const data = await fetchTileData(buildingsPMTiles, zoom, x, y);
+  const sourceTile = mapTileToSourceZoom(x, y, zoom, buildingsMaxZoom);
+
+  const data = await fetchTileData(buildingsPMTiles, sourceTile.z, sourceTile.x, sourceTile.y);
   if (data) {
-    return parseMVT(data, x, y, zoom);
+    return parseMVT(data, sourceTile.x, sourceTile.y, sourceTile.z);
   }
   return [];
 }
@@ -597,11 +638,18 @@ async function loadBuildingTile(x: number, y: number, zoom: number): Promise<Par
  * Load transportation tile features
  */
 async function loadTransportationTile(x: number, y: number, zoom: number): Promise<ParsedFeature[]> {
-  if (!transportationPMTiles) return [];
+  if (!transportationPMTiles || transportationMaxZoom === null) return [];
 
-  const data = await fetchTileData(transportationPMTiles, zoom, x, y);
+  const sourceTile = mapTileToSourceZoom(x, y, zoom, transportationMaxZoom);
+
+  const data = await fetchTileData(
+    transportationPMTiles,
+    sourceTile.z,
+    sourceTile.x,
+    sourceTile.y
+  );
   if (data) {
-    return parseMVT(data, x, y, zoom);
+    return parseMVT(data, sourceTile.x, sourceTile.y, sourceTile.z);
   }
   return [];
 }
@@ -1124,6 +1172,9 @@ async function processTrees(payload: ProcessTreesPayloadInternal): Promise<Proce
     tileX, tileY, tileZ,
     landcoverConfig,
     maxProceduralTrees
+  ).filter(tree =>
+    tree.lng >= bounds.west && tree.lng < bounds.east &&
+    tree.lat > bounds.south && tree.lat <= bounds.north
   );
 
   let allTrees = [...osmTrees, ...proceduralTrees];
