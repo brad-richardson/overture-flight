@@ -53,19 +53,20 @@ export const BUILDING_PALETTES: Record<string, ColorPalette> = {
     ],
   },
 
-  // Commercial/office - modern, glass-heavy
   commercial: {
     walls: [
+      0x8aa0b8, // glass blue
+      0x6b8cae, // steel blue glass
+      0x9ab6d0, // light glass blue
+      0xb0c4de, // light steel blue
+      0xd4c9b8, // warm beige (mixed-use)
+      0xc9b99a, // tan (older commercial)
+      0xa8a8a8, // silver/steel
+      0x8b9aae, // blue-gray
       0x708090, // slate gray
-      0x778899, // light slate gray
-      0xa9a9a9, // dark gray
-      0xc0c0c0, // silver
-      0xd3d3d3, // light gray
       0x5a7a8a, // muted steel blue
-      0x5a7d7e, // muted cadet blue
-      0x7a9aaa, // muted blue-gray (glass effect)
-      0x8a9cac, // muted steel blue
-      0xa0b0b8, // muted blue-gray
+      0xc0b8a8, // light brownstone
+      0x8b7355, // brownstone
     ],
   },
 
@@ -401,6 +402,19 @@ export const OVERTURE_SUBTYPES = new Set<string>([
   'transportation',
 ]);
 
+const FACADE_MATERIAL_TO_CATEGORY: Readonly<Record<string, string>> = {
+  brick: 'residential',
+  glass: 'commercial',
+  metal: 'commercial',
+  concrete: 'industrial',
+  stone: 'civic',
+  wood: 'residential',
+  timber_framing: 'residential',
+  plaster: 'civic',
+  cement_block: 'industrial',
+  clay: 'residential',
+};
+
 // ============================================================================
 // Seeded Random Number Generator
 // ============================================================================
@@ -424,7 +438,7 @@ function seededRandom(seed: number): () => number {
  * For main buildings, uses their own id
  * Falls back to coordinates if no id available
  */
-function generateSeed(feature: BuildingColorInput): number {
+export function generateSeed(feature: BuildingColorInput): number {
   const props = feature.properties;
 
   // For building parts, use building_id so all parts of the same building share color
@@ -473,14 +487,20 @@ function generateSeed(feature: BuildingColorInput): number {
  * Get the building category based on Overture properties
  *
  * Priority order:
- * 1. Overture subtype (direct category mapping)
- * 2. Overture class (lookup in CLASS_TO_CATEGORY)
- * 3. Default category
+ * 1. Facade material, when it implies a useful visual family
+ * 2. Overture subtype (direct category mapping)
+ * 3. Overture class (lookup in CLASS_TO_CATEGORY)
+ * 4. Default category
  */
 export function getBuildingCategory(feature: BuildingColorInput): string {
   const props = feature.properties;
   if (!props) {
     return 'default';
+  }
+
+  const facadeMaterial = String(props.facade_material ?? '').toLowerCase();
+  if (FACADE_MATERIAL_TO_CATEGORY[facadeMaterial]) {
+    return FACADE_MATERIAL_TO_CATEGORY[facadeMaterial];
   }
 
   // Priority 1: Overture subtype (normalized category)
@@ -505,20 +525,25 @@ export function getBuildingCategory(feature: BuildingColorInput): string {
   return 'default';
 }
 
-/**
- * Get a deterministic color for a building feature
- * Uses seeded random to select from the category's palette
- *
- * @param feature - Building feature with Overture properties
- * @returns Hex color value (e.g., 0xE8DCC8)
- */
 export function getBuildingColor(feature: BuildingColorInput): number {
+  const props = feature.properties as Record<string, unknown> | undefined;
+  if (props) {
+    const facadeColor = props.facade_color as string | undefined;
+    if (typeof facadeColor === 'string') {
+      const match = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(facadeColor.trim());
+      if (match) {
+        let value = match[1];
+        if (value.length === 3) value = value.split('').map(c => c + c).join('');
+        const parsed = parseInt(value, 16);
+        if (!isNaN(parsed)) return parsed;
+      }
+    }
+  }
+
   const category = getBuildingCategory(feature);
   const palette = BUILDING_PALETTES[category] || BUILDING_PALETTES.default;
-
   const seed = generateSeed(feature);
   const rng = seededRandom(seed);
-
   const wallColorIndex = Math.floor(rng() * palette.walls.length);
   return palette.walls[wallColorIndex];
 }

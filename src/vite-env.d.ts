@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_BUILDING_ATLAS?: string;
   readonly VITE_PMTILES_URL?: string;
   readonly VITE_BASE_PMTILES_URL?: string;
   readonly VITE_TRANSPORTATION_PMTILES_URL?: string;

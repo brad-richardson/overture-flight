@@ -1,19 +1,3 @@
-/**
- * Building geometry builder for web workers
- * Creates 3D building geometry without Three.js ExtrudeGeometry dependency
- * Uses earcut for polygon triangulation (roof) and manual wall quad generation
- *
- * Known trade-offs vs main thread implementation:
- * - Material uniformity: All buildings share the same vertexColorMaterial properties
- *   (roughness=0.75, metalness=0.1). Main thread can use category-specific materials.
- *   Color variation is preserved via vertex colors from the shared palette.
- * - Data transfer: Feature data is structured-cloned to worker. For tiles with many
- *   buildings, this can cause brief main thread overhead before worker processing begins.
- * - Floating origin: Geometry is generated relative to the scene origin at request time.
- *   If origin shifts during async processing, geometry may be slightly misaligned.
- *   This is acceptable for typical flight sim movement speeds.
- */
-
 import earcut from 'earcut';
 import type {
   SceneOrigin,
@@ -24,23 +8,19 @@ import type {
   BuildingColliderBounds,
   ElevationConfig,
 } from './types.js';
-import { getBuildingColor as getColor } from '../building-colors.js';
-
-// ============================================================================
-// ELEVATION TILE HANDLING (worker-side)
-// ============================================================================
+import {
+  generateSeed,
+  getBuildingCategory,
+  getBuildingColor as getColor,
+} from '../building-colors.js';
+import { getBuildingAtlasUVs } from '../building-atlas-layout.js';
 
 interface CachedElevationTile {
   heights: Float32Array;
   bounds: { west: number; east: number; north: number; south: number };
 }
-
-// In-memory cache for elevation tiles within this worker
 const elevationCache = new Map<string, CachedElevationTile>();
 
-/**
- * Convert lng/lat to tile coordinates
- */
 function lngLatToTile(lng: number, lat: number, zoom: number): [number, number] {
   const n = Math.pow(2, zoom);
   const x = Math.floor(((lng + 180) / 360) * n);
@@ -48,11 +28,7 @@ function lngLatToTile(lng: number, lat: number, zoom: number): [number, number] 
   const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
   return [x, y];
 }
-
-/**
- * Get tile bounds in geographic coordinates
- */
-function tileToBounds(x: number, y: number, zoom: number): { west: number; east: number; north: number; south: number } {
+function tileToBounds(x: number, y: number, zoom: number) {
   const n = Math.pow(2, zoom);
   const west = (x / n) * 360 - 180;
   const east = ((x + 1) / n) * 360 - 180;
@@ -60,95 +36,52 @@ function tileToBounds(x: number, y: number, zoom: number): { west: number; east:
   const south = Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 1)) / n))) * (180 / Math.PI);
   return { west, east, north, south };
 }
-
-/**
- * Decode Terrarium RGB to height
- */
-function decodeTerrarium(r: number, g: number, b: number, offset: number): number {
+function decodeTerrarium(r: number, g: number, b: number, offset: number) {
   return (r * 256 + g + b / 256) - offset;
 }
-
-/**
- * Fetch and decode an elevation tile
- */
-async function fetchElevationTile(
-  x: number,
-  y: number,
-  config: ElevationConfig
-): Promise<CachedElevationTile | null> {
+async function fetchElevationTile(x: number, y: number, config: ElevationConfig) {
   const key = `${config.zoom}/${x}/${y}`;
-
-  // Check cache first
   const cached = elevationCache.get(key);
   if (cached) return cached;
-
-  const url = config.urlTemplate
-    .replace('{z}', config.zoom.toString())
-    .replace('{x}', x.toString())
-    .replace('{y}', y.toString());
-
+  const url = config.urlTemplate.replace('{z}', config.zoom.toString()).replace('{x}', x.toString()).replace('{y}', y.toString());
   try {
     const response = await fetch(url);
     if (!response.ok) return null;
-
     const blob = await response.blob();
     const bitmap = await createImageBitmap(blob);
-
-    // Draw to offscreen canvas to get pixel data
     const canvas = new OffscreenCanvas(config.tileSize, config.tileSize);
     const ctx = canvas.getContext('2d')!;
     ctx.drawImage(bitmap, 0, 0, config.tileSize, config.tileSize);
-
     const imageData = ctx.getImageData(0, 0, config.tileSize, config.tileSize);
     const heights = new Float32Array(config.tileSize * config.tileSize);
-
     for (let i = 0; i < config.tileSize * config.tileSize; i++) {
       const r = imageData.data[i * 4];
       const g = imageData.data[i * 4 + 1];
       const b = imageData.data[i * 4 + 2];
       heights[i] = decodeTerrarium(r, g, b, config.terrariumOffset);
     }
-
     const bounds = tileToBounds(x, y, config.zoom);
     const tile: CachedElevationTile = { heights, bounds };
     elevationCache.set(key, tile);
-
     return tile;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
-
-/**
- * Bilinear interpolation on height grid
- */
-function bilinearInterpolate(
-  heights: Float32Array,
-  gridX: number,
-  gridY: number,
-  gridSize: number
-): number {
+function bilinearInterpolate(heights: Float32Array, gridX: number, gridY: number, gridSize: number) {
   const clampedX = Math.max(0, Math.min(gridSize - 1, gridX));
   const clampedY = Math.max(0, Math.min(gridSize - 1, gridY));
-
   const x0 = Math.floor(clampedX);
   const y0 = Math.floor(clampedY);
   const x1 = Math.min(x0 + 1, gridSize - 1);
   const y1 = Math.min(y0 + 1, gridSize - 1);
-
   const fx = clampedX - x0;
   const fy = clampedY - y0;
-
   const h00 = heights[y0 * gridSize + x0];
   const h10 = heights[y0 * gridSize + x1];
   const h01 = heights[y1 * gridSize + x0];
   const h11 = heights[y1 * gridSize + x1];
-
-  // Handle NaN values
   const corners = [h00, h10, h01, h11];
   const validCorners = corners.filter(h => !Number.isNaN(h));
   if (validCorners.length === 0) return 0;
-
   if (validCorners.length < 4) {
     const avg = validCorners.reduce((a, b) => a + b, 0) / validCorners.length;
     const h00Safe = Number.isNaN(h00) ? avg : h00;
@@ -157,93 +90,49 @@ function bilinearInterpolate(
     const h11Safe = Number.isNaN(h11) ? avg : h11;
     return h00Safe * (1 - fx) * (1 - fy) + h10Safe * fx * (1 - fy) + h01Safe * (1 - fx) * fy + h11Safe * fx * fy;
   }
-
   return h00 * (1 - fx) * (1 - fy) + h10 * fx * (1 - fy) + h01 * (1 - fx) * fy + h11 * fx * fy;
 }
-
-/**
- * Get terrain height at a coordinate using cached elevation tiles
- */
-function getTerrainHeightFromCache(
-  lng: number,
-  lat: number,
-  config: ElevationConfig
-): number {
+function getTerrainHeightFromCache(lng: number, lat: number, config: ElevationConfig) {
   const [tileX, tileY] = lngLatToTile(lng, lat, config.zoom);
   const key = `${config.zoom}/${tileX}/${tileY}`;
-
   const cached = elevationCache.get(key);
   if (!cached) return 0;
-
   const { heights, bounds } = cached;
-
-  // Calculate position within tile
   const relX = (lng - bounds.west) / (bounds.east - bounds.west);
   const relY = (bounds.north - lat) / (bounds.north - bounds.south);
-
   const gridX = relX * (config.tileSize - 1);
   const gridY = relY * (config.tileSize - 1);
-
   const height = bilinearInterpolate(heights, gridX, gridY, config.tileSize);
   return Number.isNaN(height) ? 0 : height;
 }
-
-/**
- * Prefetch all elevation tiles needed for building features
- */
-async function prefetchElevationTiles(
-  features: BuildingFeatureInput[],
-  config: ElevationConfig
-): Promise<void> {
+async function prefetchElevationTiles(features: BuildingFeatureInput[], config: ElevationConfig) {
   const neededTiles = new Set<string>();
-
-  // Collect all unique tile coordinates
   for (const feature of features) {
-    const polygons = feature.type === 'Polygon'
-      ? [feature.coordinates as number[][][]]
-      : feature.coordinates as number[][][][];
-
+    const polygons = feature.type === 'Polygon' ? [feature.coordinates as number[][][]] : feature.coordinates as number[][][][];
     for (const polygon of polygons) {
       const outerRing = polygon[0];
       if (!outerRing) continue;
-
       for (const coord of outerRing) {
         const [tileX, tileY] = lngLatToTile(coord[0], coord[1], config.zoom);
         neededTiles.add(`${tileX}/${tileY}`);
       }
     }
   }
-
-  // Fetch all tiles in parallel
   const fetchPromises: Promise<CachedElevationTile | null>[] = [];
   for (const tileKey of neededTiles) {
     const [x, y] = tileKey.split('/').map(Number);
     fetchPromises.push(fetchElevationTile(x, y, config));
   }
-
   await Promise.all(fetchPromises);
 }
-
-/**
- * Compute terrain heights for a building from its coordinates
- */
-function computeTerrainHeights(
-  coordinates: number[][][] | number[][][][],
-  type: 'Polygon' | 'MultiPolygon',
-  config: ElevationConfig
-): [number, number] {
-  const coords = type === 'Polygon'
-    ? [coordinates as number[][][]]
-    : coordinates as number[][][][];
-
+function computeTerrainHeights(coordinates: number[][][] | number[][][][], type: 'Polygon' | 'MultiPolygon', config: ElevationConfig): [number, number] {
+  const coords = type === 'Polygon' ? [coordinates as number[][][]] : coordinates as number[][][][];
   let minHeight = Infinity;
   let maxHeight = -Infinity;
   let validCount = 0;
-
   for (const polygon of coords) {
     const outerRing = polygon[0];
     if (!outerRing) continue;
-
     for (const coord of outerRing) {
       const h = getTerrainHeightFromCache(coord[0], coord[1], config);
       if (!Number.isNaN(h)) {
@@ -253,37 +142,23 @@ function computeTerrainHeights(
       }
     }
   }
-
   if (validCount === 0) return [0, 0];
   return [minHeight, maxHeight];
 }
 
-// LOD level (must match buildings.ts) - used for skipping small buildings and holes at far distances
+const LOD_HIGH = 0;
+const LOD_MEDIUM = 1;
 const LOD_LOW = 2;
-
 const BUILDING_TERRAIN_OFFSET = 0.5;
 const SLOPE_COMPENSATION_FACTOR = 0.3;
-const MIN_BUILDING_AREA_FAR = 50; // m^2
+const MIN_BUILDING_AREA_FAR = 50;
 
-/**
- * Convert geographic coordinates to world coordinates
- */
-function geoToWorld(
-  lng: number,
-  lat: number,
-  altitude: number,
-  origin: SceneOrigin
-): { x: number; y: number; z: number } {
+function geoToWorld(lng: number, lat: number, altitude: number, origin: SceneOrigin) {
   const x = (lng - origin.lng) * origin.metersPerDegLng;
   const z = -(lat - origin.lat) * origin.metersPerDegLat;
   const y = altitude;
   return { x, y, z };
 }
-
-/**
- * Calculate signed area of a 2D polygon
- * Positive = clockwise, Negative = counter-clockwise
- */
 function calculatePolygonArea(points: { x: number; z: number }[]): number {
   let area = 0;
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
@@ -291,31 +166,11 @@ function calculatePolygonArea(points: { x: number; z: number }[]): number {
   }
   return area / 2;
 }
-
-/**
- * Get building height from properties
- */
-function getBuildingHeight(
-  properties: BuildingFeatureInput['properties'],
-  defaultHeight: number
-): number {
-  // Try explicit height first
-  if (typeof properties.height === 'number' && properties.height > 0) {
-    return properties.height;
-  }
-
-  // Calculate from floors (3m per floor is typical)
-  if (typeof properties.num_floors === 'number' && properties.num_floors > 0) {
-    return properties.num_floors * 3;
-  }
-
+function getBuildingHeight(props: BuildingFeatureInput['properties'], defaultHeight: number) {
+  if (typeof props.height === 'number' && props.height > 0) return props.height;
+  if (typeof props.num_floors === 'number' && props.num_floors > 0) return props.num_floors * 3;
   return defaultHeight;
 }
-
-/**
- * Get building color from feature using shared color logic
- * Uses deterministic seeded random for consistent colors
- */
 function getBuildingColor(feature: BuildingFeatureInput): number {
   return getColor({
     type: feature.type,
@@ -324,10 +179,6 @@ function getBuildingColor(feature: BuildingFeatureInput): number {
   });
 }
 
-/**
- * Generate building geometry for a single polygon
- * Returns null for invalid/too-small geometries
- */
 function generateBuildingGeometry(
   coordinates: number[][][],
   height: number,
@@ -337,80 +188,47 @@ function generateBuildingGeometry(
   terrainHeight: number,
   terrainSlope: number,
   verticalExaggeration: number,
-  origin: SceneOrigin
+  origin: SceneOrigin,
+  category: string = 'default',
+  variant: number = 0,
+  numFloors: number = 3
 ): {
   positions: number[];
   normals: number[];
   colors: number[];
   indices: number[];
+  uvs: number[];
   collider: BuildingColliderBounds;
 } | null {
   if (!coordinates || coordinates.length === 0) return null;
-
   const outerRing = coordinates[0];
   if (!outerRing || outerRing.length < 3) return null;
-
-  // Convert to world coordinates
-  // Main thread uses Vector2(world.x, -world.z) then rotateX(-PI/2) which gives final z = world.z
-  // Worker builds geometry directly in 3D, so we use world.z directly (no rotation step)
   let points: { x: number; z: number }[] = [];
   for (const coord of outerRing) {
     const world = geoToWorld(coord[0], coord[1], 0, origin);
     points.push({ x: world.x, z: world.z });
   }
-
-  // Remove duplicate last point if present
   if (points.length > 1) {
     const first = points[0];
     const last = points[points.length - 1];
-    if (Math.abs(first.x - last.x) < 0.01 && Math.abs(first.z - last.z) < 0.01) {
-      points.pop();
-    }
+    if (Math.abs(first.x - last.x) < 0.01 && Math.abs(first.z - last.z) < 0.01) points.pop();
   }
-
   if (points.length < 3) return null;
-
-  // Calculate area
   const area = calculatePolygonArea(points);
   if (Math.abs(area) < 1) return null;
-
-  // Skip small buildings at far distances
-  if (lodLevel === LOD_LOW && Math.abs(area) < MIN_BUILDING_AREA_FAR) {
-    return null;
-  }
-
-  // Simplification disabled - caused visual artifacts (jagged edges)
-  // Modern GPUs handle the extra vertices fine
-
+  if (lodLevel === LOD_LOW && Math.abs(area) < MIN_BUILDING_AREA_FAR) return null;
   if (points.length < 3) return null;
-
-  // Recalculate area
   const finalArea = calculatePolygonArea(points);
   if (Math.abs(finalArea) < 1) return null;
+  if (finalArea > 0) points.reverse();
 
-  // Ensure counter-clockwise winding (for correct normals when viewed from +Y)
-  // Worker uses z = world.z directly, while main thread uses y = -world.z
-  // This inverts the sign of the shoelace formula, so:
-  // - Main thread: area < 0 means CW, reverse to get CCW
-  // - Worker: area > 0 means CW (opposite sign), reverse to get CCW
-  if (finalArea > 0) {
-    points.reverse();
-  }
-
-  // Calculate base and top Y positions
-  // Add slope compensation to lift buildings above sloped terrain
   const baseY = terrainHeight * verticalExaggeration + BUILDING_TERRAIN_OFFSET + terrainSlope * SLOPE_COMPENSATION_FACTOR;
   const topY = baseY + height;
-  const bottomY = baseY + minHeight; // For buildings with min_height (floating bases)
+  const bottomY = baseY + minHeight;
 
-  // Flatten points for earcut (x, z format)
   const flatCoords: number[] = [];
-  for (const p of points) {
-    flatCoords.push(p.x, p.z);
-  }
+  for (const p of points) flatCoords.push(p.x, p.z);
 
-  // Process holes (skip for LOW LOD)
-  // Track hole start indices and vertex counts for wall generation
   const holes: number[] = [];
   const holeVertexCounts: number[] = [];
   const colliderHoles: number[][] = [];
@@ -418,186 +236,153 @@ function generateBuildingGeometry(
     for (let i = 1; i < coordinates.length; i++) {
       const holeRing = coordinates[i];
       if (!holeRing || holeRing.length < 3) continue;
-
-      holes.push(flatCoords.length / 2); // Start index of hole
-
-      // Use world.z directly (same as outer ring - no rotation in worker)
+      holes.push(flatCoords.length / 2);
       let holePoints: { x: number; z: number }[] = [];
       for (const coord of holeRing) {
         const world = geoToWorld(coord[0], coord[1], 0, origin);
         holePoints.push({ x: world.x, z: world.z });
       }
-
-      // Remove duplicate last point
       if (holePoints.length > 1) {
         const first = holePoints[0];
         const last = holePoints[holePoints.length - 1];
-        if (Math.abs(first.x - last.x) < 0.01 && Math.abs(first.z - last.z) < 0.01) {
-          holePoints.pop();
-        }
+        if (Math.abs(first.x - last.x) < 0.01 && Math.abs(first.z - last.z) < 0.01) holePoints.pop();
       }
-
-      // Holes should be clockwise (opposite winding from outer ring which is CCW)
-      // Same sign inversion as outer ring: worker uses z directly, main thread uses -z
-      // So worker reverses when area < 0 (opposite of main thread's > 0 check)
       const holeArea = calculatePolygonArea(holePoints);
-      if (holeArea < 0) {
-        holePoints.reverse();
-      }
-
-      // Track actual vertex count after processing
+      if (holeArea < 0) holePoints.reverse();
       holeVertexCounts.push(holePoints.length);
-      if (holePoints.length >= 3) {
-        colliderHoles.push(holePoints.flatMap(point => [point.x, point.z]));
-      }
-
-      for (const p of holePoints) {
-        flatCoords.push(p.x, p.z);
-      }
+      if (holePoints.length >= 3) colliderHoles.push(holePoints.flatMap(p => [p.x, p.z]));
+      for (const p of holePoints) flatCoords.push(p.x, p.z);
     }
   }
 
-  // Triangulate roof using earcut
   const roofIndices = earcut(flatCoords, holes, 2);
   if (roofIndices.length === 0) return null;
 
-  // Extract vertex positions from flatCoords
   const vertexCount = flatCoords.length / 2;
   const roofVertices: { x: number; z: number }[] = [];
   for (let i = 0; i < vertexCount; i++) {
-    roofVertices.push({
-      x: flatCoords[i * 2],
-      z: flatCoords[i * 2 + 1],
-    });
+    roofVertices.push({ x: flatCoords[i * 2], z: flatCoords[i * 2 + 1] });
   }
 
-  // Build geometry buffers
   const positions: number[] = [];
   const normals: number[] = [];
   const colors: number[] = [];
   const indices: number[] = [];
+  const uvs: number[] = [];
 
-  // Extract RGB from hex color
   const r = ((color >> 16) & 0xff) / 255;
   const g = ((color >> 8) & 0xff) / 255;
   const b = (color & 0xff) / 255;
 
-  // === ROOF (top face) ===
+  const atlasUVs = getBuildingAtlasUVs(category, variant);
+  const roofU = atlasUVs.u0;
+  const roofV = atlasUVs.v0;
+
   const roofStartIndex = positions.length / 3;
   for (const v of roofVertices) {
     positions.push(v.x, topY, v.z);
-    normals.push(0, 1, 0); // Up
+    normals.push(0, 1, 0);
     colors.push(r, g, b);
+    uvs.push(roofU, roofV);
   }
-  // Reverse triangle winding for correct face culling when viewed from above
-  // Earcut produces CCW triangles in 2D (x,z), but Three.js needs them reversed
-  // for front-face visibility when looking down from +Y
   for (let i = 0; i < roofIndices.length; i += 3) {
     indices.push(roofStartIndex + roofIndices[i]);
     indices.push(roofStartIndex + roofIndices[i + 2]);
     indices.push(roofStartIndex + roofIndices[i + 1]);
   }
 
-  // === BOTTOM (base face, if minHeight > 0 for floating buildings) ===
   if (minHeight > 0) {
     const bottomStartIndex = positions.length / 3;
     for (const v of roofVertices) {
       positions.push(v.x, bottomY, v.z);
-      normals.push(0, -1, 0); // Down
-      colors.push(r * 0.7, g * 0.7, b * 0.7); // Darker
+      normals.push(0, -1, 0);
+      colors.push(r * 0.7, g * 0.7, b * 0.7);
+      uvs.push(roofU, roofV);
     }
-    // Reverse winding for bottom face
     for (let i = roofIndices.length - 1; i >= 0; i--) {
       indices.push(bottomStartIndex + roofIndices[i]);
     }
   }
 
-  // === WALLS ===
-  // Use only outer ring points for walls (index 0 to points.length)
   const outerPointCount = points.length;
-  const wallDarkening = 0.85; // Slightly darker walls
+  const wallDarkening = 0.85;
+  const floorsPerTile = 3;
+  const desiredSegments = Math.max(1, Math.ceil(numFloors / floorsPerTile));
+  const maxSegments = lodLevel === LOD_HIGH ? 3 : lodLevel === LOD_MEDIUM ? 2 : 1;
+  const verticalSegments = Math.min(desiredSegments, maxSegments);
+  const segmentHeight = (topY - (minHeight > 0 ? bottomY : baseY)) / verticalSegments;
 
   for (let i = 0; i < outerPointCount; i++) {
     const p0 = points[i];
     const p1 = points[(i + 1) % outerPointCount];
-
-    // Calculate wall normal (perpendicular to wall segment)
     const dx = p1.x - p0.x;
     const dz = p1.z - p0.z;
     const len = Math.sqrt(dx * dx + dz * dz);
-    if (len < 0.01) continue; // Skip degenerate segments
-
-    // Normal pointing outward: perpendicular to travel direction, 90° clockwise
-    // For CCW polygon (when viewed from +Y), this points outward
-    // 90° clockwise rotation of (dx, dz) is (dz, -dx)
+    if (len < 0.01) continue;
     const nx = dz / len;
     const nz = -dx / len;
 
-    const wallStartIndex = positions.length / 3;
+    for (let seg = 0; seg < verticalSegments; seg++) {
+      const segBaseY = (minHeight > 0 ? bottomY : baseY) + seg * segmentHeight;
+      const segTopY = segBaseY + segmentHeight;
+      const wallStartIndex = positions.length / 3;
 
-    // Four vertices per wall quad: bottom-left, bottom-right, top-right, top-left
-    // Using bottomY for base (or baseY if no minHeight)
-    const wallBaseY = minHeight > 0 ? bottomY : baseY;
+      positions.push(p0.x, segBaseY, p0.z);
+      positions.push(p1.x, segBaseY, p1.z);
+      positions.push(p1.x, segTopY, p1.z);
+      positions.push(p0.x, segTopY, p0.z);
 
-    positions.push(p0.x, wallBaseY, p0.z); // 0: bottom-left
-    positions.push(p1.x, wallBaseY, p1.z); // 1: bottom-right
-    positions.push(p1.x, topY, p1.z);      // 2: top-right
-    positions.push(p0.x, topY, p0.z);      // 3: top-left
+      for (let j = 0; j < 4; j++) {
+        normals.push(nx, 0, nz);
+        colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
+      }
 
-    for (let j = 0; j < 4; j++) {
-      normals.push(nx, 0, nz);
-      colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
+      uvs.push(atlasUVs.u0, atlasUVs.v0);
+      uvs.push(atlasUVs.u1, atlasUVs.v0);
+      uvs.push(atlasUVs.u1, atlasUVs.v1);
+      uvs.push(atlasUVs.u0, atlasUVs.v1);
+
+      indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
+      indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
     }
-
-    // Two triangles with CCW winding when viewed from outside: (0,3,2) and (0,2,1)
-    indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
-    indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
   }
 
-  // Add walls for holes (only for higher LOD)
-  // Use tracked hole vertex counts from earcut setup (after simplification/dedup)
   if (lodLevel !== LOD_LOW && holeVertexCounts.length > 0) {
     let holeStartIdx = outerPointCount;
     for (let h = 0; h < holeVertexCounts.length; h++) {
       const holeVertexCount = holeVertexCounts[h];
-
       for (let i = 0; i < holeVertexCount; i++) {
         const idx0 = holeStartIdx + i;
         const idx1 = holeStartIdx + ((i + 1) % holeVertexCount);
         if (idx0 >= roofVertices.length || idx1 >= roofVertices.length) break;
-
         const p0 = roofVertices[idx0];
         const p1 = roofVertices[idx1];
-
         const dx = p1.x - p0.x;
         const dz = p1.z - p0.z;
         const len = Math.sqrt(dx * dx + dz * dz);
         if (len < 0.01) continue;
-
-        // Normal pointing inward for holes (opposite of outer walls)
-        // Holes are CW when viewed from above, so 90° CCW rotation points inward
-        // 90° counter-clockwise rotation of (dx, dz) is (-dz, dx)
         const nx = -dz / len;
         const nz = dx / len;
-
-        const wallStartIndex = positions.length / 3;
-        const wallBaseY = minHeight > 0 ? bottomY : baseY;
-
-        positions.push(p0.x, wallBaseY, p0.z);
-        positions.push(p1.x, wallBaseY, p1.z);
-        positions.push(p1.x, topY, p1.z);
-        positions.push(p0.x, topY, p0.z);
-
-        for (let j = 0; j < 4; j++) {
-          normals.push(nx, 0, nz);
-          colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
+        for (let seg = 0; seg < verticalSegments; seg++) {
+          const segBaseY = (minHeight > 0 ? bottomY : baseY) + seg * segmentHeight;
+          const segTopY = segBaseY + segmentHeight;
+          const wallStartIndex = positions.length / 3;
+          positions.push(p0.x, segBaseY, p0.z);
+          positions.push(p1.x, segBaseY, p1.z);
+          positions.push(p1.x, segTopY, p1.z);
+          positions.push(p0.x, segTopY, p0.z);
+          for (let j = 0; j < 4; j++) {
+            normals.push(nx, 0, nz);
+            colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
+          }
+          uvs.push(atlasUVs.u0, atlasUVs.v0);
+          uvs.push(atlasUVs.u1, atlasUVs.v0);
+          uvs.push(atlasUVs.u1, atlasUVs.v1);
+          uvs.push(atlasUVs.u0, atlasUVs.v1);
+          indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
+          indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
         }
-
-        // Two triangles with CCW winding when viewed from inside (hole walls face inward)
-        indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
-        indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
       }
-
       holeStartIdx += holeVertexCount;
     }
   }
@@ -610,105 +395,52 @@ function generateBuildingGeometry(
     normals,
     colors,
     indices,
+    uvs,
     collider: {
       ...bounds,
-      outerRing: points.flatMap(point => [point.x, point.z]),
+      outerRing: points.flatMap(p => [p.x, p.z]),
       holes: colliderHoles,
     },
   };
 }
 
 type BuildingBounds = Omit<BuildingColliderBounds, 'outerRing' | 'holes'>;
-
-/**
- * Derive collider bounds from the final generated vertices so collision and
- * rendering use exactly the same terrain-adjusted vertical extent.
- */
 function getGeometryBounds(positions: number[]): BuildingBounds | null {
   if (positions.length < 3) return null;
-
-  let minX = Infinity;
-  let minY = Infinity;
-  let minZ = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let maxZ = -Infinity;
-
+  let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
   for (let i = 0; i < positions.length; i += 3) {
-    const x = positions[i];
-    const y = positions[i + 1];
-    const z = positions[i + 2];
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    minZ = Math.min(minZ, z);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
-    maxZ = Math.max(maxZ, z);
+    const x = positions[i], y = positions[i + 1], z = positions[i + 2];
+    minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
   }
-
   return { minX, minY, minZ, maxX, maxY, maxZ };
 }
 
-/**
- * Build geometry for all buildings in a tile
- * Returns geometry buffers ready for GPU upload
- * Now async to support worker-side elevation fetching
- */
-export async function buildBuildingGeometry(
-  payload: CreateBuildingGeometryPayload
-): Promise<CreateBuildingGeometryResult> {
-  const {
-    features,
-    origin,
-    lodLevel,
-    defaultHeight,
-    elevationConfig,
-    verticalExaggeration,
-  } = payload;
-
-  // Prefetch elevation tiles if config provided (HTTP cache should hit)
-  if (elevationConfig) {
-    await prefetchElevationTiles(features, elevationConfig);
-  }
-
+export async function buildBuildingGeometry(payload: CreateBuildingGeometryPayload): Promise<CreateBuildingGeometryResult> {
+  const { features, origin, lodLevel, defaultHeight, elevationConfig, verticalExaggeration } = payload;
+  if (elevationConfig) await prefetchElevationTiles(features, elevationConfig);
   const allPositions: number[] = [];
   const allNormals: number[] = [];
   const allColors: number[] = [];
   const allIndices: number[] = [];
+  const allUvs: number[] = [];
   const colliders: BuildingColliderBounds[] = [];
   let vertexOffset = 0;
-
   let buildingsProcessed = 0;
   let buildingsSkipped = 0;
 
   for (let i = 0; i < features.length; i++) {
     const feature = features[i];
-
-    // Skip underground buildings
-    if (feature.properties.is_underground) {
-      buildingsSkipped++;
-      continue;
-    }
-
-    // Skip main building footprints that have parts - only render the parts
-    // This prevents z-fighting between main footprint and building_part features
-    if (feature.properties.has_parts === true) {
-      buildingsSkipped++;
-      continue;
-    }
-
-    // Get polygon coordinates
-    const polygons = feature.type === 'Polygon'
-      ? [feature.coordinates as number[][][]]
-      : feature.coordinates as number[][][][];
-
-    // Get building properties
+    if (feature.properties.is_underground) { buildingsSkipped++; continue; }
+    if (feature.properties.has_parts === true) { buildingsSkipped++; continue; }
+    const polygons = feature.type === 'Polygon' ? [feature.coordinates as number[][][]] : feature.coordinates as number[][][][];
     const height = getBuildingHeight(feature.properties, defaultHeight);
-    const minHeight = typeof feature.properties.min_height === 'number'
-      ? feature.properties.min_height : 0;
+    const minHeight = typeof feature.properties.min_height === 'number' ? feature.properties.min_height : 0;
     const color = getBuildingColor(feature);
-
-    // Compute terrain height from elevation tiles (or default to 0)
+    const category = getBuildingCategory(feature);
+    const seed = generateSeed(feature);
+    const variant = seed % 4;
+    const numFloors = typeof feature.properties.num_floors === 'number' ? feature.properties.num_floors : Math.round(height / 3);
     let terrainHeight = 0;
     let terrainSlope = 0;
     if (elevationConfig) {
@@ -716,10 +448,8 @@ export async function buildBuildingGeometry(
       terrainHeight = minH;
       terrainSlope = maxH - minH;
     }
-
     for (const polygon of polygons) {
       if (!polygon || !polygon[0] || polygon[0].length < 3) continue;
-
       try {
         const geom = generateBuildingGeometry(
           polygon,
@@ -730,56 +460,27 @@ export async function buildBuildingGeometry(
           terrainHeight,
           terrainSlope,
           verticalExaggeration,
-          origin
+          origin,
+          category,
+          variant,
+          numFloors
         );
-
         if (geom) {
           colliders.push(geom.collider);
-
-          // Append positions
-          for (const v of geom.positions) {
-            allPositions.push(v);
-          }
-
-          // Append normals
-          for (const n of geom.normals) {
-            allNormals.push(n);
-          }
-
-          // Append colors
-          for (const c of geom.colors) {
-            allColors.push(c);
-          }
-
-          // Append indices with offset
-          for (const idx of geom.indices) {
-            allIndices.push(idx + vertexOffset);
-          }
-
+          for (const v of geom.positions) allPositions.push(v);
+          for (const n of geom.normals) allNormals.push(n);
+          for (const c of geom.colors) allColors.push(c);
+          for (const u of geom.uvs) allUvs.push(u);
+          for (const idx of geom.indices) allIndices.push(idx + vertexOffset);
           vertexOffset += geom.positions.length / 3;
           buildingsProcessed++;
-        } else {
-          buildingsSkipped++;
-        }
-      } catch {
-        buildingsSkipped++;
-      }
+        } else buildingsSkipped++;
+      } catch { buildingsSkipped++; }
     }
   }
 
-
-  // Create result
   if (allPositions.length === 0) {
-    return {
-      geometry: null,
-      colliders: [],
-      stats: {
-        buildingsProcessed: 0,
-        buildingsSkipped: buildingsSkipped,
-        totalVertices: 0,
-        totalTriangles: 0,
-      },
-    };
+    return { geometry: null, colliders: [], stats: { buildingsProcessed: 0, buildingsSkipped, totalVertices: 0, totalTriangles: 0 } };
   }
 
   const geometry: BuildingGeometryBuffers = {
@@ -787,31 +488,20 @@ export async function buildBuildingGeometry(
     normals: new Float32Array(allNormals),
     colors: new Float32Array(allColors),
     indices: new Uint32Array(allIndices),
+    uvs: new Float32Array(allUvs),
   };
 
-  return {
-    geometry,
-    colliders,
-    stats: {
-      buildingsProcessed,
-      buildingsSkipped,
-      totalVertices: allPositions.length / 3,
-      totalTriangles: allIndices.length / 3,
-    },
-  };
+  return { geometry, colliders, stats: { buildingsProcessed, buildingsSkipped, totalVertices: allPositions.length / 3, totalTriangles: allIndices.length / 3 } };
 }
 
-/**
- * Get transferable buffers from building geometry result
- * Note: TypedArray.buffer returns ArrayBufferLike, cast needed for transfer list
- */
 export function getBuildingTransferables(result: CreateBuildingGeometryResult): ArrayBuffer[] {
   if (!result.geometry) return [];
-
-  return [
+  const buffers: ArrayBuffer[] = [
     result.geometry.positions.buffer as ArrayBuffer,
     result.geometry.normals.buffer as ArrayBuffer,
     result.geometry.colors.buffer as ArrayBuffer,
     result.geometry.indices.buffer as ArrayBuffer,
   ];
+  if (result.geometry.uvs) buffers.push(result.geometry.uvs.buffer as ArrayBuffer);
+  return buffers;
 }
