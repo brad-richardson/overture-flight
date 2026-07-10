@@ -128,7 +128,7 @@ async function createBuildingsForTileInner(
     return null;
   }
 
-  // Store features for click picking
+  // Prepare features for click picking; publish them only with a renderable group.
   const storedFeatures: StoredFeature[] = features
     .filter(f => {
       // Only process polygon/multipolygon types using type guard
@@ -143,8 +143,6 @@ async function createBuildingsForTileInner(
       layer: f.layer || 'building',
       tileKey
     }));
-  storeFeatures(tileKey, storedFeatures);
-
   // Calculate LOD level based on distance from player
   const tileDistance = getTileDistanceFromOrigin(tileX, tileY, tileZ);
   const lodLevel = getLODLevel(tileDistance);
@@ -218,6 +216,9 @@ async function createBuildingsForTileInner(
               group.add(mesh);
 
               if (group.children.length > 0) {
+                // Publish picking data only when the matching scene group can be
+                // activated. Null/stale building results leave no orphan entry.
+                storeFeatures(tileKey, storedFeatures);
                 scene.add(group);
                 loadingBuildingTiles.delete(tileKey);
                 return group;
