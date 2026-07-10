@@ -369,6 +369,10 @@ function generateBuildingGeometry(
 
   const outerPointCount = points.length;
   const wallDarkening = 0.85;
+  const floorsPerTile = 3;
+  const verticalSegments = Math.max(1, Math.ceil(numFloors / floorsPerTile));
+  const segmentHeight = (topY - (minHeight > 0 ? bottomY : baseY)) / verticalSegments;
+
   for (let i = 0; i < outerPointCount; i++) {
     const p0 = points[i];
     const p1 = points[(i + 1) % outerPointCount];
@@ -378,22 +382,30 @@ function generateBuildingGeometry(
     if (len < 0.01) continue;
     const nx = dz / len;
     const nz = -dx / len;
-    const wallStartIndex = positions.length / 3;
-    const wallBaseY = minHeight > 0 ? bottomY : baseY;
-    positions.push(p0.x, wallBaseY, p0.z);
-    positions.push(p1.x, wallBaseY, p1.z);
-    positions.push(p1.x, topY, p1.z);
-    positions.push(p0.x, topY, p0.z);
-    for (let j = 0; j < 4; j++) {
-      normals.push(nx, 0, nz);
-      colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
+
+    for (let seg = 0; seg < verticalSegments; seg++) {
+      const segBaseY = (minHeight > 0 ? bottomY : baseY) + seg * segmentHeight;
+      const segTopY = segBaseY + segmentHeight;
+      const wallStartIndex = positions.length / 3;
+
+      positions.push(p0.x, segBaseY, p0.z);
+      positions.push(p1.x, segBaseY, p1.z);
+      positions.push(p1.x, segTopY, p1.z);
+      positions.push(p0.x, segTopY, p0.z);
+
+      for (let j = 0; j < 4; j++) {
+        normals.push(nx, 0, nz);
+        colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
+      }
+
+      uvs.push(atlasUVs.u0, atlasUVs.v0);
+      uvs.push(atlasUVs.u1, atlasUVs.v0);
+      uvs.push(atlasUVs.u1, atlasUVs.v1);
+      uvs.push(atlasUVs.u0, atlasUVs.v1);
+
+      indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
+      indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
     }
-    uvs.push(atlasUVs.u0, atlasUVs.v0);
-    uvs.push(atlasUVs.u1, atlasUVs.v0);
-    uvs.push(atlasUVs.u1, atlasUVs.v1);
-    uvs.push(atlasUVs.u0, atlasUVs.v1);
-    indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
-    indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
   }
 
   if (lodLevel !== LOD_LOW && holeVertexCounts.length > 0) {
@@ -412,22 +424,25 @@ function generateBuildingGeometry(
         if (len < 0.01) continue;
         const nx = -dz / len;
         const nz = dx / len;
-        const wallStartIndex = positions.length / 3;
-        const wallBaseY = minHeight > 0 ? bottomY : baseY;
-        positions.push(p0.x, wallBaseY, p0.z);
-        positions.push(p1.x, wallBaseY, p1.z);
-        positions.push(p1.x, topY, p1.z);
-        positions.push(p0.x, topY, p0.z);
-        for (let j = 0; j < 4; j++) {
-          normals.push(nx, 0, nz);
-          colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
+        for (let seg = 0; seg < verticalSegments; seg++) {
+          const segBaseY = (minHeight > 0 ? bottomY : baseY) + seg * segmentHeight;
+          const segTopY = segBaseY + segmentHeight;
+          const wallStartIndex = positions.length / 3;
+          positions.push(p0.x, segBaseY, p0.z);
+          positions.push(p1.x, segBaseY, p1.z);
+          positions.push(p1.x, segTopY, p1.z);
+          positions.push(p0.x, segTopY, p0.z);
+          for (let j = 0; j < 4; j++) {
+            normals.push(nx, 0, nz);
+            colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
+          }
+          uvs.push(atlasUVs.u0, atlasUVs.v0);
+          uvs.push(atlasUVs.u1, atlasUVs.v0);
+          uvs.push(atlasUVs.u1, atlasUVs.v1);
+          uvs.push(atlasUVs.u0, atlasUVs.v1);
+          indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
+          indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
         }
-        uvs.push(atlasUVs.u0, atlasUVs.v0);
-        uvs.push(atlasUVs.u1, atlasUVs.v0);
-        uvs.push(atlasUVs.u1, atlasUVs.v1);
-        uvs.push(atlasUVs.u0, atlasUVs.v1);
-        indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
-        indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
       }
       holeStartIdx += holeVertexCount;
     }
