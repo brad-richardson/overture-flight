@@ -6,12 +6,13 @@ import {
   isUndergroundBuilding,
   isBuildingFeature,
 } from './building-materials.js';
+import { registerBuildingColliders, unregisterBuildingColliders } from './collision.js';
 import { storeFeatures, removeStoredFeatures } from './feature-picker.js';
 import type { StoredFeature } from './feature-picker.js';
 import { getTileSemaphore, TilePriority } from './semaphore.js';
 import { clearPendingUpdatesForTile } from './elevation-sync.js';
 import { getBuildingGeometryWorkerPool } from './workers/index.js';
-import type { BuildingFeatureInput, ElevationConfig } from './workers/index.js';
+import type { BuildingFeatureInput, ElevationConfig, SceneOrigin } from './workers/index.js';
 
 // Default building height when not specified
 const DEFAULT_BUILDING_HEIGHT = 10;
@@ -54,8 +55,37 @@ function getLODLevel(distance: number): LODLevel {
   }
 }
 
-// Track tiles currently being loaded to prevent race conditions
-const loadingBuildingTiles = new Set<string>();
+// Track tiles currently being loaded to prevent race conditions. The epoch is
+// bumped before a teleport changes the scene origin, invalidating every queued
+// or in-flight result from the prior local world.
+let buildingLoadEpoch = 0;
+const loadingBuildingTiles = new Map<string, number>();
+
+/** Invalidate queued/in-flight building work before replacing the local world. */
+export function invalidateBuildingLoads(): void {
+  buildingLoadEpoch++;
+  loadingBuildingTiles.clear();
+}
+
+function isBuildingLoadCurrent(
+  tileKey: string,
+  loadEpoch: number,
+  loadOrigin: SceneOrigin
+): boolean {
+  if (loadEpoch !== buildingLoadEpoch || loadingBuildingTiles.get(tileKey) !== loadEpoch) {
+    return false;
+  }
+
+  const currentOrigin = getSceneOriginForWorker();
+  return currentOrigin.lng === loadOrigin.lng && currentOrigin.lat === loadOrigin.lat;
+}
+
+/** Delete the loading marker only when this request still owns it. */
+function finishBuildingLoad(tileKey: string, loadEpoch: number): boolean {
+  if (loadingBuildingTiles.get(tileKey) !== loadEpoch) return false;
+  loadingBuildingTiles.delete(tileKey);
+  return true;
+}
 
 /**
  * Material that uses vertex colors for individual building variation
@@ -87,22 +117,26 @@ export async function createBuildingsForTile(
     return null;
   }
 
-  // Mark as loading
-  loadingBuildingTiles.add(tileKey);
+  const loadEpoch = buildingLoadEpoch;
+  const loadOrigin = getSceneOriginForWorker();
+  loadingBuildingTiles.set(tileKey, loadEpoch);
 
   // Use semaphore to limit concurrent tile processing (maintains 60fps)
   // Buildings have lowest priority - ground tiles load first
   const semaphore = getTileSemaphore();
   try {
     if (semaphore) {
-      return await semaphore.run(() => createBuildingsForTileInner(tileX, tileY, tileZ, tileKey), TilePriority.BUILDINGS);
+      return await semaphore.run(
+        () => createBuildingsForTileInner(tileX, tileY, tileZ, tileKey, loadEpoch, loadOrigin),
+        TilePriority.BUILDINGS
+      );
     }
-    return await createBuildingsForTileInner(tileX, tileY, tileZ, tileKey);
+    return await createBuildingsForTileInner(tileX, tileY, tileZ, tileKey, loadEpoch, loadOrigin);
   } catch (error) {
-    // Ensure cleanup on error to prevent permanently stuck entries
-    loadingBuildingTiles.delete(tileKey);
-    // Clean up stored features to prevent memory leak
-    removeStoredFeatures(tileKey);
+    // A stale request must not delete state owned by a newer same-key request.
+    if (finishBuildingLoad(tileKey, loadEpoch)) {
+      removeStoredFeatures(tileKey);
+    }
     throw error;
   }
 }
@@ -114,21 +148,24 @@ async function createBuildingsForTileInner(
   tileX: number,
   tileY: number,
   tileZ: number,
-  tileKey: string
+  tileKey: string,
+  loadEpoch: number,
+  loadOrigin: SceneOrigin
 ): Promise<THREE.Group | null> {
   const scene = getScene();
-  if (!scene) {
-    loadingBuildingTiles.delete(tileKey);
+  if (!scene || !isBuildingLoadCurrent(tileKey, loadEpoch, loadOrigin)) {
+    finishBuildingLoad(tileKey, loadEpoch);
     return null;
   }
 
   const features = await loadBuildingTile(tileX, tileY, tileZ);
-  if (features.length === 0) {
-    loadingBuildingTiles.delete(tileKey);
+  if (!isBuildingLoadCurrent(tileKey, loadEpoch, loadOrigin) || features.length === 0) {
+    finishBuildingLoad(tileKey, loadEpoch);
     return null;
   }
 
-  // Prepare features for click picking; publish them only with a renderable group.
+  // Prepare click-picking features, but publish them only after the async
+  // geometry result passes the epoch/origin guard.
   const storedFeatures: StoredFeature[] = features
     .filter(f => {
       // Only process polygon/multipolygon types using type guard
@@ -155,86 +192,105 @@ async function createBuildingsForTileInner(
   // Worker-based building geometry generation
   // Worker produces single merged mesh with uniform material properties.
   // Benefits: Heavy geometry computation off main thread, better frame rates.
-  // Note: Origin captured here; if floating origin shifts during processing,
-  // geometry may be slightly offset (acceptable for typical movement speeds).
+  // Results are accepted only while the captured epoch and origin remain current.
   if (WORKERS.BUILDING_GEOMETRY_ENABLED) {
     try {
       const workerPool = getBuildingGeometryWorkerPool();
       const isSupported = await workerPool.isWorkerSupported();
 
-      if (isSupported) {
-        const origin = getSceneOriginForWorker();
-        if (origin) {
-          // Convert features to worker format
-          const workerFeatures: BuildingFeatureInput[] = [];
+      if (isSupported && isBuildingLoadCurrent(tileKey, loadEpoch, loadOrigin)) {
+        // Convert features to worker format
+        const workerFeatures: BuildingFeatureInput[] = [];
 
-          for (const f of features) {
-            if (!isBuildingFeature(f)) continue;
-            if (isUndergroundBuilding(f)) continue;
+        for (const f of features) {
+          if (!isBuildingFeature(f)) continue;
+          if (isUndergroundBuilding(f)) continue;
 
-            workerFeatures.push({
-              type: f.type as 'Polygon' | 'MultiPolygon',
-              coordinates: f.coordinates as number[][][] | number[][][][],
-              layer: f.layer,
-              properties: f.properties as BuildingFeatureInput['properties'],
-            });
-          }
+          workerFeatures.push({
+            type: f.type as 'Polygon' | 'MultiPolygon',
+            coordinates: f.coordinates as number[][][] | number[][][][],
+            layer: f.layer,
+            properties: f.properties as BuildingFeatureInput['properties'],
+          });
+        }
 
-          if (workerFeatures.length > 0) {
-            // Pass elevation config for worker-side terrain lookups (HTTP cache should hit)
-            const elevationConfig: ElevationConfig | undefined = ELEVATION.TERRAIN_ENABLED ? {
-              urlTemplate: ELEVATION.TERRARIUM_URL,
-              zoom: ELEVATION.ZOOM,
-              tileSize: ELEVATION.TILE_SIZE,
-              terrariumOffset: ELEVATION.TERRARIUM_OFFSET,
-            } : undefined;
+        if (workerFeatures.length > 0) {
+          // Pass elevation config for worker-side terrain lookups (HTTP cache should hit)
+          const elevationConfig: ElevationConfig | undefined = ELEVATION.TERRAIN_ENABLED ? {
+            urlTemplate: ELEVATION.TERRARIUM_URL,
+            zoom: ELEVATION.ZOOM,
+            tileSize: ELEVATION.TILE_SIZE,
+            terrariumOffset: ELEVATION.TERRARIUM_OFFSET,
+          } : undefined;
 
-            const result = await workerPool.createBuildingGeometry(
-              workerFeatures,
-              origin,
-              tileX,
-              tileY,
-              tileZ,
-              lodLevel,
-              DEFAULT_BUILDING_HEIGHT,
-              elevationConfig,
-              ELEVATION.VERTICAL_EXAGGERATION
-            );
+          const result = await workerPool.createBuildingGeometry(
+            workerFeatures,
+            loadOrigin,
+            tileX,
+            tileY,
+            tileZ,
+            lodLevel,
+            DEFAULT_BUILDING_HEIGHT,
+            elevationConfig,
+            ELEVATION.VERTICAL_EXAGGERATION
+          );
 
-            if (result.geometry) {
-              // Create Three.js BufferGeometry from worker result
-              const geometry = new THREE.BufferGeometry();
-              geometry.setAttribute('position', new THREE.BufferAttribute(result.geometry.positions, 3));
-              geometry.setAttribute('normal', new THREE.BufferAttribute(result.geometry.normals, 3));
-              geometry.setAttribute('color', new THREE.BufferAttribute(result.geometry.colors, 3));
-              geometry.setIndex(new THREE.Uint32BufferAttribute(result.geometry.indices, 1));
+          if (result.geometry) {
+            // Create Three.js BufferGeometry from worker result
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(result.geometry.positions, 3));
+            geometry.setAttribute('normal', new THREE.BufferAttribute(result.geometry.normals, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(result.geometry.colors, 3));
+            geometry.setIndex(new THREE.Uint32BufferAttribute(result.geometry.indices, 1));
 
-              const mesh = new THREE.Mesh(geometry, vertexColorMaterial.clone());
-              mesh.castShadow = true;
-              mesh.receiveShadow = true;
-              mesh.name = 'buildings-worker';
+            const mesh = new THREE.Mesh(geometry, vertexColorMaterial.clone());
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            mesh.name = 'buildings-worker';
               group.add(mesh);
 
-              if (group.children.length > 0) {
-                // Publish picking data only when the matching scene group can be
-                // activated. Null/stale building results leave no orphan entry.
-                storeFeatures(tileKey, storedFeatures);
-                scene.add(group);
-                loadingBuildingTiles.delete(tileKey);
-                return group;
-              }
+            // Guard the post-worker await boundary before mutating the scene,
+            // picking registry, or collision index.
+            if (!isBuildingLoadCurrent(tileKey, loadEpoch, loadOrigin)) {
+              disposeBuildingGroupResources(group);
+              finishBuildingLoad(tileKey, loadEpoch);
+              return null;
             }
+
+            storeFeatures(tileKey, storedFeatures);
+            scene.add(group);
+            registerBuildingColliders(tileKey, result.colliders);
+            finishBuildingLoad(tileKey, loadEpoch);
+            return group;
           }
         }
       }
     } catch (error) {
-      console.warn('Building geometry worker failed:', error);
+      if (isBuildingLoadCurrent(tileKey, loadEpoch, loadOrigin)) {
+        console.warn('Building geometry worker failed:', error);
+      }
     }
   }
 
   // Worker didn't produce results - clean up and return null
-  loadingBuildingTiles.delete(tileKey);
+  disposeBuildingGroupResources(group);
+  finishBuildingLoad(tileKey, loadEpoch);
   return null;
+}
+
+function disposeBuildingGroupResources(group: THREE.Group): void {
+  group.traverse((child) => {
+    if (!(child as THREE.Mesh).isMesh) return;
+
+    const mesh = child as THREE.Mesh;
+    mesh.geometry?.dispose();
+    if (Array.isArray(mesh.material)) {
+      for (const material of mesh.material) material.dispose();
+    } else {
+      mesh.material?.dispose();
+    }
+  });
+  group.clear();
 }
 
 /**
@@ -248,6 +304,7 @@ export function removeBuildingsGroup(group: THREE.Group): void {
     const tileKey = group.name; // e.g., "buildings-14/8372/5739"
     removeStoredFeatures(tileKey);
     clearPendingUpdatesForTile(tileKey);
+    unregisterBuildingColliders(tileKey);
   }
 
   const scene = getScene();
@@ -255,35 +312,5 @@ export function removeBuildingsGroup(group: THREE.Group): void {
     scene.remove(group);
   }
 
-  let disposedGeometries = 0;
-  let disposedMaterials = 0;
-
-  // Dispose of geometries and materials
-  group.traverse((child) => {
-    if ((child as THREE.Mesh).isMesh) {
-      const mesh = child as THREE.Mesh;
-
-      // Dispose geometry and all its attributes
-      if (mesh.geometry) {
-        mesh.geometry.dispose();
-        disposedGeometries++;
-      }
-
-      // Dispose materials (handle array of materials)
-      if (mesh.material) {
-        if (Array.isArray(mesh.material)) {
-          for (const mat of mesh.material) {
-            mat.dispose();
-            disposedMaterials++;
-          }
-        } else {
-          (mesh.material as THREE.Material).dispose();
-          disposedMaterials++;
-        }
-      }
-    }
-  });
-
-  // Clear the group's children array
-  group.clear();
+  disposeBuildingGroupResources(group);
 }

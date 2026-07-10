@@ -21,6 +21,7 @@ import type {
   CreateBuildingGeometryPayload,
   CreateBuildingGeometryResult,
   BuildingGeometryBuffers,
+  BuildingColliderBounds,
   ElevationConfig,
 } from './types.js';
 import { getBuildingColor as getColor } from '../building-colors.js';
@@ -342,6 +343,7 @@ function generateBuildingGeometry(
   normals: number[];
   colors: number[];
   indices: number[];
+  collider: BuildingColliderBounds;
 } | null {
   if (!coordinates || coordinates.length === 0) return null;
 
@@ -411,6 +413,7 @@ function generateBuildingGeometry(
   // Track hole start indices and vertex counts for wall generation
   const holes: number[] = [];
   const holeVertexCounts: number[] = [];
+  const colliderHoles: number[][] = [];
   if (lodLevel !== LOD_LOW && coordinates.length > 1) {
     for (let i = 1; i < coordinates.length; i++) {
       const holeRing = coordinates[i];
@@ -444,6 +447,9 @@ function generateBuildingGeometry(
 
       // Track actual vertex count after processing
       holeVertexCounts.push(holePoints.length);
+      if (holePoints.length >= 3) {
+        colliderHoles.push(holePoints.flatMap(point => [point.x, point.z]));
+      }
 
       for (const p of holePoints) {
         flatCoords.push(p.x, p.z);
@@ -596,7 +602,51 @@ function generateBuildingGeometry(
     }
   }
 
-  return { positions, normals, colors, indices };
+  const bounds = getGeometryBounds(positions);
+  if (!bounds) return null;
+
+  return {
+    positions,
+    normals,
+    colors,
+    indices,
+    collider: {
+      ...bounds,
+      outerRing: points.flatMap(point => [point.x, point.z]),
+      holes: colliderHoles,
+    },
+  };
+}
+
+type BuildingBounds = Omit<BuildingColliderBounds, 'outerRing' | 'holes'>;
+
+/**
+ * Derive collider bounds from the final generated vertices so collision and
+ * rendering use exactly the same terrain-adjusted vertical extent.
+ */
+function getGeometryBounds(positions: number[]): BuildingBounds | null {
+  if (positions.length < 3) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i];
+    const y = positions[i + 1];
+    const z = positions[i + 2];
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+    maxZ = Math.max(maxZ, z);
+  }
+
+  return { minX, minY, minZ, maxX, maxY, maxZ };
 }
 
 /**
@@ -625,6 +675,7 @@ export async function buildBuildingGeometry(
   const allNormals: number[] = [];
   const allColors: number[] = [];
   const allIndices: number[] = [];
+  const colliders: BuildingColliderBounds[] = [];
   let vertexOffset = 0;
 
   let buildingsProcessed = 0;
@@ -683,6 +734,8 @@ export async function buildBuildingGeometry(
         );
 
         if (geom) {
+          colliders.push(geom.collider);
+
           // Append positions
           for (const v of geom.positions) {
             allPositions.push(v);
@@ -719,6 +772,7 @@ export async function buildBuildingGeometry(
   if (allPositions.length === 0) {
     return {
       geometry: null,
+      colliders: [],
       stats: {
         buildingsProcessed: 0,
         buildingsSkipped: buildingsSkipped,
@@ -737,6 +791,7 @@ export async function buildBuildingGeometry(
 
   return {
     geometry,
+    colliders,
     stats: {
       buildingsProcessed,
       buildingsSkipped,
