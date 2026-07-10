@@ -255,7 +255,9 @@ function generateBuildingGeometry(
   origin: SceneOrigin,
   category: string = 'default',
   variant: number = 0,
-  numFloors: number = 3
+  numFloors: number = 3,
+  uvOffsetU: number = 0,
+  uvOffsetV: number = 0
 ): {
   positions: number[];
   normals: number[];
@@ -264,7 +266,6 @@ function generateBuildingGeometry(
   uvs: number[];
   collider: BuildingColliderBounds;
 } | null {
-  void numFloors;
   if (!coordinates || coordinates.length === 0) return null;
   const outerRing = coordinates[0];
   if (!outerRing || outerRing.length < 3) return null;
@@ -398,10 +399,14 @@ function generateBuildingGeometry(
         colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
       }
 
-      uvs.push(atlasUVs.u0, atlasUVs.v0);
-      uvs.push(atlasUVs.u1, atlasUVs.v0);
-      uvs.push(atlasUVs.u1, atlasUVs.v1);
-      uvs.push(atlasUVs.u0, atlasUVs.v1);
+      const tileW = atlasUVs.u1 - atlasUVs.u0;
+      const tileH = atlasUVs.v1 - atlasUVs.v0;
+      const offU = uvOffsetU * tileW * 0.3;
+      const offV = uvOffsetV * tileH * 0.3;
+      uvs.push(atlasUVs.u0 + offU, atlasUVs.v0 + offV);
+      uvs.push(atlasUVs.u1 + offU, atlasUVs.v0 + offV);
+      uvs.push(atlasUVs.u1 + offU, atlasUVs.v1 + offV);
+      uvs.push(atlasUVs.u0 + offU, atlasUVs.v1 + offV);
 
       indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
       indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
@@ -436,10 +441,14 @@ function generateBuildingGeometry(
             normals.push(nx, 0, nz);
             colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
           }
-          uvs.push(atlasUVs.u0, atlasUVs.v0);
-          uvs.push(atlasUVs.u1, atlasUVs.v0);
-          uvs.push(atlasUVs.u1, atlasUVs.v1);
-          uvs.push(atlasUVs.u0, atlasUVs.v1);
+          const tileW2 = atlasUVs.u1 - atlasUVs.u0;
+          const tileH2 = atlasUVs.v1 - atlasUVs.v0;
+          const offU2 = uvOffsetU * tileW2 * 0.3;
+          const offV2 = uvOffsetV * tileH2 * 0.3;
+          uvs.push(atlasUVs.u0 + offU2, atlasUVs.v0 + offV2);
+          uvs.push(atlasUVs.u1 + offU2, atlasUVs.v0 + offV2);
+          uvs.push(atlasUVs.u1 + offU2, atlasUVs.v1 + offV2);
+          uvs.push(atlasUVs.u0 + offU2, atlasUVs.v1 + offV2);
           indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
           indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
         }
@@ -511,8 +520,10 @@ export async function buildBuildingGeometry(payload: CreateBuildingGeometryPaylo
     }
     for (const polygon of polygons) {
       if (!polygon || !polygon[0] || polygon[0].length < 3) continue;
+      const uvOffsetU = ((seed % 100) / 100) * 0.4 - 0.2;
+      const uvOffsetV = (((seed * 7) % 100) / 100) * 0.4 - 0.2;
       try {
-        const geom = generateBuildingGeometry(polygon, height, minHeight, color, lodLevel, terrainHeight, terrainSlope, verticalExaggeration, origin, category, variant, numFloors);
+        const geom = generateBuildingGeometry(polygon, height, minHeight, color, lodLevel, terrainHeight, terrainSlope, verticalExaggeration, origin, category, variant, numFloors, uvOffsetU, uvOffsetV);
         if (geom) {
           colliders.push(geom.collider);
           for (const v of geom.positions) allPositions.push(v);
