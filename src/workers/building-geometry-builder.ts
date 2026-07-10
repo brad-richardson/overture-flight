@@ -213,6 +213,24 @@ function generateSeedFromProps(props: BuildingFeatureInput['properties']): numbe
   return 42;
 }
 function getCategoryFromProps(props: BuildingFeatureInput['properties']): string {
+  const facadeMaterial = (props.facade_material as string || '').toLowerCase();
+  if (facadeMaterial) {
+    const matMap: Record<string, string> = {
+      brick: 'residential',
+      glass: 'commercial',
+      metal: 'commercial',
+      concrete: 'industrial',
+      stone: 'civic',
+      wood: 'residential',
+      timber_framing: 'residential',
+      plaster: 'civic',
+      cement_block: 'industrial',
+      clay: 'residential',
+    };
+    if (ATLAS_TILES[matMap[facadeMaterial] || '']) return matMap[facadeMaterial];
+    if (ATLAS_TILES[facadeMaterial]) return facadeMaterial;
+  }
+
   const subtype = (props.subtype as string || '').toLowerCase();
   if (ATLAS_TILES[subtype]) return subtype;
   const cls = (props.class as string || '').toLowerCase();

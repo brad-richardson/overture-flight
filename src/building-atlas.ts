@@ -58,7 +58,7 @@ function createFallbackAtlas(): THREE.Texture {
 
   const tileColors = [
     ['#D4C4B0', '#E8DCC8', '#C4A882', '#B8A090'],
-    ['#708090', '#A0A8B0', '#909898', '#B0B8C0'],
+    ['#8AA0B8', '#6B8CAE', '#C9B99A', '#B0C4DE'],
     ['#787878', '#686868', '#C8C0B8', '#D0C8C0'],
     ['#A89888', '#C0B0A0', '#505050', '#8B7355'],
   ];

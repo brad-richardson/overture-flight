@@ -96,22 +96,23 @@ const BUILDING_PALETTES: Record<string, ColorPalette> = {
     roofs: [0x4A4A4A, 0x696969, 0x8B4513, 0xA0522D, 0x2F4F4F], // grays, browns
   },
 
-  // Commercial/office - modern, glass-heavy
   commercial: {
     walls: [
+      0x8AA0B8, // glass blue
+      0x6B8CAE, // steel blue glass
+      0x9AB6D0, // light glass blue
+      0xB0C4DE, // light steel blue
+      0xD4C9B8, // warm beige (mixed-use)
+      0xC9B99A, // tan (older commercial)
+      0xA8A8A8, // silver/steel
+      0x8B9AAE, // blue-gray
       0x708090, // slate gray
-      0x778899, // light slate gray
-      0xA9A9A9, // dark gray
-      0xC0C0C0, // silver
-      0xD3D3D3, // light gray
       0x5A7A8A, // muted steel blue
-      0x5A7D7E, // muted cadet blue
-      0x7A9AAA, // muted blue-gray (glass effect)
-      0x8A9CAC, // muted steel blue
-      0xA0B0B8, // muted blue-gray
+      0xC0B8A8, // light brownstone
+      0x8B7355, // brownstone
     ],
-    accents: [0x2F4F4F, 0x191970, 0x000080], // dark blues
-    roofs: [0x2F2F2F, 0x3C3C3C, 0x4A4A4A], // dark grays (flat roof)
+    accents: [0x2F4F4F, 0x191970, 0x8B7355],
+    roofs: [0x2F2F2F, 0x3C3C3C, 0x4A4A4A],
   },
 
   // Industrial - utilitarian colors
@@ -712,12 +713,28 @@ export function groupFeaturesByCategory(features: BuildingFeature[]): Record<str
  * Returns a hex color value
  */
 export function getBuildingColor(feature: BuildingFeature): number {
+  const props = feature.properties as Record<string, unknown> | undefined;
+
+  if (props) {
+    const facadeColor = props.facade_color as string | undefined;
+    if (typeof facadeColor === 'string') {
+      const hex = facadeColor.trim();
+      const match = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(hex);
+      if (match) {
+        let value = match[1];
+        if (value.length === 3) {
+          value = value.split('').map(c => c + c).join('');
+        }
+        const parsed = parseInt(value, 16);
+        if (!isNaN(parsed)) return parsed;
+      }
+    }
+  }
+
   const category = getBuildingCategory(feature);
   const palette = BUILDING_PALETTES[category] || BUILDING_PALETTES.default;
-
   const seed = generateSeed(feature);
   const rng = seededRandom(seed);
-
   const wallColorIndex = Math.floor(rng() * palette.walls.length);
   return palette.walls[wallColorIndex];
 }
