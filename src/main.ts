@@ -18,7 +18,7 @@ import { createConnection, Connection, WelcomeMessage } from './network.js';
 import { checkCollision, getGroundHeight } from './collision.js';
 import { updateHUD, updatePlayerList, showCrashMessage, setTeleportToPlayerCallback, updateAutopilotIndicator } from './ui.js';
 import { initMinimap, updateMinimap } from './minimap.js';
-import { initTileManager, getTilesToLoad, getTilesToUnload, removeTile, clearDistantWaterPolygonCache } from './tile-manager.js';
+import { initTileManager, getTilesToLoad, getTilesToUnload, clearDistantWaterPolygonCache } from './tile-manager.js';
 import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
@@ -389,7 +389,7 @@ async function updateTiles(
   }
 
   // Unload distant tiles
-  const tilesToUnload = getTilesToUnload(lng, lat);
+  const tilesToUnload = getTilesToUnload(lng, lat, tileMeshes.keys());
   for (const key of tilesToUnload) {
     const meshes = tileMeshes.get(key);
     if (meshes) {
@@ -403,7 +403,6 @@ async function updateTiles(
       if (meshes.trees) removeTreesGroup(meshes.trees);
       tileMeshes.delete(key);
     }
-    removeTile(key);
   }
 
   // Clean up distant elevation tiles if terrain is enabled
@@ -665,13 +664,12 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
   setOrigin(lng, lat);
 
   // Clear existing tiles
-  for (const [key, meshes] of tileMeshes) {
+  for (const meshes of tileMeshes.values()) {
     if (meshes.base) removeBaseLayerGroup(meshes.base);
     if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
     if (meshes.transportation) removeTransportationGroup(meshes.transportation);
     if (meshes.trees) removeTreesGroup(meshes.trees);
     if (meshes.ground) removeGroundGroup(meshes.ground);
-    removeTile(key);
   }
   tileMeshes.clear();
 
