@@ -4,7 +4,8 @@ import { geoToWorld } from './scene.js';
 import type { PlaneState } from './plane.js';
 import type { BuildingColliderBounds } from './workers/types.js';
 
-/** Horizontal cell size for the building collision broad phase, in meters. */
+export const BUILDING_COLLISION_ENABLED = false;
+
 const BUILDING_COLLISION_CELL_SIZE = 250;
 const SEGMENT_EPSILON = 1e-9;
 
@@ -405,13 +406,15 @@ export function checkCollisionDetailed(planeState: PlaneState): CollisionResult 
     };
   }
 
-  const buildingHit = buildingSpatialIndex.findIntersection(sweepStart, currentWorldPosition);
-  if (buildingHit) {
-    return {
-      collided: true,
-      type: 'building',
-      height: buildingHit.maxY,
-    };
+  if (BUILDING_COLLISION_ENABLED) {
+    const buildingHit = buildingSpatialIndex.findIntersection(sweepStart, currentWorldPosition);
+    if (buildingHit) {
+      return {
+        collided: true,
+        type: 'building',
+        height: buildingHit.maxY,
+      };
+    }
   }
 
   return { collided: false };
