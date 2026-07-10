@@ -10,7 +10,8 @@
 
 import * as THREE from 'three';
 import { getScene, geoToWorld } from './scene.js';
-import { ELEVATION, OVERTURE_BASE_PMTILES, OVERTURE_BUILDINGS_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from './constants.js';
+import { ELEVATION } from './constants.js';
+import { getOvertureSources } from './overture-sources.js';
 import { clearPendingUpdatesForTile } from './elevation-sync.js';
 import { getTreeProcessingWorkerPool, type TreeData, type LandcoverTreeConfig } from './workers/index.js';
 
@@ -385,6 +386,7 @@ export async function createTreesForTile(
   } : undefined;
 
   const pool = getTreeProcessingWorkerPool();
+  const overtureSources = getOvertureSources();
   const result = await pool.processTrees(
     tileX,
     tileY,
@@ -392,9 +394,9 @@ export async function createTreesForTile(
     LANDCOVER_TREE_CONFIG,
     MAX_PROCEDURAL_TREES_PER_TILE,
     MAX_OSM_DENSITY_TREES_PER_TILE,
-    OVERTURE_BASE_PMTILES,
-    OVERTURE_BUILDINGS_PMTILES,
-    OVERTURE_TRANSPORTATION_PMTILES,
+    overtureSources.base,
+    overtureSources.buildings,
+    overtureSources.transportation,
     TREE_TILES_URL,
     elevationConfig,
     ELEVATION.VERTICAL_EXAGGERATION

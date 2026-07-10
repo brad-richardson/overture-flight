@@ -5,7 +5,8 @@ import { TerrainQuad } from './terrain-quad.js';
 import { tileToBounds, lngLatToTile } from '../tile-manager.js';
 import { getElevationDataForTile } from '../elevation.js';
 import { getScene, getRendererType } from '../scene.js';
-import { EXPANDED_TERRAIN, ELEVATION, GROUND_TEXTURE, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
+import { EXPANDED_TERRAIN, ELEVATION, GROUND_TEXTURE } from '../constants.js';
+import { getOvertureSources } from '../overture-sources.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
 import { getFullPipelineWorkerPool } from '../workers/index.js';
 
@@ -176,13 +177,14 @@ async function createExpandedGroundForTileInner(
   if (!texture) {
     // Full pipeline: fetch, parse, render all in worker (same as core tiles)
     const fullPipelinePool = getFullPipelineWorkerPool();
+    const overtureSources = getOvertureSources();
     const bitmap = await fullPipelinePool.renderTile(
       tileX,
       tileY,
       tileZ,
       EXPANDED_TERRAIN.TEXTURE_SIZE,
-      OVERTURE_BASE_PMTILES,
-      OVERTURE_TRANSPORTATION_PMTILES,
+      overtureSources.base,
+      overtureSources.transportation,
       false, // includeNeighbors - not needed for expanded tiles
       true   // includeTransportation
     );

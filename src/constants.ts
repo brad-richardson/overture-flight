@@ -3,24 +3,6 @@
 export const IS_MOBILE = typeof navigator !== 'undefined' &&
   /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-// PMTiles URLs for Overture Maps data
-// Check https://docs.overturemaps.org/guides/pmtiles/ for latest releases
-// Can be overridden via environment variables
-export const OVERTURE_BUILDINGS_PMTILES: string = import.meta.env.VITE_PMTILES_URL
-  || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/buildings.pmtiles';
-
-// Overture base theme (land, water, landuse, bathymetry)
-export const OVERTURE_BASE_PMTILES: string = import.meta.env.VITE_BASE_PMTILES_URL
-  || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/base.pmtiles';
-
-// Overture transportation theme (roads, paths, railways)
-export const OVERTURE_TRANSPORTATION_PMTILES: string = import.meta.env.VITE_TRANSPORTATION_PMTILES_URL
-  || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/transportation.pmtiles';
-
-// Overture divisions theme (administrative boundaries, place names)
-export const OVERTURE_DIVISIONS_PMTILES: string = import.meta.env.VITE_DIVISIONS_PMTILES_URL
-  || 'https://d3c1b7bog2u1nn.cloudfront.net/2025-12-17/divisions.pmtiles';
-
 // MapTiler style (requires API key for production)
 // For development, using a free OSM-based style
 export const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';

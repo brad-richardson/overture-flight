@@ -1,7 +1,8 @@
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { OvertureGeocoder } from '@bradrichardson/overture-geocoder';
-import { LOCATIONS, OVERTURE_BASE_PMTILES, OVERTURE_BUILDINGS_PMTILES, OVERTURE_TRANSPORTATION_PMTILES, OVERTURE_DIVISIONS_PMTILES } from './constants.js';
+import { LOCATIONS } from './constants.js';
+import { getOvertureSources } from './overture-sources.js';
 import type { PlaneState } from './plane.js';
 import { setFeaturePickerEnabled, isFeaturePickerEnabled } from './feature-picker.js';
 
@@ -355,6 +356,8 @@ function initializeMap(): void {
   // Ensure PMTiles protocol is registered
   ensurePMTilesProtocol();
 
+  const overtureSources = getOvertureSources();
+
   // Initialize MapLibre GL map with Overture PMTiles and cartographic styling
   map = new maplibregl.Map({
     container: mapContainer,
@@ -364,20 +367,20 @@ function initializeMap(): void {
       sources: {
         'overture-base': {
           type: 'vector',
-          url: `pmtiles://${OVERTURE_BASE_PMTILES}`,
+          url: `pmtiles://${overtureSources.base}`,
           attribution: '&copy; <a href="https://overturemaps.org">Overture Maps Foundation</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         },
         'overture-buildings': {
           type: 'vector',
-          url: `pmtiles://${OVERTURE_BUILDINGS_PMTILES}`
+          url: `pmtiles://${overtureSources.buildings}`
         },
         'overture-transportation': {
           type: 'vector',
-          url: `pmtiles://${OVERTURE_TRANSPORTATION_PMTILES}`
+          url: `pmtiles://${overtureSources.transportation}`
         },
         'overture-divisions': {
           type: 'vector',
-          url: `pmtiles://${OVERTURE_DIVISIONS_PMTILES}`
+          url: `pmtiles://${overtureSources.divisions}`
         }
       },
       layers: [

@@ -164,8 +164,16 @@ Key environment variables:
 | `VITE_PMTILES_URL` | Buildings PMTiles source |
 | `VITE_BASE_PMTILES_URL` | Base layer PMTiles source |
 | `VITE_TRANSPORTATION_PMTILES_URL` | Roads PMTiles source |
+| `VITE_DIVISIONS_PMTILES_URL` | Administrative boundaries PMTiles source |
 | `VITE_PARTYKIT_HOST` | Multiplayer server host |
 | `VITE_PROFILING` | Enable performance profiling |
+
+By default, the app resolves Overture's latest stable release from the official
+STAC catalog at startup and constructs the four PMTiles URLs from that release.
+The lookup is bounded so it cannot hold up startup indefinitely. A cached
+release is used during a temporary lookup failure; without one, the simulator
+still starts and only unavailable, non-overridden Overture themes are omitted.
+If all four per-theme variables are set, the STAC lookup is skipped entirely.
 
 ## License
 

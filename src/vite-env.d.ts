@@ -4,6 +4,7 @@ interface ImportMetaEnv {
   readonly VITE_PMTILES_URL?: string;
   readonly VITE_BASE_PMTILES_URL?: string;
   readonly VITE_TRANSPORTATION_PMTILES_URL?: string;
+  readonly VITE_DIVISIONS_PMTILES_URL?: string;
   readonly VITE_PARTYKIT_HOST?: string;
   readonly VITE_BASE_PATH?: string;
   readonly BASE_URL: string;
