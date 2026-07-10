@@ -7,10 +7,6 @@ on:
     types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
-# Permissions required for this workflow:
-# - contents: write - Required by peaceiris/actions-gh-pages and rossjrw/pr-preview-action
-#   to push builds to the gh-pages branch. Ensure branch protection rules are enabled on main.
-# - pull-requests: write - Required to post preview URL comments on PRs.
 permissions:
   contents: write
   pull-requests: write
@@ -20,13 +16,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Deploy main branch to root of gh-pages
   deploy-main:
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -43,19 +43,75 @@ jobs:
           VITE_BASE_PATH: /overture-flight/
           VITE_PARTYKIT_HOST: flight-sim.brad-richardson.partykit.dev
 
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
-          destination_dir: .
-          # keep_files preserves pr-preview directory across main deployments
-          keep_files: true
+      - name: Deploy to GitHub Pages with retry
+        run: |
+          set -e
+          echo "Saving dist..."
+          cp -r dist /tmp/dist
+          ls /tmp/dist | head -20
 
-  # Deploy PR previews to pr-preview subdirectory
+          git config user.name "brad-richardson"
+          git config user.email "brad-richardson@users.noreply.github.com"
+
+          echo "Fetching gh-pages..."
+          git fetch origin gh-pages || echo "gh-pages branch doesn't exist yet, will create"
+
+          if git show-ref --verify --quiet refs/heads/gh-pages; then
+            git checkout gh-pages
+          elif git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
+            git checkout -b gh-pages origin/gh-pages
+          else
+            echo "Creating orphan gh-pages branch"
+            git checkout --orphan gh-pages
+            git rm -rf . || true
+          fi
+
+          echo "Syncing dist to gh-pages root (preserving pr-preview)..."
+          rsync -av --delete --exclude='.git' --exclude='pr-preview' /tmp/dist/ ./
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to deploy"
+            exit 0
+          fi
+
+          git commit -m "deploy: $GITHUB_SHA"
+
+          echo "Pushing with retry loop..."
+          for i in 1 2 3 4 5; do
+            echo "Push attempt $i/5"
+            if git push origin gh-pages; then
+              echo "Deploy succeeded"
+              exit 0
+            fi
+            echo "Push failed, rebasing onto latest gh-pages..."
+            sleep $((i*2))
+            git fetch origin gh-pages
+            # Rebase our commit onto latest remote, preserving our dist sync
+            if ! git rebase origin/gh-pages; then
+              echo "Rebase conflict, resetting and re-applying dist..."
+              git rebase --abort || true
+              git reset --hard origin/gh-pages
+              rsync -av --delete --exclude='.git' --exclude='pr-preview' /tmp/dist/ ./
+              git add -A
+              if git diff --cached --quiet; then
+                echo "No changes after rebase, already deployed"
+                exit 0
+              fi
+              git commit -m "deploy: $GITHUB_SHA" || true
+            fi
+          done
+
+          echo "Failed to push after 5 attempts"
+          exit 1
+
   deploy-preview:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
