@@ -37,11 +37,6 @@ export interface TileInfo {
   key: string;
 }
 
-interface TileData {
-  meshes: unknown[];
-  loading: boolean;
-}
-
 interface InitStatus {
   buildings: boolean;
   base: boolean;
@@ -90,9 +85,6 @@ async function retryWithBackoff<T>(
 export function getInitErrors(): string[] {
   return [...initErrors];
 }
-
-// Loaded tiles cache
-const loadedTiles = new Map<string, TileData>(); // "z/x/y" -> { meshes: [], loading: boolean }
 
 // Water polygon cache - keyed by lower zoom tile "z/x/y"
 // Shared between base-layer (for rendering) and tree-layer (for filtering)
@@ -254,9 +246,14 @@ function mapTileToSourceZoom(
  */
 export function lngLatToTile(lng: number, lat: number, zoom: number): [number, number] {
   const n = Math.pow(2, zoom);
-  const x = Math.floor((lng + 180) / 360 * n);
-  const latRad = lat * Math.PI / 180;
-  const y = Math.floor((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2 * n);
+  const rawX = Math.floor((lng + 180) / 360 * n);
+  const x = ((rawX % n) + n) % n;
+  // Web Mercator is finite only within this latitude range. Clamping keeps
+  // callers at the poles from producing infinite/out-of-world tile rows.
+  const mercatorLat = Math.max(-85.05112878, Math.min(85.05112878, lat));
+  const latRad = mercatorLat * Math.PI / 180;
+  const rawY = Math.floor((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2 * n);
+  const y = Math.max(0, Math.min(n - 1, rawY));
   return [x, y];
 }
 
@@ -744,16 +741,28 @@ export function getTilesToLoad(
   speed: number = 0
 ): TileInfo[] {
   const [centerX, centerY] = lngLatToTile(lng, lat, TILE_ZOOM);
+  const worldWidth = Math.pow(2, TILE_ZOOM);
   const tiles: TileInfo[] = [];
   const addedTiles = new Set<string>();
 
-  // Helper to add tile if not already added
+  // Helper to add a valid tile if not already added. The world wraps east/west,
+  // but Web Mercator has hard north/south bounds.
   const addTile = (x: number, y: number) => {
-    const key = `${TILE_ZOOM}/${x}/${y}`;
+    if (!Number.isInteger(x) || !Number.isInteger(y) || y < 0 || y >= worldWidth) return;
+
+    const wrappedX = ((x % worldWidth) + worldWidth) % worldWidth;
+    const key = `${TILE_ZOOM}/${wrappedX}/${y}`;
     if (!addedTiles.has(key)) {
       addedTiles.add(key);
-      tiles.push({ x, y, z: TILE_ZOOM, key });
+      tiles.push({ x: wrappedX, y, z: TILE_ZOOM, key });
     }
+  };
+
+  const wrappedXDelta = (x: number): number => {
+    let delta = x - centerX;
+    if (delta > worldWidth / 2) delta -= worldWidth;
+    if (delta < -worldWidth / 2) delta += worldWidth;
+    return delta;
   };
 
   // Pre-compute heading direction vector using cached sin/cos values
@@ -797,9 +806,9 @@ export function getTilesToLoad(
   // This ensures tiles directly under/around the plane get priority over distant ones
 
   tiles.sort((a, b) => {
-    const aDx = a.x - centerX;
+    const aDx = wrappedXDelta(a.x);
     const aDy = a.y - centerY;
-    const bDx = b.x - centerX;
+    const bDx = wrappedXDelta(b.x);
     const bDy = b.y - centerY;
 
     // Calculate base distance (Euclidean)
@@ -822,46 +831,42 @@ export function getTilesToLoad(
 }
 
 /**
- * Check if a tile is loaded
+ * Get loaded tile keys that are outside the retention radius.
+ *
+ * The caller owns the loaded-tile collection. Keeping one authoritative
+ * registry avoids the renderer and tile manager drifting out of sync.
  */
-export function isTileLoaded(key: string): boolean {
-  return loadedTiles.has(key) && !loadedTiles.get(key)!.loading;
-}
-
-/**
- * Mark a tile as loading
- */
-export function markTileLoading(key: string): void {
-  loadedTiles.set(key, { meshes: [], loading: true });
-}
-
-/**
- * Mark a tile as loaded with its meshes
- */
-export function markTileLoaded(key: string, meshes: unknown[]): void {
-  loadedTiles.set(key, { meshes, loading: false });
-}
-
-/**
- * Get meshes for a tile
- */
-export function getTileMeshes(key: string): unknown[] | null {
-  const tile = loadedTiles.get(key);
-  return tile ? tile.meshes : null;
-}
-
-/**
- * Get keys of tiles that should be unloaded
- */
-export function getTilesToUnload(lng: number, lat: number, maxDistance: number = 4): string[] {
-  const [centerX, centerY] = lngLatToTile(lng, lat, TILE_ZOOM);
+export function getTilesToUnload(
+  lng: number,
+  lat: number,
+  loadedTileKeys: Iterable<string>,
+  maxDistance: number = 4
+): string[] {
   const toUnload: string[] = [];
 
-  for (const [key] of loadedTiles) {
-    const [, xStr, yStr] = key.split('/');
+  for (const key of loadedTileKeys) {
+    const [zStr, xStr, yStr] = key.split('/');
+    const z = Number(zStr);
     const x = Number(xStr);
     const y = Number(yStr);
-    const distance = Math.max(Math.abs(x - centerX), Math.abs(y - centerY));
+
+    if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y) || z < 0) {
+      // An invalid key cannot be associated with the current position, so do
+      // not allow it to remain resident indefinitely.
+      toUnload.push(key);
+      continue;
+    }
+
+    const worldWidth = Math.pow(2, z);
+    if (x < 0 || x >= worldWidth || y < 0 || y >= worldWidth) {
+      toUnload.push(key);
+      continue;
+    }
+
+    const [centerX, centerY] = lngLatToTile(lng, lat, z);
+    const rawXDistance = Math.abs(x - centerX);
+    const xDistance = Math.min(rawXDistance, worldWidth - rawXDistance);
+    const distance = Math.max(xDistance, Math.abs(y - centerY));
 
     if (distance > maxDistance) {
       toUnload.push(key);
@@ -869,13 +874,6 @@ export function getTilesToUnload(lng: number, lat: number, maxDistance: number =
   }
 
   return toUnload;
-}
-
-/**
- * Remove a tile from cache
- */
-export function removeTile(key: string): void {
-  loadedTiles.delete(key);
 }
 
 /**
