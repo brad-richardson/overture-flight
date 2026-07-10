@@ -5,7 +5,8 @@ import { TerrainQuad } from './terrain-quad.js';
 import { tileToBounds } from '../tile-manager.js';
 import { getElevationDataForTile } from '../elevation.js';
 import { getScene, getRendererType } from '../scene.js';
-import { GROUND_TEXTURE, ELEVATION, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES } from '../constants.js';
+import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
+import { getOvertureSources } from '../overture-sources.js';
 import { registerTileForLazyPicking, unregisterTileForLazyPicking } from '../feature-picker.js';
 import { getFullPipelineWorkerPool } from '../workers/index.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
@@ -152,13 +153,14 @@ async function createGroundForTileInner(
     // Full pipeline: fetches, parses, renders all in worker (avoids structured clone overhead)
     profiler.startPhase(key, 'fullPipeline');
     const fullPipelinePool = getFullPipelineWorkerPool();
+    const overtureSources = getOvertureSources();
     const bitmap = await fullPipelinePool.renderTile(
       tileX,
       tileY,
       tileZ,
       GROUND_TEXTURE.TEXTURE_SIZE,
-      OVERTURE_BASE_PMTILES,
-      OVERTURE_TRANSPORTATION_PMTILES,
+      overtureSources.base,
+      overtureSources.transportation,
       !GROUND_TEXTURE.SKIP_NEIGHBOR_TILES, // includeNeighbors
       true // includeTransportation
     );

@@ -36,6 +36,7 @@ import {
 import { createTreesForTile, removeTreesGroup } from './tree-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
 import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE, EXPANDED_TERRAIN } from './constants.js';
+import { initializeOvertureSources } from './overture-sources.js';
 import { getLoadingGate } from './loading-gate.js';
 import { initMobileControls, getJoystickState, getThrottleState } from './mobile-controls.js';
 import { initFeaturePicker, clearAllFeatures, unregisterTileForLazyPicking } from './feature-picker.js';
@@ -773,6 +774,9 @@ async function init(): Promise<void> {
 
     // Set initial origin from URL or default
     setOrigin(startLocation.lng, startLocation.lat);
+
+    // Resolve the current Overture release before any tile consumer starts.
+    await initializeOvertureSources();
 
     // Initialize Three.js scene
     await initScene();

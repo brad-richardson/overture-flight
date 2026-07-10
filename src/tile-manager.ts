@@ -1,7 +1,8 @@
 import { PMTiles } from 'pmtiles';
 import { VectorTile } from '@mapbox/vector-tile';
 import Pbf from 'pbf';
-import { OVERTURE_BUILDINGS_PMTILES, OVERTURE_BASE_PMTILES, OVERTURE_TRANSPORTATION_PMTILES, PROFILING, WORKERS } from './constants.js';
+import { PROFILING, WORKERS } from './constants.js';
+import { initializeOvertureSources, isUnavailableOvertureSource } from './overture-sources.js';
 import { getOrigin } from './scene.js';
 import { getFetchSemaphore, TilePriority } from './semaphore.js';
 import { recordFetchTiming, mark, measure } from './profiling/tile-profiler.js';
@@ -163,40 +164,39 @@ const metersPerDegreeLng = (lat: number): number => 111320 * Math.cos(lat * Math
 export async function initTileManager(): Promise<InitStatus> {
   initErrors = [];
 
-  buildingsPMTiles = new PMTiles(OVERTURE_BUILDINGS_PMTILES);
-  basePMTiles = new PMTiles(OVERTURE_BASE_PMTILES);
-  transportationPMTiles = new PMTiles(OVERTURE_TRANSPORTATION_PMTILES);
+  // Also initialize here so direct users of the tile manager cannot bypass
+  // the application's Overture source bootstrap.
+  const overtureSources = await initializeOvertureSources();
 
-  // Get metadata to verify sources are working with retry
-  try {
-    await retryWithBackoff(() => buildingsPMTiles!.getHeader(), 3, 1000);
-  } catch (e) {
-    const error = e as Error;
-    const msg = `Failed to load buildings data: ${error.message || 'Network error'}`;
-    console.error(msg, e);
-    initErrors.push(msg);
-    buildingsPMTiles = null;
-  }
+  // Placeholder sources represent a known discovery failure. Do not run the
+  // normal network retry/backoff loop for them, which would delay partial app
+  // startup by several seconds per unavailable theme.
+  const initializeSource = async (url: string, label: string): Promise<PMTiles | null> => {
+    if (isUnavailableOvertureSource(url)) {
+      const msg = `Failed to load ${label} data: latest Overture release is unavailable`;
+      console.warn(msg);
+      initErrors.push(msg);
+      return null;
+    }
 
-  try {
-    await retryWithBackoff(() => basePMTiles!.getHeader(), 3, 1000);
-  } catch (e) {
-    const error = e as Error;
-    const msg = `Failed to load terrain data: ${error.message || 'Network error'}`;
-    console.error(msg, e);
-    initErrors.push(msg);
-    basePMTiles = null;
-  }
+    const source = new PMTiles(url);
+    try {
+      await retryWithBackoff(() => source.getHeader(), 3, 1000);
+      return source;
+    } catch (e) {
+      const error = e as Error;
+      const msg = `Failed to load ${label} data: ${error.message || 'Network error'}`;
+      console.error(msg, e);
+      initErrors.push(msg);
+      return null;
+    }
+  };
 
-  try {
-    await retryWithBackoff(() => transportationPMTiles!.getHeader(), 3, 1000);
-  } catch (e) {
-    const error = e as Error;
-    const msg = `Failed to load transportation data: ${error.message || 'Network error'}`;
-    console.error(msg, e);
-    initErrors.push(msg);
-    transportationPMTiles = null;
-  }
+  [buildingsPMTiles, basePMTiles, transportationPMTiles] = await Promise.all([
+    initializeSource(overtureSources.buildings, 'buildings'),
+    initializeSource(overtureSources.base, 'terrain'),
+    initializeSource(overtureSources.transportation, 'transportation'),
+  ]);
 
   // Return status for caller to handle
   return {
