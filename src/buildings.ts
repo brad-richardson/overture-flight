@@ -94,10 +94,13 @@ const vertexColorMaterial = new THREE.MeshStandardMaterial({
   metalness: 0.1,
 });
 
-loadBuildingAtlas().catch(() => console.log('Using fallback building atlas'));
+const buildingAtlasEnabled = import.meta.env.VITE_BUILDING_ATLAS !== 'false';
+if (buildingAtlasEnabled) {
+  void loadBuildingAtlas();
+}
 
 function getTexturedMaterial(): THREE.MeshStandardMaterial {
-  const atlas = getBuildingAtlas();
+  const atlas = buildingAtlasEnabled ? getBuildingAtlas() : null;
   if (atlas) {
     return new THREE.MeshStandardMaterial({
       vertexColors: true,

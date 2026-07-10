@@ -8,7 +8,12 @@ import type {
   BuildingColliderBounds,
   ElevationConfig,
 } from './types.js';
-import { getBuildingColor as getColor } from '../building-colors.js';
+import {
+  generateSeed,
+  getBuildingCategory,
+  getBuildingColor as getColor,
+} from '../building-colors.js';
+import { getBuildingAtlasUVs } from '../building-atlas-layout.js';
 
 interface CachedElevationTile {
   heights: Float32Array;
@@ -141,6 +146,8 @@ function computeTerrainHeights(coordinates: number[][][] | number[][][][], type:
   return [minHeight, maxHeight];
 }
 
+const LOD_HIGH = 0;
+const LOD_MEDIUM = 1;
 const LOD_LOW = 2;
 const BUILDING_TERRAIN_OFFSET = 0.5;
 const SLOPE_COMPENSATION_FACTOR = 0.3;
@@ -172,77 +179,6 @@ function getBuildingColor(feature: BuildingFeatureInput): number {
   });
 }
 
-const ATLAS_TILES: Record<string, { row: number; cols: number[] }> = {
-  residential: { row: 0, cols: [0, 1, 2, 3] },
-  commercial: { row: 1, cols: [0, 1, 2, 3] },
-  industrial: { row: 2, cols: [0, 1] },
-  civic: { row: 2, cols: [2, 3] },
-  religious: { row: 3, cols: [0, 1] },
-  education: { row: 2, cols: [2, 3] },
-  medical: { row: 1, cols: [2, 3] },
-  agricultural: { row: 2, cols: [0, 1] },
-  entertainment: { row: 1, cols: [0, 1] },
-  military: { row: 2, cols: [0, 1] },
-  outbuilding: { row: 2, cols: [0, 1] },
-  service: { row: 1, cols: [2, 3] },
-  transportation: { row: 1, cols: [2, 3] },
-  default: { row: 1, cols: [2] },
-};
-function getAtlasUVs(category: string, variant: number = 0) {
-  const tile = ATLAS_TILES[category] || ATLAS_TILES.default;
-  const col = tile.cols[variant % tile.cols.length];
-  const row = tile.row;
-  const tileNorm = 1 / 4;
-  return {
-    u0: col * tileNorm,
-    v0: 1 - (row + 1) * tileNorm,
-    u1: (col + 1) * tileNorm,
-    v1: 1 - row * tileNorm,
-  };
-}
-function generateSeedFromProps(props: BuildingFeatureInput['properties']): number {
-  if (props?.id !== undefined) {
-    let hash = 0;
-    const str = String(props.id);
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) - hash) + str.charCodeAt(i);
-      hash = hash & hash;
-    }
-    return Math.abs(hash);
-  }
-  return 42;
-}
-function getCategoryFromProps(props: BuildingFeatureInput['properties']): string {
-  const facadeMaterial = (props.facade_material as string || '').toLowerCase();
-  if (facadeMaterial) {
-    const matMap: Record<string, string> = {
-      brick: 'residential',
-      glass: 'commercial',
-      metal: 'commercial',
-      concrete: 'industrial',
-      stone: 'civic',
-      wood: 'residential',
-      timber_framing: 'residential',
-      plaster: 'civic',
-      cement_block: 'industrial',
-      clay: 'residential',
-    };
-    if (ATLAS_TILES[matMap[facadeMaterial] || '']) return matMap[facadeMaterial];
-    if (ATLAS_TILES[facadeMaterial]) return facadeMaterial;
-  }
-
-  const subtype = (props.subtype as string || '').toLowerCase();
-  if (ATLAS_TILES[subtype]) return subtype;
-  const cls = (props.class as string || '').toLowerCase();
-  const map: Record<string, string> = {
-    house: 'residential', residential: 'residential', detached: 'residential',
-    apartments: 'residential', commercial: 'commercial', office: 'commercial',
-    retail: 'commercial', industrial: 'industrial', warehouse: 'industrial',
-    civic: 'civic', church: 'religious', school: 'education', hospital: 'medical',
-  };
-  return map[cls] || 'default';
-}
-
 function generateBuildingGeometry(
   coordinates: number[][][],
   height: number,
@@ -255,9 +191,7 @@ function generateBuildingGeometry(
   origin: SceneOrigin,
   category: string = 'default',
   variant: number = 0,
-  numFloors: number = 3,
-  uvOffsetU: number = 0,
-  uvOffsetV: number = 0
+  numFloors: number = 3
 ): {
   positions: number[];
   normals: number[];
@@ -340,14 +274,16 @@ function generateBuildingGeometry(
   const g = ((color >> 8) & 0xff) / 255;
   const b = (color & 0xff) / 255;
 
-  const atlasUVs = getAtlasUVs(category, variant);
+  const atlasUVs = getBuildingAtlasUVs(category, variant);
+  const roofU = atlasUVs.u0;
+  const roofV = atlasUVs.v0;
 
   const roofStartIndex = positions.length / 3;
   for (const v of roofVertices) {
     positions.push(v.x, topY, v.z);
     normals.push(0, 1, 0);
     colors.push(r, g, b);
-    uvs.push((atlasUVs.u0 + atlasUVs.u1) / 2, (atlasUVs.v0 + atlasUVs.v1) / 2);
+    uvs.push(roofU, roofV);
   }
   for (let i = 0; i < roofIndices.length; i += 3) {
     indices.push(roofStartIndex + roofIndices[i]);
@@ -361,7 +297,7 @@ function generateBuildingGeometry(
       positions.push(v.x, bottomY, v.z);
       normals.push(0, -1, 0);
       colors.push(r * 0.7, g * 0.7, b * 0.7);
-      uvs.push((atlasUVs.u0 + atlasUVs.u1) / 2, (atlasUVs.v0 + atlasUVs.v1) / 2);
+      uvs.push(roofU, roofV);
     }
     for (let i = roofIndices.length - 1; i >= 0; i--) {
       indices.push(bottomStartIndex + roofIndices[i]);
@@ -371,7 +307,9 @@ function generateBuildingGeometry(
   const outerPointCount = points.length;
   const wallDarkening = 0.85;
   const floorsPerTile = 3;
-  const verticalSegments = Math.max(1, Math.ceil(numFloors / floorsPerTile));
+  const desiredSegments = Math.max(1, Math.ceil(numFloors / floorsPerTile));
+  const maxSegments = lodLevel === LOD_HIGH ? 3 : lodLevel === LOD_MEDIUM ? 2 : 1;
+  const verticalSegments = Math.min(desiredSegments, maxSegments);
   const segmentHeight = (topY - (minHeight > 0 ? bottomY : baseY)) / verticalSegments;
 
   for (let i = 0; i < outerPointCount; i++) {
@@ -399,14 +337,10 @@ function generateBuildingGeometry(
         colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
       }
 
-      const tileW = atlasUVs.u1 - atlasUVs.u0;
-      const tileH = atlasUVs.v1 - atlasUVs.v0;
-      const offU = uvOffsetU * tileW * 0.3;
-      const offV = uvOffsetV * tileH * 0.3;
-      uvs.push(atlasUVs.u0 + offU, atlasUVs.v0 + offV);
-      uvs.push(atlasUVs.u1 + offU, atlasUVs.v0 + offV);
-      uvs.push(atlasUVs.u1 + offU, atlasUVs.v1 + offV);
-      uvs.push(atlasUVs.u0 + offU, atlasUVs.v1 + offV);
+      uvs.push(atlasUVs.u0, atlasUVs.v0);
+      uvs.push(atlasUVs.u1, atlasUVs.v0);
+      uvs.push(atlasUVs.u1, atlasUVs.v1);
+      uvs.push(atlasUVs.u0, atlasUVs.v1);
 
       indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
       indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
@@ -441,14 +375,10 @@ function generateBuildingGeometry(
             normals.push(nx, 0, nz);
             colors.push(r * wallDarkening, g * wallDarkening, b * wallDarkening);
           }
-          const tileW2 = atlasUVs.u1 - atlasUVs.u0;
-          const tileH2 = atlasUVs.v1 - atlasUVs.v0;
-          const offU2 = uvOffsetU * tileW2 * 0.3;
-          const offV2 = uvOffsetV * tileH2 * 0.3;
-          uvs.push(atlasUVs.u0 + offU2, atlasUVs.v0 + offV2);
-          uvs.push(atlasUVs.u1 + offU2, atlasUVs.v0 + offV2);
-          uvs.push(atlasUVs.u1 + offU2, atlasUVs.v1 + offV2);
-          uvs.push(atlasUVs.u0 + offU2, atlasUVs.v1 + offV2);
+          uvs.push(atlasUVs.u0, atlasUVs.v0);
+          uvs.push(atlasUVs.u1, atlasUVs.v0);
+          uvs.push(atlasUVs.u1, atlasUVs.v1);
+          uvs.push(atlasUVs.u0, atlasUVs.v1);
           indices.push(wallStartIndex + 0, wallStartIndex + 3, wallStartIndex + 2);
           indices.push(wallStartIndex + 0, wallStartIndex + 2, wallStartIndex + 1);
         }
@@ -507,8 +437,8 @@ export async function buildBuildingGeometry(payload: CreateBuildingGeometryPaylo
     const height = getBuildingHeight(feature.properties, defaultHeight);
     const minHeight = typeof feature.properties.min_height === 'number' ? feature.properties.min_height : 0;
     const color = getBuildingColor(feature);
-    const category = getCategoryFromProps(feature.properties);
-    const seed = generateSeedFromProps(feature.properties);
+    const category = getBuildingCategory(feature);
+    const seed = generateSeed(feature);
     const variant = seed % 4;
     const numFloors = typeof feature.properties.num_floors === 'number' ? feature.properties.num_floors : Math.round(height / 3);
     let terrainHeight = 0;
@@ -520,10 +450,21 @@ export async function buildBuildingGeometry(payload: CreateBuildingGeometryPaylo
     }
     for (const polygon of polygons) {
       if (!polygon || !polygon[0] || polygon[0].length < 3) continue;
-      const uvOffsetU = ((seed % 100) / 100) * 0.4 - 0.2;
-      const uvOffsetV = (((seed * 7) % 100) / 100) * 0.4 - 0.2;
       try {
-        const geom = generateBuildingGeometry(polygon, height, minHeight, color, lodLevel, terrainHeight, terrainSlope, verticalExaggeration, origin, category, variant, numFloors, uvOffsetU, uvOffsetV);
+        const geom = generateBuildingGeometry(
+          polygon,
+          height,
+          minHeight,
+          color,
+          lodLevel,
+          terrainHeight,
+          terrainSlope,
+          verticalExaggeration,
+          origin,
+          category,
+          variant,
+          numFloors
+        );
         if (geom) {
           colliders.push(geom.collider);
           for (const v of geom.positions) allPositions.push(v);

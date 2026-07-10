@@ -402,6 +402,19 @@ export const OVERTURE_SUBTYPES = new Set<string>([
   'transportation',
 ]);
 
+const FACADE_MATERIAL_TO_CATEGORY: Readonly<Record<string, string>> = {
+  brick: 'residential',
+  glass: 'commercial',
+  metal: 'commercial',
+  concrete: 'industrial',
+  stone: 'civic',
+  wood: 'residential',
+  timber_framing: 'residential',
+  plaster: 'civic',
+  cement_block: 'industrial',
+  clay: 'residential',
+};
+
 // ============================================================================
 // Seeded Random Number Generator
 // ============================================================================
@@ -425,7 +438,7 @@ function seededRandom(seed: number): () => number {
  * For main buildings, uses their own id
  * Falls back to coordinates if no id available
  */
-function generateSeed(feature: BuildingColorInput): number {
+export function generateSeed(feature: BuildingColorInput): number {
   const props = feature.properties;
 
   // For building parts, use building_id so all parts of the same building share color
@@ -474,14 +487,20 @@ function generateSeed(feature: BuildingColorInput): number {
  * Get the building category based on Overture properties
  *
  * Priority order:
- * 1. Overture subtype (direct category mapping)
- * 2. Overture class (lookup in CLASS_TO_CATEGORY)
- * 3. Default category
+ * 1. Facade material, when it implies a useful visual family
+ * 2. Overture subtype (direct category mapping)
+ * 3. Overture class (lookup in CLASS_TO_CATEGORY)
+ * 4. Default category
  */
 export function getBuildingCategory(feature: BuildingColorInput): string {
   const props = feature.properties;
   if (!props) {
     return 'default';
+  }
+
+  const facadeMaterial = String(props.facade_material ?? '').toLowerCase();
+  if (FACADE_MATERIAL_TO_CATEGORY[facadeMaterial]) {
+    return FACADE_MATERIAL_TO_CATEGORY[facadeMaterial];
   }
 
   // Priority 1: Overture subtype (normalized category)
