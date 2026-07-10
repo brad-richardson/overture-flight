@@ -99,6 +99,42 @@ interface InFlightRequest {
   priority: TilePriority;
 }
 const inFlightRequests = new Map<string, InFlightRequest>();
+const buildingParentFeatureCache = new Map<string, ParsedFeature[]>();
+const BUILDING_PARENT_CACHE_SIZE = 12;
+
+function getCachedBuildingParent(key: string): ParsedFeature[] | null {
+  const cached = buildingParentFeatureCache.get(key);
+  if (!cached) return null;
+  buildingParentFeatureCache.delete(key);
+  buildingParentFeatureCache.set(key, cached);
+  return cached;
+}
+
+function cacheBuildingParent(key: string, features: ParsedFeature[]): void {
+  buildingParentFeatureCache.set(key, features);
+  while (buildingParentFeatureCache.size > BUILDING_PARENT_CACHE_SIZE) {
+    const oldestKey = buildingParentFeatureCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    buildingParentFeatureCache.delete(oldestKey);
+  }
+}
+
+/** Assign a parent-source feature to exactly one requested child tile. */
+function buildingFeatureBelongsToTile(
+  feature: ParsedFeature,
+  tileX: number,
+  tileY: number,
+  zoom: number
+): boolean {
+  const representative = feature.type === 'Polygon'
+    ? (feature.coordinates as number[][][])[0]?.[0]
+    : feature.type === 'MultiPolygon'
+      ? (feature.coordinates as number[][][][])[0]?.[0]?.[0]
+      : undefined;
+  if (!representative) return false;
+  const [ownerX, ownerY] = lngLatToTile(representative[0], representative[1], zoom);
+  return ownerX === tileX && ownerY === tileY;
+}
 
 // Tile loading settings (aggressive performance tuning)
 // Simulation detail zoom; each PMTiles source is capped independently from its header.
@@ -180,7 +216,7 @@ export async function initTileManager(): Promise<InitStatus> {
 
     const source = new PMTiles(url);
     try {
-      const header = await retryWithBackoff(() => source.getHeader(), 3, 1000);
+      const header = await retryWithBackoff(() => source.getHeader(), 2, 500);
       return { pmtiles: source, maxZoom: header.maxZoom };
     } catch (e) {
       const error = e as Error;
@@ -464,19 +500,44 @@ export async function loadBuildingTile(
   if (!buildingsPMTiles || buildingsMaxZoom === null) return [];
 
   const sourceTile = mapTileToSourceZoom(x, y, zoom, buildingsMaxZoom);
+  const sourceKey = `buildings:${sourceTile.z}/${sourceTile.x}/${sourceTile.y}:__ALL__`;
 
-  // Buildings have lowest priority in fetch queue
-  const data = await getTileData(
-    buildingsPMTiles,
-    sourceTile.z,
-    sourceTile.x,
-    sourceTile.y,
-    TilePriority.BUILDINGS
-  );
-  if (!data) return [];
+  let features = sourceTile.z < zoom ? getCachedBuildingParent(sourceKey) : null;
+  if (!features) {
+    const existing = inFlightRequests.get(sourceKey);
+    if (existing) {
+      features = await existing.promise;
+    } else {
+      const loadPromise = (async (): Promise<ParsedFeature[]> => {
+        const data = await getTileData(
+          buildingsPMTiles,
+          sourceTile.z,
+          sourceTile.x,
+          sourceTile.y,
+          TilePriority.BUILDINGS
+        );
+        if (!data) return [];
+        return parseMVTAsync(data, sourceTile.x, sourceTile.y, sourceTile.z, null);
+      })();
 
-  // Load all layers (building + building_part) from the buildings PMTiles
-  return parseMVTAsync(data, sourceTile.x, sourceTile.y, sourceTile.z, null);
+      inFlightRequests.set(sourceKey, { promise: loadPromise, priority: TilePriority.BUILDINGS });
+      try {
+        features = await loadPromise;
+      } finally {
+        if (inFlightRequests.get(sourceKey)?.promise === loadPromise) {
+          inFlightRequests.delete(sourceKey);
+        }
+      }
+    }
+
+    if (sourceTile.z < zoom) {
+      cacheBuildingParent(sourceKey, features);
+    }
+  }
+
+  return sourceTile.z < zoom
+    ? features.filter(feature => buildingFeatureBelongsToTile(feature, x, y, zoom))
+    : features;
 }
 
 /**

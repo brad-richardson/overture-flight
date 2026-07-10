@@ -167,14 +167,21 @@ Key environment variables:
 | `VITE_DIVISIONS_PMTILES_URL` | Administrative boundaries PMTiles source |
 | `VITE_PARTYKIT_HOST` | Multiplayer server host |
 | `VITE_PROFILING` | Enable performance profiling |
-| `VITE_WORKER_BUDGET` | Optional total browser-worker budget across all six worker protocols. Automatic sizing is used when unset; values below 6 are raised to the six-protocol compatibility floor. |
+| `VITE_WORKER_BUDGET` | Optional total browser-worker budget. Automatic sizing reserves only active protocols and otherwise follows available logical cores. |
+| `VITE_BUILDING_ATLAS` | Set to `false` to disable procedural building facade textures. |
 
 By default, the app resolves Overture's latest stable release from the official
 STAC catalog at startup and constructs the four PMTiles URLs from that release.
-The lookup is bounded so it cannot hold up startup indefinitely. A cached
-release is used during a temporary lookup failure; without one, the simulator
-still starts and only unavailable, non-overridden Overture themes are omitted.
+The first lookup is bounded so it cannot hold up startup indefinitely. Later
+visits start immediately from the cached release and refresh it in the
+background for the next session; without one, the simulator still starts and
+only unavailable, non-overridden Overture themes are omitted.
 If all four per-theme variables are set, the STAC lookup is skipped entirely.
+
+Rendered ground textures are persisted with a namespace derived from the
+runtime Overture sources, texture resolution, neighbor mode, renderer style,
+and application build. A release or rendering change therefore cannot reuse
+stale textures.
 
 ## License
 

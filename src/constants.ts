@@ -167,9 +167,9 @@ export interface GroundTextureConfig {
 }
 
 export const GROUND_TEXTURE: GroundTextureConfig = {
-  TEXTURE_SIZE: IS_MOBILE ? 1024 : 2048,
-  CACHE_MAX_SIZE: IS_MOBILE ? 50 : 150,
-  CACHE_DISPOSE_THRESHOLD: IS_MOBILE ? 35 : 120,
+  TEXTURE_SIZE: IS_MOBILE ? 512 : 1024,
+  CACHE_MAX_SIZE: IS_MOBILE ? 20 : 32,
+  CACHE_DISPOSE_THRESHOLD: IS_MOBILE ? 15 : 24,
   TERRAIN_QUAD_SEGMENTS: IS_MOBILE ? 8 : 16,
   ENABLED: true,
   SKIP_NEIGHBOR_TILES: IS_MOBILE ? true : false,
@@ -193,9 +193,9 @@ export const EXPANDED_TERRAIN: ExpandedTerrainConfig = {
   TILE_RADIUS: 4,
   CORE_RADIUS: 1,
   MAX_CONCURRENT: 1,
-  UNLOAD_DISTANCE: 6,
-  CACHE_MAX_SIZE: IS_MOBILE ? 60 : 120,
-  TEXTURE_SIZE: IS_MOBILE ? 512 : 1024,
+  UNLOAD_DISTANCE: 5,
+  CACHE_MAX_SIZE: IS_MOBILE ? 24 : 48,
+  TEXTURE_SIZE: IS_MOBILE ? 256 : 512,
 };
 
 // Web Worker settings for parallel processing
@@ -323,7 +323,7 @@ export const TEXTURE_CACHE: TextureCacheConfig = {
   ENABLED: textureCacheEnabled,
   DB_NAME: 'overture-flight-textures',
   STORE_NAME: 'textures',
-  MAX_ENTRIES: IS_MOBILE ? 100 : 500,
+  MAX_ENTRIES: IS_MOBILE ? 80 : 240,
   VERSION: BUILD_HASH,
   TTL_MS: 7 * 24 * 60 * 60 * 1000,
 };

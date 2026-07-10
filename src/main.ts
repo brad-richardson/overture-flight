@@ -16,10 +16,11 @@ import {
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection, Connection, WelcomeMessage } from './network.js';
 import {
-  checkCollision,
+  checkCollisionDetailed,
   clearBuildingColliders,
   getGroundHeight,
   resetCollisionSweep,
+  suppressBuildingCollisionsUntilClear,
 } from './collision.js';
 import { updateHUD, updatePlayerList, showCrashMessage, setTeleportToPlayerCallback, updateAutopilotIndicator } from './ui.js';
 import { initMinimap, updateMinimap } from './minimap.js';
@@ -48,6 +49,7 @@ import { initFeaturePicker, clearAllFeatures, unregisterTileForLazyPicking } fro
 import { initFeatureModal, showFeatureModal } from './feature-modal.js';
 import { setPlayerTarget, updateInterpolation, getInterpolatedState, removeInterpolatedPlayer } from './interpolation.js';
 import * as THREE from 'three';
+import { cancelWorkerTasksForWorldChange } from './workers/index.js';
 
 // Tile meshes type
 interface TileMeshes {
@@ -70,6 +72,10 @@ let lastMinimapUpdateTime = 0;
 const HUD_UPDATE_INTERVAL = 100; // 10 Hz - humans can't perceive faster HUD changes
 const PLAYER_LIST_UPDATE_INTERVAL = 100; // 10 Hz - player list doesn't change that fast
 const MINIMAP_UPDATE_INTERVAL = 50; // 20 Hz - minimap needs slightly smoother updates
+const TILE_UPDATE_INTERVAL = 200; // Tile decisions only need to run at 5 Hz
+const TILE_CLEANUP_INTERVAL = 1000;
+let lastTileUpdateTime = 0;
+let lastTileCleanupTime = 0;
 
 /**
  * Parse location from URL hash in format #z/lat/lng (compatible with explore site)
@@ -154,6 +160,7 @@ let isRunning = false;
 // Crash recovery state
 let isCrashRecovering = false;
 let crashRecoveryStartTime = 0;
+let crashRecoveryMinimumAltitude = FLIGHT.MIN_ALTITUDE;
 
 // Autopilot indicator state (track previous state to avoid unnecessary DOM updates)
 let wasAutopilotActive = false;
@@ -487,23 +494,27 @@ async function updateTiles(
     });
   }
 
-  // Unload distant tiles
-  const tilesToUnload = getTilesToUnload(lng, lat, tileMeshes.keys());
-  for (const key of tilesToUnload) {
-    const meshes = tileMeshes.get(key);
-    if (meshes) {
-      disposeTileMeshes(meshes);
-      tileMeshes.delete(key);
+  const cleanupNow = performance.now();
+  if (cleanupNow - lastTileCleanupTime >= TILE_CLEANUP_INTERVAL) {
+    lastTileCleanupTime = cleanupNow;
+
+    // Keep a 5x5 retention window around the plane; textures outside it are
+    // disposed before they can accumulate into a large GPU working set.
+    const tilesToUnload = getTilesToUnload(lng, lat, tileMeshes.keys(), 2);
+    for (const key of tilesToUnload) {
+      const meshes = tileMeshes.get(key);
+      if (meshes) {
+        disposeTileMeshes(meshes);
+        tileMeshes.delete(key);
+      }
     }
-  }
 
-  // Clean up distant elevation tiles if terrain is enabled
-  if (ELEVATION.TERRAIN_ENABLED) {
-    unloadDistantElevationTiles(lng, lat, 5);
-  }
+    if (ELEVATION.TERRAIN_ENABLED) {
+      unloadDistantElevationTiles(lng, lat, 5);
+    }
 
-  // Clean up distant water polygon cache
-  clearDistantWaterPolygonCache(lat, lng);
+    clearDistantWaterPolygonCache(lat, lng);
+  }
 
   // === Expanded terrain loading (Z14 outer ring, no buildings) ===
   // Loads terrain + roads for a larger area to avoid "edge of world"
@@ -556,7 +567,8 @@ function gameLoop(time: number): void {
       // (plane may have moved during crash, so recalculate instead of using cached value)
       const planeState = getPlaneState();
       const currentTerrainHeight = getGroundHeight(planeState.lng, planeState.lat);
-      resetPlaneWithTerrainAwareness(currentTerrainHeight);
+      resetPlaneWithTerrainAwareness(currentTerrainHeight, crashRecoveryMinimumAltitude);
+      crashRecoveryMinimumAltitude = FLIGHT.MIN_ALTITUDE;
       resetCollisionSweep();
       isCrashRecovering = false;
     } else {
@@ -597,7 +609,14 @@ function gameLoop(time: number): void {
   const terrainHeight = getGroundHeight(planeState.lng, planeState.lat);
 
   // Check for collisions
-  if (checkCollision(planeState)) {
+  const collision = checkCollisionDetailed(planeState);
+  if (collision.collided) {
+    if (collision.type === 'building') {
+      crashRecoveryMinimumAltitude = (collision.height ?? planeState.altitude) + 30;
+      suppressBuildingCollisionsUntilClear();
+    } else {
+      crashRecoveryMinimumAltitude = FLIGHT.MIN_ALTITUDE;
+    }
     showCrashMessage();
     // Start crash recovery pause instead of immediately resetting
     isCrashRecovering = true;
@@ -666,8 +685,11 @@ function gameLoop(time: number): void {
     connection.sendPosition(planeState);
   }
 
-  // Update tiles based on plane position, heading, and speed (predictive loading)
-  updateTiles(planeState.lng, planeState.lat, planeState.heading, planeState.speed);
+  // Tile selection allocates and scans several caches, so coordinate it at 5 Hz.
+  if (time - lastTileUpdateTime >= TILE_UPDATE_INTERVAL) {
+    lastTileUpdateTime = time;
+    void updateTiles(planeState.lng, planeState.lat, planeState.heading, planeState.speed);
+  }
 
   // Update sky system (clouds, atmospheric effects)
   updateSkySystem(cappedDelta);
@@ -749,6 +771,11 @@ function handlePlayerLeft(id: string): void {
  * Handle teleport action
  */
 async function handleTeleport(lat: number, lng: number): Promise<void> {
+  isCrashRecovering = false;
+  crashRecoveryMinimumAltitude = FLIGHT.MIN_ALTITUDE;
+  // Reject stale worker promises immediately instead of letting old-world work
+  // occupy every pool until completion or timeout.
+  cancelWorkerTasksForWorldChange();
   // Invalidate worker results before any origin or world state changes.
   invalidateBuildingLoads();
 

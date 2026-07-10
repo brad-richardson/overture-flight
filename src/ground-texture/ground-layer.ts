@@ -6,13 +6,14 @@ import { tileToBounds } from '../tile-manager.js';
 import { getElevationDataForTile } from '../elevation.js';
 import { getScene, getRendererType } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
-import { getOvertureSources } from '../overture-sources.js';
+import { getOvertureCacheNamespace, getOvertureSources } from '../overture-sources.js';
 import { registerTileForLazyPicking, unregisterTileForLazyPicking } from '../feature-picker.js';
 import { getFullPipelineWorkerPool } from '../workers/index.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
 import * as profiler from '../profiling/tile-profiler.js';
 import {
   getCachedTexture,
+  cacheTexture,
   blobToImageBitmap,
   isTextureCacheEnabled,
 } from '../cache/indexed-db-texture-cache.js';
@@ -109,6 +110,13 @@ async function createGroundForTileInner(
 
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const cache = getCache();
+  const overtureSources = getOvertureSources();
+  const persistentCacheNamespace = [
+    getOvertureCacheNamespace(),
+    `size-${GROUND_TEXTURE.TEXTURE_SIZE}`,
+    `neighbors-${GROUND_TEXTURE.SKIP_NEIGHBOR_TILES ? 0 : 1}`,
+    'style-2',
+  ].join(':');
 
   // Try to get texture from in-memory cache first
   let texture = cache.get(key);
@@ -116,7 +124,7 @@ async function createGroundForTileInner(
   // If not in memory, try IndexedDB persistent cache
   if (!texture && isTextureCacheEnabled()) {
     try {
-      const persistedTexture = await getCachedTexture(key);
+      const persistedTexture = await getCachedTexture(key, persistentCacheNamespace);
       if (persistedTexture) {
         // Reconstruct Three.js texture from cached blob
         const bitmap = await blobToImageBitmap(persistedTexture.blob);
@@ -153,8 +161,7 @@ async function createGroundForTileInner(
     // Full pipeline: fetches, parses, renders all in worker (avoids structured clone overhead)
     profiler.startPhase(key, 'fullPipeline');
     const fullPipelinePool = getFullPipelineWorkerPool();
-    const overtureSources = getOvertureSources();
-    const bitmap = await fullPipelinePool.renderTile(
+    const result = await fullPipelinePool.renderTile(
       tileX,
       tileY,
       tileZ,
@@ -162,8 +169,14 @@ async function createGroundForTileInner(
       overtureSources.base,
       overtureSources.transportation,
       !GROUND_TEXTURE.SKIP_NEIGHBOR_TILES, // includeNeighbors
-      true // includeTransportation
+      true, // includeTransportation
+      isTextureCacheEnabled()
     );
+    const { bitmap } = result;
+
+    if (result.blob) {
+      void cacheTexture(key, result.blob, bounds, persistentCacheNamespace);
+    }
 
     // Create texture from ImageBitmap
     const workerTexture = new THREE.Texture(bitmap);

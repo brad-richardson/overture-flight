@@ -1,4 +1,4 @@
-import { IS_MOBILE, WORKERS } from '../constants.js';
+import { GROUND_TEXTURE, IS_MOBILE, WORKERS } from '../constants.js';
 
 export const WORKER_POOL_KINDS = [
   'geometry',
@@ -24,9 +24,8 @@ export interface WorkerBudgetPlan {
   source: 'automatic' | 'environment';
 }
 
-const MINIMUM_BUDGET = WORKER_POOL_KINDS.length;
-const MOBILE_BUDGET_CAP = 8;
-const DESKTOP_BUDGET_CAP = 16;
+const MOBILE_BUDGET_CAP = 6;
+const DESKTOP_BUDGET_CAP = 10;
 
 const EXTRA_CAPACITY_PRIORITY: readonly WorkerPoolKind[] = [
   'fullPipeline',
@@ -52,25 +51,35 @@ function createWorkerBudgetPlan(): WorkerBudgetPlan {
   const configuredBudget = WORKERS.TOTAL_BUDGET;
   const source = configuredBudget > 0 ? 'environment' : 'automatic';
   const deviceCap = IS_MOBILE ? MOBILE_BUDGET_CAP : DESKTOP_BUDGET_CAP;
+  const activePools = new Set<WorkerPoolKind>([
+    ...(WORKERS.MVT_ENABLED ? ['mvt' as const] : []),
+    ...(WORKERS.ELEVATION_ENABLED ? ['elevation' as const] : []),
+    ...(WORKERS.BUILDING_GEOMETRY_ENABLED ? ['buildingGeometry' as const] : []),
+    ...(GROUND_TEXTURE.ENABLED ? ['fullPipeline' as const] : []),
+    ...(!GROUND_TEXTURE.ENABLED && WORKERS.GEOMETRY_ENABLED ? ['geometry' as const] : []),
+    'treeProcessing',
+  ]);
+  const minimumBudget = activePools.size;
   const automaticBudget = Math.min(
     deviceCap,
-    Math.max(MINIMUM_BUDGET, Math.floor(hardwareConcurrency * 1.5))
+    Math.max(minimumBudget, hardwareConcurrency - 1)
   );
 
-  // The six pools run distinct protocols and cannot safely share Worker instances.
-  // Keep one slot for each; undersized overrides are raised to this compatibility floor.
-  const total = Math.max(MINIMUM_BUDGET, configuredBudget || automaticBudget);
+  // Active pools run distinct protocols and cannot share Worker instances.
+  // Inactive legacy pools receive no reservation and remain lazily uninitialized.
+  const total = Math.max(minimumBudget, configuredBudget || automaticBudget);
   const allocations: Record<WorkerPoolKind, number> = {
-    geometry: 1,
-    mvt: 1,
-    elevation: 1,
-    buildingGeometry: 1,
-    fullPipeline: 1,
-    treeProcessing: 1,
+    geometry: activePools.has('geometry') ? 1 : 0,
+    mvt: activePools.has('mvt') ? 1 : 0,
+    elevation: activePools.has('elevation') ? 1 : 0,
+    buildingGeometry: activePools.has('buildingGeometry') ? 1 : 0,
+    fullPipeline: activePools.has('fullPipeline') ? 1 : 0,
+    treeProcessing: activePools.has('treeProcessing') ? 1 : 0,
   };
 
-  for (let index = MINIMUM_BUDGET; index < total; index += 1) {
-    const pool = EXTRA_CAPACITY_PRIORITY[(index - MINIMUM_BUDGET) % EXTRA_CAPACITY_PRIORITY.length];
+  const activePriority = EXTRA_CAPACITY_PRIORITY.filter(pool => activePools.has(pool));
+  for (let index = minimumBudget; index < total; index += 1) {
+    const pool = activePriority[(index - minimumBudget) % activePriority.length];
     allocations[pool] += 1;
   }
 

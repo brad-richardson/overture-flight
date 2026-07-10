@@ -315,18 +315,21 @@ export function setPlaneAltitude(altitude: number): void {
 
 /**
  * Reset plane after crash with terrain-aware altitude
- * Spawns 100-200m above the current terrain level
+ * Spawns 100-200m above terrain, or above a supplied collision obstacle.
  *
  * Note: For very high terrain (e.g., >4800m), if respawn would exceed MAX_ALTITUDE,
  * we spawn at MAX_ALTITUDE. This may place the plane closer to terrain than desired,
  * but ensures we don't exceed game limits. Autopilot will maintain safe distance.
  */
-export function resetPlaneWithTerrainAwareness(terrainHeight: number): void {
+export function resetPlaneWithTerrainAwareness(
+  terrainHeight: number,
+  minimumAltitude: number = FLIGHT.MIN_ALTITUDE
+): void {
   // Randomize respawn height between MIN and MAX for variety
   const respawnOffset = CRASH_RECOVERY.MIN_RESPAWN_HEIGHT +
     Math.random() * (CRASH_RECOVERY.MAX_RESPAWN_HEIGHT - CRASH_RECOVERY.MIN_RESPAWN_HEIGHT);
 
-  let newAltitude = terrainHeight + respawnOffset;
+  let newAltitude = Math.max(terrainHeight + respawnOffset, minimumAltitude);
 
   // Handle edge case: if terrain is so high that respawn would exceed MAX_ALTITUDE,
   // spawn at MAX_ALTITUDE (autopilot will maintain safe distance above terrain)
