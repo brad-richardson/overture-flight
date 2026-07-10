@@ -25,15 +25,17 @@ export interface WorkerBudgetPlan {
 }
 
 const MINIMUM_BUDGET = WORKER_POOL_KINDS.length;
-const MOBILE_BUDGET_CAP = 6;
-const DESKTOP_BUDGET_CAP = 8;
+const MOBILE_BUDGET_CAP = 8;
+const DESKTOP_BUDGET_CAP = 16;
 
-// Extra capacity follows application throughput priorities. Every pool gets one
-// worker before this order is applied, preserving all currently enabled paths.
 const EXTRA_CAPACITY_PRIORITY: readonly WorkerPoolKind[] = [
   'fullPipeline',
+  'fullPipeline',
+  'buildingGeometry',
   'buildingGeometry',
   'mvt',
+  'mvt',
+  'geometry',
   'geometry',
   'treeProcessing',
   'elevation',
@@ -52,7 +54,7 @@ function createWorkerBudgetPlan(): WorkerBudgetPlan {
   const deviceCap = IS_MOBILE ? MOBILE_BUDGET_CAP : DESKTOP_BUDGET_CAP;
   const automaticBudget = Math.min(
     deviceCap,
-    Math.max(MINIMUM_BUDGET, hardwareConcurrency - 1)
+    Math.max(MINIMUM_BUDGET, Math.floor(hardwareConcurrency * 1.5))
   );
 
   // The six pools run distinct protocols and cannot safely share Worker instances.
