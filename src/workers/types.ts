@@ -262,11 +262,29 @@ export interface BuildingGeometryBuffers {
 }
 
 /**
+ * Collision prism for one rendered building polygon, in scene coordinates.
+ * Rings are flattened x/z pairs. The AABB is used by the broad phase while
+ * the rings provide the footprint-aware narrow phase.
+ */
+export interface BuildingColliderBounds {
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
+  outerRing: number[];
+  holes: number[][];
+}
+
+/**
  * Result of building geometry creation
  */
 export interface CreateBuildingGeometryResult {
   /** Merged building geometry buffers */
   geometry: BuildingGeometryBuffers | null;
+  /** Per-building bounds generated from the same vertices as the rendered geometry. */
+  colliders: BuildingColliderBounds[];
   /** Statistics */
   stats: {
     buildingsProcessed: number;

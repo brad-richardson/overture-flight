@@ -15,11 +15,16 @@ import {
 } from './plane.js';
 import { initCameraControls, followPlane } from './camera.js';
 import { createConnection, Connection, WelcomeMessage } from './network.js';
-import { checkCollision, getGroundHeight } from './collision.js';
+import {
+  checkCollision,
+  clearBuildingColliders,
+  getGroundHeight,
+  resetCollisionSweep,
+} from './collision.js';
 import { updateHUD, updatePlayerList, showCrashMessage, setTeleportToPlayerCallback, updateAutopilotIndicator } from './ui.js';
 import { initMinimap, updateMinimap } from './minimap.js';
 import { initTileManager, getTilesToLoad, getTilesToUnload, clearDistantWaterPolygonCache } from './tile-manager.js';
-import { createBuildingsForTile, removeBuildingsGroup } from './buildings.js';
+import { createBuildingsForTile, invalidateBuildingLoads, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
 import { createTransportationForTile, removeTransportationGroup } from './transportation-layer.js';
 import {
@@ -552,6 +557,7 @@ function gameLoop(time: number): void {
       const planeState = getPlaneState();
       const currentTerrainHeight = getGroundHeight(planeState.lng, planeState.lat);
       resetPlaneWithTerrainAwareness(currentTerrainHeight);
+      resetCollisionSweep();
       isCrashRecovering = false;
     } else {
       // Still in recovery pause - only update camera and render, skip physics
@@ -743,6 +749,13 @@ function handlePlayerLeft(id: string): void {
  * Handle teleport action
  */
 async function handleTeleport(lat: number, lng: number): Promise<void> {
+  // Invalidate worker results before any origin or world state changes.
+  invalidateBuildingLoads();
+
+  // A teleport starts a new local coordinate space and must not sweep-test the
+  // long path from the plane's prior frame position.
+  resetCollisionSweep();
+
   // Invalidate all scene work before changing the origin or removing active tiles.
   // In-flight jobs retain their slots until they settle, preventing the same key
   // from being started twice against different origins.
@@ -778,6 +791,8 @@ async function completeTeleport(
     disposeTileMeshes(meshes);
   }
   tileMeshes.clear();
+  // Defensive cleanup for colliders whose owning group failed to finish loading.
+  clearBuildingColliders();
 
   // Clear ground texture tiles and cache
   clearAllGroundTiles();
@@ -811,6 +826,7 @@ async function completeTeleport(
 
   // Teleport plane
   teleportPlane(lat, lng);
+  resetCollisionSweep();
 
   // Ensure minimum clearance above terrain
   if (ELEVATION.TERRAIN_ENABLED) {
@@ -829,6 +845,7 @@ async function completeTeleport(
       if (FLIGHT.SPAWN_ALTITUDE < minAltitude) {
         console.log(`Adjusting spawn altitude from ${FLIGHT.SPAWN_ALTITUDE}m to ${minAltitude.toFixed(1)}m (terrain: ${terrainHeight.toFixed(1)}m)`);
         setPlaneAltitude(minAltitude);
+        resetCollisionSweep();
       }
     } else if (terrainResult.status === 'rejected') {
       console.warn('Failed to resolve terrain height after teleport:', terrainResult.reason);
@@ -939,6 +956,7 @@ async function init(): Promise<void> {
     // Teleport plane to start location if from URL
     if (urlLocation) {
       teleportPlane(urlLocation.lat, urlLocation.lng);
+      resetCollisionSweep();
     }
 
     // Initialize controls (keyboard)

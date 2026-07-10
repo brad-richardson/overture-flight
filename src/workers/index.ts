@@ -26,7 +26,7 @@ import type {
 import { getWorkerPoolSize } from './budget.js';
 
 // Re-export types for convenience
-export type { TileBounds, ParsedFeature, SceneOrigin, BaseGeometryResult, GeometryBufferGroup, LineGeometryBufferGroup, ParseMVTResult, CompactFeature, BuildingFeatureInput, CreateBuildingGeometryResult, BuildingGeometryBuffers, ProcessTreesResult, TreeData, LandcoverTreeConfig, ElevationConfig } from './types.js';
+export type { TileBounds, ParsedFeature, SceneOrigin, BaseGeometryResult, GeometryBufferGroup, LineGeometryBufferGroup, ParseMVTResult, CompactFeature, BuildingFeatureInput, CreateBuildingGeometryResult, BuildingGeometryBuffers, BuildingColliderBounds, ProcessTreesResult, TreeData, LandcoverTreeConfig, ElevationConfig } from './types.js';
 export { getWorkerBudgetPlan } from './budget.js';
 export type { WorkerBudgetPlan, WorkerPoolKind } from './budget.js';
 
