@@ -332,8 +332,14 @@ export function evictDistantGroundTextures(lng: number, lat: number, maxDistance
  */
 export function clearAllGroundTiles(): void {
   const scene = getScene();
+  const cache = textureCache;
 
-  for (const [_key, tileData] of activeTiles) {
+  for (const [key, tileData] of activeTiles) {
+    // Mirror removeGroundGroup's non-render state cleanup for bulk removal.
+    cache?.unmarkInUse(key);
+    unregisterTileForLazyPicking(key);
+    demoteFromCore(tileData.x, tileData.y, tileData.z);
+
     if (scene) {
       scene.remove(tileData.group);
     }

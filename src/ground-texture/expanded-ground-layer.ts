@@ -9,6 +9,7 @@ import { EXPANDED_TERRAIN, ELEVATION, GROUND_TEXTURE } from '../constants.js';
 import { getOvertureSources } from '../overture-sources.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
 import { getFullPipelineWorkerPool } from '../workers/index.js';
+import { disposeTexture } from '../renderer/texture-disposal.js';
 
 // Tile info type
 interface TileInfo {
@@ -21,8 +22,18 @@ interface TileInfo {
 // Active expanded ground tiles (terrain + roads, no buildings)
 const activeExpandedTiles = new Map<string, GroundTileData>();
 
-// Track tiles currently being loaded to prevent race conditions
-const loadingExpandedTiles = new Set<string>();
+interface ExpandedLoadToken {
+  generation: number;
+}
+
+// Expanded loads have their own lifecycle because they run independently of the
+// core tile coordinator. Request identity prevents old cleanup from deleting a
+// newer same-key load after a bulk clear.
+const loadingExpandedTiles = new Map<string, ExpandedLoadToken>();
+let expandedGeneration = 0;
+// Unlike the key-ownership map, this count includes invalidated generations.
+// It bounds actual queued/running work across repeated clears and teleports.
+let outstandingExpandedLoads = 0;
 
 // Track tiles that have been promoted to core (prevents race condition where
 // in-flight async load completes after promotion and re-adds the expanded tile)
@@ -35,6 +46,17 @@ let isProcessingQueue = false;
 // Dedicated texture cache for expanded tiles (separate from core tiles)
 // This ensures expanded tiles are evicted before core tiles
 let expandedTextureCache: TileTextureCache | null = null;
+// Dev mode intentionally bypasses the cache, so active tiles must retain
+// explicit ownership of their worker textures for disposal on normal removal.
+const uncachedExpandedTextures = new Map<string, THREE.Texture>();
+
+function ownsExpandedLoadingSlot(key: string, token: ExpandedLoadToken): boolean {
+  return loadingExpandedTiles.get(key) === token;
+}
+
+function isCurrentExpandedLoad(key: string, token: ExpandedLoadToken): boolean {
+  return token.generation === expandedGeneration && ownsExpandedLoadingSlot(key, token);
+}
 
 /**
  * Get or initialize the expanded tile texture cache
@@ -83,8 +105,9 @@ async function processExpandedQueue(): Promise<void> {
   isProcessingQueue = true;
 
   while (expandedTileQueue.length > 0) {
-    // Check how many expanded tiles are currently loading
-    if (loadingExpandedTiles.size >= EXPANDED_TERRAIN.MAX_CONCURRENT) {
+    // Count every outstanding generation, including loads invalidated by a
+    // teleport, so repeated clears cannot exceed the configured work budget.
+    if (outstandingExpandedLoads >= EXPANDED_TERRAIN.MAX_CONCURRENT) {
       // Wait a bit before checking again
       await new Promise(resolve => setTimeout(resolve, 100));
       continue;
@@ -131,8 +154,10 @@ export async function createExpandedGroundForTile(
     return null;
   }
 
-  // Mark as loading
-  loadingExpandedTiles.add(key);
+  // Mark as loading with per-request identity.
+  const loadToken: ExpandedLoadToken = { generation: expandedGeneration };
+  loadingExpandedTiles.set(key, loadToken);
+  outstandingExpandedLoads++;
 
   // Use semaphore to limit concurrent tile processing
   // EXPANDED_TERRAIN has lowest priority (after buildings)
@@ -140,15 +165,17 @@ export async function createExpandedGroundForTile(
   try {
     if (semaphore) {
       return await semaphore.run(
-        () => createExpandedGroundForTileInner(tileX, tileY, tileZ, key),
+        () => createExpandedGroundForTileInner(tileX, tileY, tileZ, key, loadToken),
         TilePriority.EXPANDED_TERRAIN
       );
     }
-    return await createExpandedGroundForTileInner(tileX, tileY, tileZ, key);
-  } catch (error) {
-    // Ensure cleanup on error to prevent permanently stuck entries
-    loadingExpandedTiles.delete(key);
-    throw error;
+    return await createExpandedGroundForTileInner(tileX, tileY, tileZ, key, loadToken);
+  } finally {
+    outstandingExpandedLoads--;
+    // A superseded request must not clear a newer same-key loading slot.
+    if (ownsExpandedLoadingSlot(key, loadToken)) {
+      loadingExpandedTiles.delete(key);
+    }
   }
 }
 
@@ -159,11 +186,11 @@ async function createExpandedGroundForTileInner(
   tileX: number,
   tileY: number,
   tileZ: number,
-  key: string
+  key: string,
+  loadToken: ExpandedLoadToken
 ): Promise<THREE.Group | null> {
   const scene = getScene();
   if (!scene) {
-    loadingExpandedTiles.delete(key);
     return null;
   }
 
@@ -189,6 +216,13 @@ async function createExpandedGroundForTileInner(
       true   // includeTransportation
     );
 
+    // A clear may have invalidated this request while the worker rendered. Do
+    // not repopulate the cache or create scene resources for the old generation.
+    if (!isCurrentExpandedLoad(key, loadToken) || promotedTiles.has(key)) {
+      bitmap.close();
+      return null;
+    }
+
     // Create texture from ImageBitmap
     const workerTexture = new THREE.Texture(bitmap);
     workerTexture.flipY = false;
@@ -207,6 +241,7 @@ async function createExpandedGroundForTileInner(
 
   // Create terrain-following quad (use same segments as core tiles for consistency)
   const quad = new TerrainQuad(bounds, GROUND_TEXTURE.TERRAIN_QUAD_SEGMENTS);
+  let hasUncachedWorkerTexture = !useCache && texture !== null;
 
   // Apply terrain elevation
   if (ELEVATION.TERRAIN_ENABLED) {
@@ -239,6 +274,16 @@ async function createExpandedGroundForTileInner(
     }
   }
 
+  // This is the final async boundary before active-map and scene mutation.
+  if (!isCurrentExpandedLoad(key, loadToken) || promotedTiles.has(key)) {
+    quad.dispose();
+    if (hasUncachedWorkerTexture) {
+      disposeTexture(texture);
+      hasUncachedWorkerTexture = false;
+    }
+    return null;
+  }
+
   // Apply ground texture
   quad.setTexture(texture);
 
@@ -246,17 +291,6 @@ async function createExpandedGroundForTileInner(
   cache.markInUse(key);
 
   const mesh = quad.getMesh();
-
-  // Check if this tile was promoted to core while we were loading
-  // If so, abort - the core tile takes precedence
-  if (promotedTiles.has(key)) {
-    // Clean up: unmark texture as in-use and dispose resources
-    cache.unmarkInUse(key);
-    mesh.geometry.dispose();
-    (mesh.material as THREE.Material).dispose();
-    loadingExpandedTiles.delete(key);
-    return null;
-  }
 
   // Create group
   const group = new THREE.Group();
@@ -271,12 +305,13 @@ async function createExpandedGroundForTileInner(
     z: tileZ,
     key,
   });
+  if (hasUncachedWorkerTexture) {
+    uncachedExpandedTextures.set(key, texture);
+    hasUncachedWorkerTexture = false;
+  }
 
   // Add to scene
   scene.add(group);
-
-  // Mark loading complete
-  loadingExpandedTiles.delete(key);
 
   return group;
 }
@@ -293,8 +328,14 @@ export function removeExpandedTile(key: string): void {
   // Unmark texture as in-use so it can be evicted if needed
   const cache = getExpandedCache();
   cache.unmarkInUse(key);
+  const uncachedTexture = uncachedExpandedTextures.get(key);
+  if (uncachedTexture) {
+    disposeTexture(uncachedTexture);
+    uncachedExpandedTextures.delete(key);
+  }
 
-  // Dispose quad resources (but not texture - it's cached)
+  // Dispose quad resources. Cached textures stay cache-owned; uncached textures
+  // were disposed explicitly above.
   const mesh = tileData.group.children[0] as THREE.Mesh;
   if (mesh) {
     mesh.geometry.dispose();
@@ -337,8 +378,9 @@ export function promoteExpandedToCore(tileX: number, tileY: number, tileZ: numbe
     expandedTileQueue.splice(queueIndex, 1);
   }
 
-  // Remove from loading set if in progress
-  loadingExpandedTiles.delete(expandedKey);
+  // In-flight work retains its loading token and will reject itself at the next
+  // async boundary. Removing the slot here could allow a same-key replacement
+  // whose state is later cleared by the older request.
 }
 
 /**
@@ -462,19 +504,13 @@ export function getExpandedQueueLength(): number {
  * Clear all expanded ground tiles and textures
  */
 export function clearAllExpandedTiles(): void {
-  const scene = getScene();
+  // Invalidate in-flight work before clearing active state. Clearing key slots
+  // lets the new generation queue replacements; the separate outstanding count
+  // keeps them within the work budget until older generations settle.
+  expandedGeneration++;
 
-  for (const [_key, tileData] of activeExpandedTiles) {
-    if (scene) {
-      scene.remove(tileData.group);
-    }
-
-    // Dispose mesh resources
-    const mesh = tileData.group.children[0] as THREE.Mesh;
-    if (mesh) {
-      mesh.geometry.dispose();
-      (mesh.material as THREE.Material).dispose();
-    }
+  for (const key of [...activeExpandedTiles.keys()]) {
+    removeExpandedTile(key);
   }
 
   activeExpandedTiles.clear();

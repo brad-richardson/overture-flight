@@ -264,7 +264,126 @@ const players = new Map<string, PlaneState>();
 
 // Tile meshes tracking
 const tileMeshes = new Map<string, TileMeshes>(); // key -> { buildings: Group, base: Group, transportation: Group }
-const loadingTiles = new Set<string>(); // Track tiles currently being loaded
+
+interface TileLoadToken {
+  generation: number;
+}
+
+// Each load has an identity as well as a location generation. The identity check
+// prevents an older promise's cleanup from deleting a newer load for the same key.
+const loadingTiles = new Map<string, TileLoadToken>();
+let tileGeneration = 0;
+let teleportInFlightGeneration: number | null = null;
+const TELEPORT_ELEVATION_TIMEOUT_MS = 5_000;
+
+type TimedResult<T> =
+  | { status: 'fulfilled'; value: T }
+  | { status: 'rejected'; reason: unknown }
+  | { status: 'timeout' };
+
+async function settleWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<TimedResult<T>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const settled: Promise<TimedResult<T>> = promise.then(
+    value => ({ status: 'fulfilled' as const, value }),
+    reason => ({ status: 'rejected' as const, reason })
+  );
+  const timeout = new Promise<TimedResult<T>>(resolve => {
+    timeoutId = setTimeout(() => resolve({ status: 'timeout' }), timeoutMs);
+  });
+
+  const result = await Promise.race([settled, timeout]);
+  if (timeoutId !== undefined) {
+    clearTimeout(timeoutId);
+  }
+  return result;
+}
+
+function disposeTileMeshes(meshes: TileMeshes): void {
+  if (meshes.ground) removeGroundGroup(meshes.ground);
+  if (meshes.base) removeBaseLayerGroup(meshes.base);
+  if (meshes.transportation) removeTransportationGroup(meshes.transportation);
+  if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
+  if (meshes.trees) removeTreesGroup(meshes.trees);
+}
+
+function ownsLoadingSlot(key: string, token: TileLoadToken): boolean {
+  return loadingTiles.get(key) === token;
+}
+
+function isCurrentTileLoad(key: string, token: TileLoadToken): boolean {
+  return token.generation === tileGeneration && ownsLoadingSlot(key, token);
+}
+
+async function guardSceneGroup(
+  task: Promise<THREE.Group | null>,
+  isStillCurrent: () => boolean,
+  dispose: (group: THREE.Group) => void
+): Promise<THREE.Group | null> {
+  const group = await task;
+  if (group && !isStillCurrent()) {
+    // Layer factories attach their group before resolving. This continuation runs
+    // in the same microtask chain, removing stale work before the next render.
+    dispose(group);
+    return null;
+  }
+  return group;
+}
+
+/**
+ * Load every required layer for a core tile as one bundle. Layer factories add
+ * their groups to the scene before resolving, so wait for every task to settle
+ * and dispose successful siblings if any required layer rejects.
+ */
+async function loadCoreTileBundle(
+  x: number,
+  y: number,
+  z: number,
+  isStillCurrent: () => boolean
+): Promise<TileMeshes> {
+  const tasks: Promise<THREE.Group | null>[] = GROUND_TEXTURE.ENABLED
+    ? [
+        guardSceneGroup(createGroundForTile(x, y, z), isStillCurrent, removeGroundGroup),
+        guardSceneGroup(createBuildingsForTile(x, y, z), isStillCurrent, removeBuildingsGroup),
+      ]
+    : [
+        guardSceneGroup(createBaseLayerForTile(x, y, z), isStillCurrent, removeBaseLayerGroup),
+        guardSceneGroup(createBuildingsForTile(x, y, z), isStillCurrent, removeBuildingsGroup),
+        guardSceneGroup(
+          createTransportationForTile(x, y, z),
+          isStillCurrent,
+          removeTransportationGroup
+        ),
+      ];
+
+  const results = await Promise.allSettled(tasks);
+  const groups = results.map(result => result.status === 'fulfilled' ? result.value : null);
+
+  const meshes: TileMeshes = GROUND_TEXTURE.ENABLED
+    ? {
+        ground: groups[0],
+        base: null,
+        transportation: null,
+        buildings: groups[1],
+        trees: null,
+      }
+    : {
+        ground: null,
+        base: groups[0],
+        buildings: groups[1],
+        transportation: groups[2],
+        trees: null,
+      };
+
+  const failure = results.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected'
+  );
+  if (failure) {
+    disposeTileMeshes(meshes);
+    throw failure.reason;
+  }
+
+  return meshes;
+}
 
 /**
  * Load tiles around the current position with predictive loading
@@ -275,6 +394,12 @@ async function updateTiles(
   heading: number = 0,
   speed: number = 0
 ): Promise<void> {
+  // setOrigin changes before the plane position does. Pause the entire tile
+  // coordinator so that old plane coordinates cannot seed the new generation.
+  if (teleportInFlightGeneration !== null) {
+    return;
+  }
+
   const tilesToLoad = getTilesToLoad(lng, lat, heading, speed);
 
   // Throttle core tile loading when FPS is critically low
@@ -294,7 +419,8 @@ async function updateTiles(
       continue;
     }
 
-    loadingTiles.add(tile.key);
+    const loadToken: TileLoadToken = { generation: tileGeneration };
+    loadingTiles.set(tile.key, loadToken);
 
     // Load layers in parallel
     // Wrap tree creation to isolate failures - trees are optional, other layers are critical
@@ -307,85 +433,53 @@ async function updateTiles(
       }
     };
 
-    // Use new texture-based ground rendering if enabled
-    if (GROUND_TEXTURE.ENABLED) {
-      // Load terrain and buildings first (high priority)
-      // Trees load in background after terrain is visible
-      Promise.all([
-        createGroundForTile(tile.x, tile.y, tile.z),
-        createBuildingsForTile(tile.x, tile.y, tile.z)
-      ]).then(([groundGroup, buildingsGroup]) => {
-        // Store partial result - terrain visible immediately
-        tileMeshes.set(tile.key, {
-          ground: groundGroup,
-          base: null,
-          transportation: null,
-          buildings: buildingsGroup,
-          trees: null  // Trees load in background
-        });
-        loadingTiles.delete(tile.key);
-        // Notify loading gate that a tile is ready
-        getLoadingGate().onTileLoaded();
+    // Terrain/base, buildings, and roads (legacy mode) form the required core
+    // bundle. Trees remain optional and load after the core tile is registered.
+    void loadCoreTileBundle(
+      tile.x,
+      tile.y,
+      tile.z,
+      () => isCurrentTileLoad(tile.key, loadToken)
+    ).then(meshes => {
+      if (!isCurrentTileLoad(tile.key, loadToken)) {
+        // A teleport changed the scene origin while this work was in flight.
+        // Layer factories already attached these groups, so fully remove them.
+        disposeTileMeshes(meshes);
+        return;
+      }
 
-        // Now load trees in background (lower priority)
-        // Capture reference to this specific tile's meshes to avoid race condition
-        // where tile is unloaded and reloaded before trees finish loading
-        const meshesRef = tileMeshes.get(tile.key);
-        safeCreateTrees().then(treesGroup => {
-          // Verify this is still the same tile instance (not a replacement)
-          if (tileMeshes.get(tile.key) === meshesRef && meshesRef && treesGroup) {
-            meshesRef.trees = treesGroup;
-          } else if (treesGroup) {
-            // Tile was unloaded or replaced while trees were loading - clean up
-            removeTreesGroup(treesGroup);
-          }
-        });
-      }).catch(e => {
-        console.warn(`Failed to load tile ${tile.key}:`, e);
-        loadingTiles.delete(tile.key);
-        // Clean up lazy picking registration on failure to prevent memory leak
-        unregisterTileForLazyPicking(tile.key);
-      });
-    } else {
-      // Legacy polygon-based rendering
-      // Load terrain, buildings, roads first (high priority)
-      // Trees load in background after terrain is visible
-      Promise.all([
-        createBaseLayerForTile(tile.x, tile.y, tile.z),
-        createBuildingsForTile(tile.x, tile.y, tile.z),
-        createTransportationForTile(tile.x, tile.y, tile.z)
-      ]).then(([baseGroup, buildingsGroup, transportationGroup]) => {
-        // Store partial result - terrain visible immediately
-        tileMeshes.set(tile.key, {
-          ground: null,
-          base: baseGroup,
-          buildings: buildingsGroup,
-          transportation: transportationGroup,
-          trees: null  // Trees load in background
-        });
-        loadingTiles.delete(tile.key);
-        // Notify loading gate that a tile is ready
-        getLoadingGate().onTileLoaded();
+      tileMeshes.set(tile.key, meshes);
+      getLoadingGate().onTileLoaded();
 
-        // Now load trees in background (lower priority)
-        // Capture reference to this specific tile's meshes to avoid race condition
-        const meshesRef = tileMeshes.get(tile.key);
-        safeCreateTrees().then(treesGroup => {
-          // Verify this is still the same tile instance (not a replacement)
-          if (tileMeshes.get(tile.key) === meshesRef && meshesRef && treesGroup) {
-            meshesRef.trees = treesGroup;
-          } else if (treesGroup) {
-            // Tile was unloaded or replaced while trees were loading - clean up
-            removeTreesGroup(treesGroup);
-          }
-        });
-      }).catch(e => {
-        console.warn(`Failed to load tile ${tile.key}:`, e);
-        loadingTiles.delete(tile.key);
-        // Clean up lazy picking registration on failure to prevent memory leak
-        unregisterTileForLazyPicking(tile.key);
+      // Capture this specific tile instance and its generation. A late tree job
+      // must satisfy both checks before it can become active.
+      const meshesRef = meshes;
+      void safeCreateTrees().then(treesGroup => {
+        if (
+          loadToken.generation === tileGeneration &&
+          tileMeshes.get(tile.key) === meshesRef &&
+          treesGroup
+        ) {
+          meshesRef.trees = treesGroup;
+        } else if (treesGroup) {
+          removeTreesGroup(treesGroup);
+        }
       });
-    }
+    }).catch(e => {
+      // Only the owner may clean key-scoped registrations. This remains true for
+      // a superseded generation until its finally block releases the slot.
+      if (ownsLoadingSlot(tile.key, loadToken)) {
+        unregisterTileForLazyPicking(`ground-${tile.key}`);
+      }
+      if (loadToken.generation === tileGeneration) {
+        console.warn(`Failed to load tile ${tile.key}:`, e);
+      }
+    }).finally(() => {
+      // Never allow an older completion to clear a newer load for the same key.
+      if (ownsLoadingSlot(tile.key, loadToken)) {
+        loadingTiles.delete(tile.key);
+      }
+    });
   }
 
   // Unload distant tiles
@@ -393,14 +487,7 @@ async function updateTiles(
   for (const key of tilesToUnload) {
     const meshes = tileMeshes.get(key);
     if (meshes) {
-      // New texture-based ground
-      if (meshes.ground) removeGroundGroup(meshes.ground);
-      // Legacy polygon-based rendering
-      if (meshes.base) removeBaseLayerGroup(meshes.base);
-      if (meshes.transportation) removeTransportationGroup(meshes.transportation);
-      // Common to both
-      if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
-      if (meshes.trees) removeTreesGroup(meshes.trees);
+      disposeTileMeshes(meshes);
       tileMeshes.delete(key);
     }
   }
@@ -656,6 +743,29 @@ function handlePlayerLeft(id: string): void {
  * Handle teleport action
  */
 async function handleTeleport(lat: number, lng: number): Promise<void> {
+  // Invalidate all scene work before changing the origin or removing active tiles.
+  // In-flight jobs retain their slots until they settle, preventing the same key
+  // from being started twice against different origins.
+  const teleportGeneration = ++tileGeneration;
+  teleportInFlightGeneration = teleportGeneration;
+
+  try {
+    await completeTeleport(lat, lng, teleportGeneration);
+  } finally {
+    // An older overlapping teleport must not resume tile loading while the latest
+    // teleport still owns the origin transition.
+    if (teleportInFlightGeneration === teleportGeneration) {
+      teleportInFlightGeneration = null;
+    }
+  }
+}
+
+async function completeTeleport(
+  lat: number,
+  lng: number,
+  teleportGeneration: number
+): Promise<void> {
+
   // Reset location tracking so URL updates after teleport
   lastLocationHash = null;
   lastHashUpdateTime = 0;
@@ -665,11 +775,7 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
 
   // Clear existing tiles
   for (const meshes of tileMeshes.values()) {
-    if (meshes.base) removeBaseLayerGroup(meshes.base);
-    if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
-    if (meshes.transportation) removeTransportationGroup(meshes.transportation);
-    if (meshes.trees) removeTreesGroup(meshes.trees);
-    if (meshes.ground) removeGroundGroup(meshes.ground);
+    disposeTileMeshes(meshes);
   }
   tileMeshes.clear();
 
@@ -680,13 +786,27 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
   // Clear stored features for click picking
   clearAllFeatures();
 
-  // Preload elevation tiles for the new location
+  // Preload elevation tiles for the new location, but do not let a stalled
+  // network request pause the tile coordinator indefinitely. A late preload is
+  // still allowed to warm the cache; generation checks below own scene/plane mutation.
   if (ELEVATION.TERRAIN_ENABLED) {
-    try {
-      await preloadElevationTiles(lng, lat, 2);
-    } catch (error) {
-      console.warn('Failed to preload elevation tiles:', error);
+    const preloadResult = await settleWithTimeout(
+      preloadElevationTiles(lng, lat, 2),
+      TELEPORT_ELEVATION_TIMEOUT_MS
+    );
+    if (preloadResult.status === 'rejected') {
+      console.warn('Failed to preload elevation tiles:', preloadResult.reason);
+    } else if (preloadResult.status === 'timeout') {
+      console.warn(
+        `Elevation preload exceeded ${TELEPORT_ELEVATION_TIMEOUT_MS}ms; continuing teleport`
+      );
     }
+  }
+
+  // A newer teleport owns the origin now. Do not move the plane or publish the
+  // superseded destination after this asynchronous preload completes.
+  if (teleportGeneration !== tileGeneration) {
+    return;
   }
 
   // Teleport plane
@@ -694,15 +814,32 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
 
   // Ensure minimum clearance above terrain
   if (ELEVATION.TERRAIN_ENABLED) {
-    const terrainHeight = await getTerrainHeightAsync(lng, lat);
-    const minAltitude = terrainHeight + PLANE_RENDER.MIN_TERRAIN_CLEARANCE;
-    if (FLIGHT.SPAWN_ALTITUDE < minAltitude) {
-      console.log(`Adjusting spawn altitude from ${FLIGHT.SPAWN_ALTITUDE}m to ${minAltitude.toFixed(1)}m (terrain: ${terrainHeight.toFixed(1)}m)`);
-      setPlaneAltitude(minAltitude);
+    // The center-tile request is normally a cache hit after preload, but bound it
+    // too so a timed-out preload cannot reintroduce an indefinite coordinator pause.
+    const terrainResult = await settleWithTimeout(
+      getTerrainHeightAsync(lng, lat),
+      TELEPORT_ELEVATION_TIMEOUT_MS
+    );
+    if (teleportGeneration !== tileGeneration) {
+      return;
+    }
+    if (terrainResult.status === 'fulfilled') {
+      const terrainHeight = terrainResult.value;
+      const minAltitude = terrainHeight + PLANE_RENDER.MIN_TERRAIN_CLEARANCE;
+      if (FLIGHT.SPAWN_ALTITUDE < minAltitude) {
+        console.log(`Adjusting spawn altitude from ${FLIGHT.SPAWN_ALTITUDE}m to ${minAltitude.toFixed(1)}m (terrain: ${terrainHeight.toFixed(1)}m)`);
+        setPlaneAltitude(minAltitude);
+      }
+    } else if (terrainResult.status === 'rejected') {
+      console.warn('Failed to resolve terrain height after teleport:', terrainResult.reason);
+    } else {
+      console.warn(
+        `Terrain height lookup exceeded ${TELEPORT_ELEVATION_TIMEOUT_MS}ms; keeping spawn altitude`
+      );
     }
   }
 
-  if (connection) {
+  if (teleportGeneration === tileGeneration && connection) {
     connection.sendTeleport(lat, lng);
   }
 }
