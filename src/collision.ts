@@ -17,6 +17,7 @@ export interface CollisionPoint {
 
 interface IndexedBuildingCollider extends BuildingColliderBounds {
   id: number;
+  lastQueryId: number;
 }
 
 /**
@@ -41,30 +42,49 @@ export function segmentIntersectsAABB(
   let tMin = 0;
   let tMax = 1;
 
-  const axes: Array<{
-    start: number;
-    end: number;
-    min: number;
-    max: number;
-  }> = [
-    { start: start.x, end: end.x, min: bounds.minX, max: bounds.maxX },
-    { start: start.y, end: end.y, min: bounds.minY, max: bounds.maxY },
-    { start: start.z, end: end.z, min: bounds.minZ, max: bounds.maxZ },
-  ];
-
-  for (const axis of axes) {
-    const delta = axis.end - axis.start;
-    if (Math.abs(delta) < SEGMENT_EPSILON) {
-      if (axis.start < axis.min || axis.start > axis.max) return false;
-      continue;
-    }
-
-    let entry = (axis.min - axis.start) / delta;
-    let exit = (axis.max - axis.start) / delta;
+  let delta = end.x - start.x;
+  if (Math.abs(delta) < SEGMENT_EPSILON) {
+    if (start.x < bounds.minX || start.x > bounds.maxX) return false;
+  } else {
+    let entry = (bounds.minX - start.x) / delta;
+    let exit = (bounds.maxX - start.x) / delta;
     if (entry > exit) {
-      [entry, exit] = [exit, entry];
+      const swap = entry;
+      entry = exit;
+      exit = swap;
     }
+    tMin = Math.max(tMin, entry);
+    tMax = Math.min(tMax, exit);
+    if (tMin > tMax) return false;
+  }
 
+  delta = end.y - start.y;
+  if (Math.abs(delta) < SEGMENT_EPSILON) {
+    if (start.y < bounds.minY || start.y > bounds.maxY) return false;
+  } else {
+    let entry = (bounds.minY - start.y) / delta;
+    let exit = (bounds.maxY - start.y) / delta;
+    if (entry > exit) {
+      const swap = entry;
+      entry = exit;
+      exit = swap;
+    }
+    tMin = Math.max(tMin, entry);
+    tMax = Math.min(tMax, exit);
+    if (tMin > tMax) return false;
+  }
+
+  delta = end.z - start.z;
+  if (Math.abs(delta) < SEGMENT_EPSILON) {
+    if (start.z < bounds.minZ || start.z > bounds.maxZ) return false;
+  } else {
+    let entry = (bounds.minZ - start.z) / delta;
+    let exit = (bounds.maxZ - start.z) / delta;
+    if (entry > exit) {
+      const swap = entry;
+      entry = exit;
+      exit = swap;
+    }
     tMin = Math.max(tMin, entry);
     tMax = Math.min(tMax, exit);
     if (tMin > tMax) return false;
@@ -246,6 +266,7 @@ class BuildingSpatialIndex {
   private readonly colliders = new Map<number, IndexedBuildingCollider>();
   private readonly tileColliderIds = new Map<string, Set<number>>();
   private nextColliderId = 1;
+  private nextQueryId = 1;
 
   registerTile(tileKey: string, bounds: readonly BuildingColliderBounds[]): void {
     this.removeTile(tileKey);
@@ -256,6 +277,7 @@ class BuildingSpatialIndex {
       const collider: IndexedBuildingCollider = {
         ...colliderBounds,
         id: this.nextColliderId++,
+        lastQueryId: 0,
       };
       this.colliders.set(collider.id, collider);
       tileIds.add(collider.id);
@@ -297,32 +319,33 @@ class BuildingSpatialIndex {
     this.cells.clear();
     this.colliders.clear();
     this.tileColliderIds.clear();
+    this.nextQueryId = 1;
   }
 
   findIntersection(start: CollisionPoint, end: CollisionPoint): IndexedBuildingCollider | null {
-    const candidateIds = new Set<number>();
-    const segmentBounds: Pick<
-      BuildingColliderBounds,
-      'minX' | 'minY' | 'minZ' | 'maxX' | 'maxY' | 'maxZ'
-    > = {
-      minX: Math.min(start.x, end.x),
-      minY: Math.min(start.y, end.y),
-      minZ: Math.min(start.z, end.z),
-      maxX: Math.max(start.x, end.x),
-      maxY: Math.max(start.y, end.y),
-      maxZ: Math.max(start.z, end.z),
-    };
+    const minCellX = Math.floor(Math.min(start.x, end.x) / BUILDING_COLLISION_CELL_SIZE);
+    const maxCellX = Math.floor(Math.max(start.x, end.x) / BUILDING_COLLISION_CELL_SIZE);
+    const minCellZ = Math.floor(Math.min(start.z, end.z) / BUILDING_COLLISION_CELL_SIZE);
+    const maxCellZ = Math.floor(Math.max(start.z, end.z) / BUILDING_COLLISION_CELL_SIZE);
+    if (this.nextQueryId >= Number.MAX_SAFE_INTEGER) {
+      for (const collider of this.colliders.values()) collider.lastQueryId = 0;
+      this.nextQueryId = 1;
+    }
+    const queryId = this.nextQueryId++;
 
-    this.forEachCell(segmentBounds, (cellKey) => {
-      const cell = this.cells.get(cellKey);
-      if (!cell) return;
-      for (const colliderId of cell) candidateIds.add(colliderId);
-    });
+    for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+      for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
+        const cell = this.cells.get(`${cellX},${cellZ}`);
+        if (!cell) continue;
 
-    for (const colliderId of candidateIds) {
-      const collider = this.colliders.get(colliderId);
-      if (collider && segmentIntersectsBuilding(start, end, collider)) {
-        return collider;
+        for (const colliderId of cell) {
+          const collider = this.colliders.get(colliderId);
+          if (!collider || collider.lastQueryId === queryId) continue;
+          collider.lastQueryId = queryId;
+          if (segmentIntersectsBuilding(start, end, collider)) {
+            return collider;
+          }
+        }
       }
     }
 
