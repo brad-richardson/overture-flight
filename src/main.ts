@@ -788,6 +788,16 @@ function handleSync(planes: Record<string, PlaneState>): void {
 }
 
 /**
+ * Handle a steady-state update for one remote player.
+ */
+function handlePlayerUpdated(player: PlaneState): void {
+  if (player.id === localId) return;
+  const normalizedPlane = normalizeGeoState(player);
+  players.set(normalizedPlane.id, normalizedPlane);
+  setPlayerTarget(normalizedPlane.id, normalizedPlane);
+}
+
+/**
  * Handle player joined message
  */
 function handlePlayerJoined(player: PlaneState): void {
@@ -1045,6 +1055,7 @@ async function init(): Promise<void> {
     connection = createConnection('global', {
       onWelcome: handleWelcome,
       onSync: handleSync,
+      onPlayerUpdated: handlePlayerUpdated,
       onPlayerJoined: handlePlayerJoined,
       onPlayerLeft: handlePlayerLeft,
     });
