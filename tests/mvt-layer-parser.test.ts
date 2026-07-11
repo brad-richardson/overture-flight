@@ -104,4 +104,33 @@ describe('MVT layer parser', () => {
     expect(first.feature).toHaveBeenCalledOnce();
     expect(second.feature).toHaveBeenCalledTimes(2);
   });
+
+  it('applies keepFeature before geometry decode', () => {
+    const makeLayer = (props: Record<string, unknown>[]) => {
+      const features = props.map((properties, index) => ({
+        properties: { ...properties, index },
+        toGeoJSON: vi.fn(() => ({ geometry: { type: 'LineString', coordinates: [[index, index]] } })),
+      }));
+      return { length: features.length, feature: vi.fn((i: number) => features[i]), features };
+    };
+    const infrastructure = makeLayer([
+      { subtype: 'airport', class: 'runway' },
+      { subtype: 'power', class: 'power_pole' },
+      { subtype: 'airport', class: 'taxiway' },
+    ]);
+
+    const parsed = parseVectorTileLayers(
+      { infrastructure },
+      1,
+      2,
+      3,
+      ['infrastructure'],
+      (layerName, properties) => layerName !== 'infrastructure' || properties.subtype === 'airport'
+    );
+
+    expect(parsed.map(feature => feature.properties.class)).toEqual(['runway', 'taxiway']);
+    // The filtered-out feature never decodes its geometry.
+    expect(infrastructure.features[1].toGeoJSON).not.toHaveBeenCalled();
+    expect(infrastructure.features[0].toGeoJSON).toHaveBeenCalledOnce();
+  });
 });
