@@ -15,6 +15,11 @@ import Pbf from 'pbf';
 import type { WorkerResponse, TileBounds, ParsedFeature } from './types.js';
 import { renderTileTextureToCanvas } from './offscreen-renderer.js';
 import { getWrappedTileNeighborhood } from '../tile-coordinates.js';
+import { parseVectorTileLayers } from './mvt-layer-parser.js';
+
+const BASE_LAYER_NAMES = ['land', 'land_use', 'land_cover', 'water'] as const;
+const WATER_LAYER_NAMES = ['water'] as const;
+const TRANSPORTATION_LAYER_NAMES = ['segment'] as const;
 
 // PMTiles sources (lazy initialized)
 let basePMTiles: PMTiles | null = null;
@@ -186,32 +191,16 @@ function parseMVT(
   tileX: number,
   tileY: number,
   zoom: number,
-  layerName: string | null = null
+  requestedLayerNames: readonly string[] | null
 ): ParsedFeature[] {
   const tile = new VectorTile(new Pbf(data));
-  const features: ParsedFeature[] = [];
-
-  const allLayerNames = Object.keys(tile.layers);
-  const layerNames = layerName && tile.layers[layerName] ? [layerName] : allLayerNames;
-
-  for (const name of layerNames) {
-    const layer = tile.layers[name];
-    if (!layer) continue;
-
-    for (let i = 0; i < layer.length; i++) {
-      const feature = layer.feature(i);
-      const geojson = feature.toGeoJSON(tileX, tileY, zoom);
-
-      features.push({
-        type: geojson.geometry.type,
-        coordinates: geojson.geometry.coordinates,
-        properties: feature.properties as Record<string, unknown>,
-        layer: name,
-      });
-    }
-  }
-
-  return features;
+  return parseVectorTileLayers(
+    tile.layers,
+    tileX,
+    tileY,
+    zoom,
+    requestedLayerNames
+  );
 }
 
 /**
@@ -271,7 +260,13 @@ async function loadLowerZoomWater(
     if (!data) continue;
 
     // Only extract water layer polygons
-    const allFeatures = parseMVT(data, lowerX, lowerY, lowerZoom);
+    const allFeatures = parseMVT(
+      data,
+      lowerX,
+      lowerY,
+      lowerZoom,
+      WATER_LAYER_NAMES
+    );
 
     const waterFeatures = allFeatures.filter(f =>
       f.layer === 'water' &&
@@ -333,7 +328,7 @@ async function loadBaseFeatures(
     promises.push(
       fetchTileData(basePMTiles!, tile.z, tile.x, tile.y).then(data => {
         if (!data) return [];
-        return parseMVT(data, tile.x, tile.y, tile.z);
+        return parseMVT(data, tile.x, tile.y, tile.z, BASE_LAYER_NAMES);
       })
     );
   };
@@ -403,7 +398,13 @@ async function loadTransportationFeatures(
   );
   if (!data) return [];
 
-  return parseMVT(data, sourceTile.x, sourceTile.y, sourceTile.z);
+  return parseMVT(
+    data,
+    sourceTile.x,
+    sourceTile.y,
+    sourceTile.z,
+    TRANSPORTATION_LAYER_NAMES
+  );
 }
 
 /**
