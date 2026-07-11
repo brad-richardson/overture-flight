@@ -8,6 +8,14 @@ import { disposeTexture } from '../renderer/texture-disposal.js';
 // Type for material - can be standard or node-based
 type TerrainMaterialType = 'standard' | 'node';
 
+export interface TerrainQuadDisposeOptions {
+  /**
+   * Dispose the color/albedo texture bound to the material.
+   * Tile layers normally leave this false because their texture cache owns it.
+   */
+  disposeColorTexture?: boolean;
+}
+
 // Depth of terrain skirts in meters (extends below terrain to hide gaps)
 const SKIRT_DEPTH = 100;
 
@@ -22,8 +30,10 @@ export class TerrainQuad {
   private originalWidth: number;
   private originalHeight: number;
   private elevationTexture: THREE.DataTexture | null = null;
+  private colorTexture: THREE.Texture | null = null;
   private materialType: TerrainMaterialType = 'standard';
-  private setColorTextureCallback: ((texture: THREE.Texture) => void) | null = null;
+  private setColorTextureCallback: ((texture: THREE.Texture | null) => void) | null = null;
+  private disposed = false;
 
   constructor(bounds: TileBounds, segments: number = GROUND_TEXTURE.TERRAIN_QUAD_SEGMENTS) {
     // Calculate world dimensions
@@ -303,7 +313,7 @@ export class TerrainQuad {
     const elevHeight = Math.abs(elevSE.z - elevNW.z);
 
     // Get existing color texture if any
-    const existingColorTexture = (this.material as THREE.MeshStandardMaterial).map ?? undefined;
+    const existingColorTexture = this.colorTexture ?? undefined;
 
     // Create TSL terrain material
     const { material: newMaterial, setColorTexture } = await createTSLTerrainMaterial({
@@ -383,6 +393,8 @@ export class TerrainQuad {
    * Handles both WebGL (MeshStandardMaterial.map) and WebGPU (colorNode) paths
    */
   setTexture(texture: THREE.CanvasTexture): void {
+    this.colorTexture = texture;
+
     if (this.materialType === 'node' && this.setColorTextureCallback) {
       // WebGPU path: use colorNode via callback
       this.setColorTextureCallback(texture);
@@ -417,17 +429,27 @@ export class TerrainQuad {
   /**
    * Dispose of resources
    */
-  dispose(): void {
+  dispose(options: TerrainQuadDisposeOptions = {}): void {
+    if (this.disposed) return;
+    this.disposed = true;
+
+    const { disposeColorTexture = true } = options;
+
+    // Clear material references regardless of renderer or texture ownership.
+    if (this.materialType === 'standard') {
+      (this.material as THREE.MeshStandardMaterial).map = null;
+    } else {
+      this.setColorTextureCallback?.(null);
+    }
+
+    const colorTexture = this.colorTexture;
+    this.colorTexture = null;
     this.geometry.dispose();
     this.material.dispose();
 
-    // Dispose color texture if present (WebGL path only - node materials handle this differently)
-    if (this.materialType === 'standard') {
-      const stdMaterial = this.material as THREE.MeshStandardMaterial;
-      if (stdMaterial.map) {
-        // Use deferred disposal for WebGPU compatibility
-        disposeTexture(stdMaterial.map);
-      }
+    if (disposeColorTexture && colorTexture) {
+      // Use deferred disposal for WebGPU compatibility
+      disposeTexture(colorTexture);
     }
 
     if (this.elevationTexture) {
