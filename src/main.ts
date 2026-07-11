@@ -58,6 +58,12 @@ import {
   parseGeoCoordinateFields,
   shouldRebaseLocalOrigin,
 } from './geo.js';
+import {
+  isRemotePlayerId,
+  playerListEntryChanged,
+  PlayerListRenderController,
+  staleRemotePlayerIds,
+} from './player-list-controller.js';
 
 // Tile meshes type
 interface TileMeshes {
@@ -75,10 +81,8 @@ const HASH_UPDATE_INTERVAL = 1000; // Only check/update URL every 1 second
 
 // UI update throttling - DOM updates don't need to happen every frame
 let lastHudUpdateTime = 0;
-let lastPlayerListUpdateTime = 0;
 let lastMinimapUpdateTime = 0;
 const HUD_UPDATE_INTERVAL = 100; // 10 Hz - humans can't perceive faster HUD changes
-const PLAYER_LIST_UPDATE_INTERVAL = 100; // 10 Hz - player list doesn't change that fast
 const MINIMAP_UPDATE_INTERVAL = 50; // 20 Hz - minimap needs slightly smoother updates
 const TILE_UPDATE_INTERVAL = 200; // Tile decisions only need to run at 5 Hz
 const TILE_CLEANUP_INTERVAL = 1000;
@@ -277,6 +281,17 @@ function generateLocalId(): string {
 
 // All known players (including self)
 const players = new Map<string, PlaneState>();
+const playerListController = new PlayerListRenderController(updatePlayerList);
+
+function refreshPlayerList(): void {
+  playerListController.update(players, localId);
+}
+
+function removeKnownPlayer(id: string): void {
+  players.delete(id);
+  removeInterpolatedPlayer(id);
+  removePlaneMesh(id);
+}
 
 // Tile meshes tracking
 const tileMeshes = new Map<string, TileMeshes>(); // key -> { buildings: Group, base: Group, transportation: Group }
@@ -698,12 +713,6 @@ function gameLoop(time: number): void {
   if (localId) {
     updatePlaneMesh(planeState, localId, localColor, cappedDelta);
     players.set(localId, planeState);
-
-    // Throttle player list updates (DOM rebuild is expensive)
-    if (time - lastPlayerListUpdateTime >= PLAYER_LIST_UPDATE_INTERVAL) {
-      lastPlayerListUpdateTime = time;
-      updatePlayerList(players, localId);
-    }
   }
 
   // Throttle HUD updates (humans can't perceive 60Hz text changes)
@@ -750,9 +759,10 @@ function handleWelcome(msg: WelcomeMessage): void {
 
   // Remove the temporary local plane mesh before updating ID
   const oldLocalId = localId;
-  if (oldLocalId && oldLocalId !== msg.id) {
-    removePlaneMesh(oldLocalId);
-    players.delete(oldLocalId);
+  const welcomeIds = new Set(Object.keys(msg.planes));
+  for (const id of [...players.keys()]) {
+    const isSupersededLocalId = id === oldLocalId && id !== msg.id;
+    if (isSupersededLocalId || !welcomeIds.has(id)) removeKnownPlayer(id);
   }
 
   localId = msg.id;
@@ -771,21 +781,32 @@ function handleWelcome(msg: WelcomeMessage): void {
       }
     }
   }
+  // Keep local motion authoritative even if the server snapshot has stale spawn coordinates.
+  players.set(localId, getPlaneState());
+  refreshPlayerList();
 }
 
 /**
  * Handle sync message from server
  */
 function handleSync(planes: Record<string, PlaneState>): void {
+  const syncIds = new Set(Object.keys(planes));
+  const staleIds = staleRemotePlayerIds(players.keys(), syncIds, localId);
+  let displayedDataChanged = staleIds.length > 0;
+
+  for (const id of staleIds) removeKnownPlayer(id);
+
   // Update players map and set interpolation targets
   for (const [id, plane] of Object.entries(planes)) {
     if (id !== localId) {
       const normalizedPlane = normalizeGeoState(plane);
+      displayedDataChanged ||= playerListEntryChanged(players.get(id), normalizedPlane);
       players.set(id, normalizedPlane);
       // Set target for interpolation instead of directly updating mesh
       setPlayerTarget(id, normalizedPlane);
     }
   }
+  if (displayedDataChanged) refreshPlayerList();
 }
 
 /**
@@ -794,8 +815,13 @@ function handleSync(planes: Record<string, PlaneState>): void {
 function handlePlayerUpdated(player: PlaneState): void {
   if (player.id === localId) return;
   const normalizedPlane = normalizeGeoState(player);
+  const displayedDataChanged = playerListEntryChanged(
+    players.get(normalizedPlane.id),
+    normalizedPlane
+  );
   players.set(normalizedPlane.id, normalizedPlane);
   setPlayerTarget(normalizedPlane.id, normalizedPlane);
+  if (displayedDataChanged) refreshPlayerList();
 }
 
 /**
@@ -808,17 +834,27 @@ function handlePlayerJoined(player: PlaneState): void {
   // Initialize interpolation for new player
   setPlayerTarget(normalizedPlayer.id, normalizedPlayer);
   updatePlaneMesh(normalizedPlayer, normalizedPlayer.id, normalizedPlayer.color);
+  refreshPlayerList();
 }
 
 /**
  * Handle player left message
  */
 function handlePlayerLeft(id: string): void {
+  if (!isRemotePlayerId(id, localId)) return;
   console.log('Player left:', id);
-  players.delete(id);
-  removeInterpolatedPlayer(id);
-  removePlaneMesh(id);
-  updatePlayerList(players, localId);
+  removeKnownPlayer(id);
+  refreshPlayerList();
+}
+
+/** Drop remote rows immediately while PartySocket establishes a fresh session. */
+function handleDisconnect(): void {
+  for (const id of [...players.keys()]) {
+    if (id === localId) continue;
+    removeKnownPlayer(id);
+  }
+  if (localId) players.set(localId, getPlaneState());
+  refreshPlayerList();
 }
 
 /**
@@ -1062,6 +1098,8 @@ async function init(): Promise<void> {
     localId = generateLocalId();
     localColor = PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)];
     setPlaneIdentity(localId, localColor);
+    players.set(localId, getPlaneState());
+    refreshPlayerList();
 
     // Connect to multiplayer server
     connection = createConnection('global', {
@@ -1070,6 +1108,7 @@ async function init(): Promise<void> {
       onPlayerUpdated: handlePlayerUpdated,
       onPlayerJoined: handlePlayerJoined,
       onPlayerLeft: handlePlayerLeft,
+      onDisconnect: handleDisconnect,
     });
 
     // Start loading gate indicator (non-blocking, just shows visual feedback)

@@ -186,10 +186,13 @@ export function createConnection(roomId: string, callbacks: NetworkCallbacks): C
      * Close the connection
      */
     close: (): void => {
-      if (socket) {
-        socket.close();
-        socket = null;
-        isConnected = false;
+      const wasConnected = isConnected;
+      isConnected = false;
+      const activeSocket = socket;
+      socket = null;
+      activeSocket?.close();
+      if (wasConnected && callbacks.onDisconnect) {
+        callbacks.onDisconnect();
       }
     },
   };
