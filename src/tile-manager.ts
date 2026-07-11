@@ -120,7 +120,7 @@ function cacheBuildingParent(key: string, features: ParsedFeature[]): void {
 }
 
 /** Assign a parent-source feature to exactly one requested child tile. */
-function buildingFeatureBelongsToTile(
+export function buildingFeatureBelongsToTile(
   feature: ParsedFeature,
   tileX: number,
   tileY: number,
@@ -249,7 +249,7 @@ export async function initTileManager(): Promise<InitStatus> {
   };
 }
 
-interface SourceTileCoordinates {
+export interface SourceTileCoordinates {
   x: number;
   y: number;
   z: number;
@@ -259,7 +259,7 @@ interface SourceTileCoordinates {
  * Map a requested tile to the highest-detail tile available in a PMTiles source.
  * A source tile can cover multiple requested tiles when its max zoom is lower.
  */
-function mapTileToSourceZoom(
+export function mapTileToSourceZoom(
   x: number,
   y: number,
   zoom: number,

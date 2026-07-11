@@ -50,6 +50,7 @@ import { initFeatureModal, showFeatureModal } from './feature-modal.js';
 import { setPlayerTarget, updateInterpolation, getInterpolatedState, removeInterpolatedPlayer } from './interpolation.js';
 import * as THREE from 'three';
 import { cancelWorkerTasksForWorldChange } from './workers/index.js';
+import { isCurrentGenerationSlot, ownsGenerationSlot } from './generation-guard.js';
 
 // Tile meshes type
 interface TileMeshes {
@@ -319,11 +320,11 @@ function disposeTileMeshes(meshes: TileMeshes): void {
 }
 
 function ownsLoadingSlot(key: string, token: TileLoadToken): boolean {
-  return loadingTiles.get(key) === token;
+  return ownsGenerationSlot(loadingTiles, key, token);
 }
 
 function isCurrentTileLoad(key: string, token: TileLoadToken): boolean {
-  return token.generation === tileGeneration && ownsLoadingSlot(key, token);
+  return isCurrentGenerationSlot(loadingTiles, key, token, tileGeneration);
 }
 
 async function guardSceneGroup(

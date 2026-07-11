@@ -313,6 +313,27 @@ export function setPlaneAltitude(altitude: number): void {
   planeState.altitude = Math.max(FLIGHT.MIN_ALTITUDE, Math.min(FLIGHT.MAX_ALTITUDE, altitude));
 }
 
+/** Deterministically calculate a terrain-aware crash recovery altitude. */
+export function calculateCrashRecoveryAltitude(
+  terrainHeight: number,
+  minimumAltitude: number = FLIGHT.MIN_ALTITUDE,
+  randomValue: number = Math.random()
+): number {
+  const respawnOffset = CRASH_RECOVERY.MIN_RESPAWN_HEIGHT
+    + randomValue * (CRASH_RECOVERY.MAX_RESPAWN_HEIGHT - CRASH_RECOVERY.MIN_RESPAWN_HEIGHT);
+
+  let newAltitude = Math.max(terrainHeight + respawnOffset, minimumAltitude);
+
+  if (newAltitude > FLIGHT.MAX_ALTITUDE) {
+    newAltitude = Math.max(
+      terrainHeight + CRASH_RECOVERY.MIN_RESPAWN_HEIGHT,
+      FLIGHT.MAX_ALTITUDE
+    );
+  }
+
+  return Math.max(FLIGHT.MIN_ALTITUDE, Math.min(FLIGHT.MAX_ALTITUDE, newAltitude));
+}
+
 /**
  * Reset plane after crash with terrain-aware altitude
  * Spawns 100-200m above terrain, or above a supplied collision obstacle.
@@ -325,20 +346,7 @@ export function resetPlaneWithTerrainAwareness(
   terrainHeight: number,
   minimumAltitude: number = FLIGHT.MIN_ALTITUDE
 ): void {
-  // Randomize respawn height between MIN and MAX for variety
-  const respawnOffset = CRASH_RECOVERY.MIN_RESPAWN_HEIGHT +
-    Math.random() * (CRASH_RECOVERY.MAX_RESPAWN_HEIGHT - CRASH_RECOVERY.MIN_RESPAWN_HEIGHT);
-
-  let newAltitude = Math.max(terrainHeight + respawnOffset, minimumAltitude);
-
-  // Handle edge case: if terrain is so high that respawn would exceed MAX_ALTITUDE,
-  // spawn at MAX_ALTITUDE (autopilot will maintain safe distance above terrain)
-  if (newAltitude > FLIGHT.MAX_ALTITUDE) {
-    // Ensure we're still above terrain even at max altitude
-    newAltitude = Math.max(terrainHeight + CRASH_RECOVERY.MIN_RESPAWN_HEIGHT, FLIGHT.MAX_ALTITUDE);
-  }
-
-  planeState.altitude = Math.max(FLIGHT.MIN_ALTITUDE, Math.min(FLIGHT.MAX_ALTITUDE, newAltitude));
+  planeState.altitude = calculateCrashRecoveryAltitude(terrainHeight, minimumAltitude);
   planeState.pitch = 0;
   planeState.roll = 0;
   planeState.speed = FLIGHT.DEFAULT_SPEED;

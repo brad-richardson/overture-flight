@@ -304,7 +304,9 @@ export interface TextureCacheConfig {
 }
 
 // Check URL parameter first (for debugging)
-const urlParams = new URLSearchParams(window.location.search);
+const urlParams = new URLSearchParams(
+  typeof window === 'undefined' ? '' : window.location.search
+);
 const noCacheParam = urlParams.get('nocache');
 
 // Determine if caching should be enabled:

@@ -229,12 +229,16 @@ function hashSourceIdentity(value: string): string {
 }
 
 /** Namespace rendered caches by the actual runtime data sources. */
-export function getOvertureCacheNamespace(): string {
-  const resolved = getOvertureSources();
+export function createOvertureCacheNamespace(resolved: OvertureSources): string {
   return `sources-${hashSourceIdentity([
     resolved.buildings,
     resolved.base,
     resolved.transportation,
     resolved.divisions,
   ].join('|'))}`;
+}
+
+/** Namespace rendered caches by the actual runtime data sources. */
+export function getOvertureCacheNamespace(): string {
+  return createOvertureCacheNamespace(getOvertureSources());
 }
