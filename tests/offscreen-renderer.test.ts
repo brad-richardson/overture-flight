@@ -71,16 +71,18 @@ describe('offscreen renderer — airport features', () => {
     );
 
     const strokes = ops.filter(o => o.type === 'stroke');
-    const runway = strokes.find(o => o.style === '#8b8e95');
-    const taxiway = strokes.find(o => o.style === '#70737a');
+    const runway = strokes.find(o => o.style === '#c4c8d0'); // light concrete
+    const taxiway = strokes.find(o => o.style === '#74777e'); // mid grey
     expect(runway).toBeDefined();
     expect(taxiway).toBeDefined();
+    // Runways read lighter than taxiways so the landing strips stand out.
+    const luminance = (hex: string) => parseInt(hex.slice(1, 3), 16);
+    expect(luminance(runway!.style)).toBeGreaterThan(luminance(taxiway!.style));
     // Runways are drawn wider than taxiways.
     expect(runway!.lineWidth!).toBeGreaterThan(taxiway!.lineWidth!);
-    // Apron pavement filled with tarmac grey.
-    expect(ops.some(o => o.type === 'fill' && o.style === '#5e6167')).toBe(true);
-    // The power line was never stroked in an airport colour.
-    expect(strokes.some(o => o.style === '#8b8e95' || o.style === '#70737a')).toBe(true);
+    // Apron pavement filled with dark tarmac grey.
+    expect(ops.some(o => o.type === 'fill' && o.style === '#54565c')).toBe(true);
+    // Only the runway and taxiway lines were stroked (power line ignored).
     expect(strokes.length).toBe(2);
   });
 
