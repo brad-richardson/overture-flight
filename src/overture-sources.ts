@@ -218,27 +218,3 @@ export function getOvertureSources(): Readonly<OvertureSources> {
 
   return sources;
 }
-
-function hashSourceIdentity(value: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index++) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(36);
-}
-
-/** Namespace rendered caches by the actual runtime data sources. */
-export function createOvertureCacheNamespace(resolved: OvertureSources): string {
-  return `sources-${hashSourceIdentity([
-    resolved.buildings,
-    resolved.base,
-    resolved.transportation,
-    resolved.divisions,
-  ].join('|'))}`;
-}
-
-/** Namespace rendered caches by the actual runtime data sources. */
-export function getOvertureCacheNamespace(): string {
-  return createOvertureCacheNamespace(getOvertureSources());
-}

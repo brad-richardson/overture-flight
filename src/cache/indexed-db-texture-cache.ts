@@ -31,10 +31,14 @@ let db: IDBDatabase | null = null;
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 
 /**
- * Get versioned cache key
+ * Combine a render namespace with a tile identity. Render-version decisions
+ * belong to the namespace builder; this module only owns IndexedDB storage.
  */
-function getVersionedKey(tileKey: string, sourceNamespace: string): string {
-  return `v${TEXTURE_CACHE.VERSION}:${sourceNamespace}:${tileKey}`;
+export function createPersistentTextureCacheKey(
+  tileKey: string,
+  cacheNamespace: string
+): string {
+  return `${cacheNamespace}:${tileKey}`;
 }
 
 /**
@@ -55,7 +59,10 @@ async function initDB(): Promise<IDBDatabase | null> {
 
   dbPromise = new Promise((resolve) => {
     try {
-      const request = indexedDB.open(TEXTURE_CACHE.DB_NAME, 1);
+      const request = indexedDB.open(
+        TEXTURE_CACHE.DB_NAME,
+        TEXTURE_CACHE.DB_SCHEMA_VERSION
+      );
 
       request.onerror = () => {
         console.warn('[TextureCache] Failed to open IndexedDB:', request.error);
@@ -94,14 +101,14 @@ async function initDB(): Promise<IDBDatabase | null> {
  */
 export async function getCachedTexture(
   tileKey: string,
-  sourceNamespace: string
+  cacheNamespace: string
 ): Promise<{ blob: Blob; bounds: CachedTexture['bounds'] } | null> {
   const database = await initDB();
   if (!database) {
     return null;
   }
 
-  const key = getVersionedKey(tileKey, sourceNamespace);
+  const key = createPersistentTextureCacheKey(tileKey, cacheNamespace);
 
   return new Promise((resolve) => {
     try {
@@ -192,14 +199,14 @@ export async function cacheTexture(
   tileKey: string,
   blob: Blob,
   bounds: CachedTexture['bounds'],
-  sourceNamespace: string
+  cacheNamespace: string
 ): Promise<void> {
   const database = await initDB();
   if (!database) {
     return;
   }
 
-  const key = getVersionedKey(tileKey, sourceNamespace);
+  const key = createPersistentTextureCacheKey(tileKey, cacheNamespace);
   const entry: CachedTexture = {
     key,
     blob,

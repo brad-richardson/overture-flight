@@ -1,5 +1,3 @@
-import { BUILD_HASH } from './build-info.js';
-
 export const IS_MOBILE = typeof navigator !== 'undefined' &&
   /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
@@ -282,9 +280,9 @@ export const PROFILING: ProfilingConfig = {
 export interface TextureCacheConfig {
   ENABLED: boolean;
   DB_NAME: string;
+  DB_SCHEMA_VERSION: number;
   STORE_NAME: string;
   MAX_ENTRIES: number;
-  VERSION: string;
   TTL_MS: number;
 }
 
@@ -309,8 +307,9 @@ const textureCacheEnabled = noCacheParam === '1'
 export const TEXTURE_CACHE: TextureCacheConfig = {
   ENABLED: textureCacheEnabled,
   DB_NAME: 'overture-flight-textures',
+  // IndexedDB object-store schema only; rendered-pixel identity is versioned separately.
+  DB_SCHEMA_VERSION: 1,
   STORE_NAME: 'textures',
   MAX_ENTRIES: IS_MOBILE ? 80 : 240,
-  VERSION: BUILD_HASH,
   TTL_MS: 7 * 24 * 60 * 60 * 1000,
 };
