@@ -23,7 +23,7 @@ import {
   suppressBuildingCollisionsUntilClear,
 } from './collision.js';
 import { updateHUD, updatePlayerList, showCrashMessage, setTeleportToPlayerCallback, updateAutopilotIndicator } from './ui.js';
-import { initMinimap, updateMinimap } from './minimap.js';
+import { initLazyMinimap, updateLazyMinimap } from './minimap-loader.js';
 import { initTileManager, getTilesToLoad, getTilesToUnload, clearDistantWaterPolygonCache } from './tile-manager.js';
 import { createBuildingsForTile, invalidateBuildingLoads, removeBuildingsGroup } from './buildings.js';
 import { createBaseLayerForTile, removeBaseLayerGroup } from './base-layer.js';
@@ -714,7 +714,7 @@ function gameLoop(time: number): void {
   // Throttle minimap updates
   if (time - lastMinimapUpdateTime >= MINIMAP_UPDATE_INTERVAL) {
     lastMinimapUpdateTime = time;
-    updateMinimap(planeState);
+    updateLazyMinimap(planeState);
   }
 
   // Update URL hash with current tile location
@@ -1035,7 +1035,7 @@ async function init(): Promise<void> {
     initMobileControls();
 
     // Initialize minimap
-    initMinimap(handleTeleport);
+    initLazyMinimap(handleTeleport);
 
     // Set up teleport-to-player callback for the player list UI
     setTeleportToPlayerCallback(handleTeleport);
