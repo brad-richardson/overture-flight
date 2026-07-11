@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { shortestLongitudeDelta } from '../geo.js';
 import type { CachedTexture, TileBounds } from './types.js';
 import { disposeTexture, isDeferredDisposalEnabled } from '../renderer/texture-disposal.js';
 
@@ -158,7 +159,7 @@ export class TileTextureCache {
       const centerLng = (cached.bounds.west + cached.bounds.east) / 2;
       const centerLat = (cached.bounds.north + cached.bounds.south) / 2;
 
-      const dlng = Math.abs(centerLng - lng);
+      const dlng = Math.abs(shortestLongitudeDelta(lng, centerLng));
       const dlat = Math.abs(centerLat - lat);
       const distance = Math.sqrt(dlng * dlng + dlat * dlat);
 

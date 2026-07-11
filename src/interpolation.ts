@@ -1,5 +1,11 @@
 import { NETWORK } from './constants.js';
 import type { PlaneState } from './plane.js';
+import {
+  clampMercatorLatitude,
+  normalizeGeoState,
+  normalizeLongitude,
+  shortestLongitudeDelta,
+} from './geo.js';
 
 /**
  * Interpolated player state with target tracking
@@ -42,20 +48,26 @@ function lerp(current: number, target: number, t: number): number {
   return current + (target - current) * t;
 }
 
+/** Interpolate longitude across the shortest side of the globe. */
+export function lerpLongitude(current: number, target: number, t: number): number {
+  return normalizeLongitude(current + shortestLongitudeDelta(current, target) * t);
+}
+
 /**
  * Set target state for a remote player
  */
 export function setPlayerTarget(id: string, target: PlaneState): void {
   const existing = interpolatedPlayers.get(id);
+  const normalizedTarget = normalizeGeoState(target);
 
   if (existing) {
     // Update target, keep current position for smooth interpolation
-    existing.target = { ...target };
+    existing.target = normalizedTarget;
   } else {
     // New player, start at target position
     interpolatedPlayers.set(id, {
-      current: { ...target },
-      target: { ...target },
+      current: { ...normalizedTarget },
+      target: normalizedTarget,
     });
   }
 }
@@ -76,8 +88,8 @@ export function updateInterpolation(deltaTime: number): void {
 
   for (const [, player] of interpolatedPlayers) {
     // Interpolate position
-    player.current.lat = lerp(player.current.lat, player.target.lat, t);
-    player.current.lng = lerp(player.current.lng, player.target.lng, t);
+    player.current.lat = clampMercatorLatitude(lerp(player.current.lat, player.target.lat, t));
+    player.current.lng = lerpLongitude(player.current.lng, player.target.lng, t);
     player.current.altitude = lerp(player.current.altitude, player.target.altitude, t);
 
     // Interpolate rotation (using angle lerp for heading)

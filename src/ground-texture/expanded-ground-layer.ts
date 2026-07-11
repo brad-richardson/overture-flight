@@ -14,6 +14,7 @@ import {
   TileLifecycleCoordinator,
   type TileLifecycleToken,
 } from '../tile-lifecycle-coordinator.js';
+import { getWrappedTileRing, wrappedTileChebyshevDistance } from '../tile-coordinates.js';
 
 // Tile info type
 interface TileInfo {
@@ -397,26 +398,19 @@ export function getExpandedTilesToLoad(lng: number, lat: number, coreTileKeys: S
   const expandedRadius = EXPANDED_TERRAIN.TILE_RADIUS;
   const coreRadius = EXPANDED_TERRAIN.CORE_RADIUS;
 
-  for (let dy = -expandedRadius; dy <= expandedRadius; dy++) {
-    for (let dx = -expandedRadius; dx <= expandedRadius; dx++) {
-      const x = centerX + dx;
-      const y = centerY + dy;
+  for (const { x, y } of getWrappedTileRing(
+    centerX,
+    centerY,
+    z,
+    expandedRadius,
+    coreRadius
+  )) {
+    // Also skip if already a core tile (in case core area is larger)
+    const coreKey = `${z}/${x}/${y}`;
+    if (coreTileKeys.has(coreKey)) continue;
 
-      // Skip invalid tile coordinates
-      const maxTile = Math.pow(2, z);
-      if (x < 0 || x >= maxTile || y < 0 || y >= maxTile) continue;
-
-      // Skip tiles within core area (they get full processing with buildings)
-      const chebyshevDist = Math.max(Math.abs(dx), Math.abs(dy));
-      if (chebyshevDist <= coreRadius) continue;
-
-      // Also skip if already a core tile (in case core area is larger)
-      const coreKey = `${z}/${x}/${y}`;
-      if (coreTileKeys.has(coreKey)) continue;
-
-      const expandedKey = `expanded-${z}/${x}/${y}`;
-      tiles.push({ x, y, z, key: expandedKey });
-    }
+    const expandedKey = `expanded-${z}/${x}/${y}`;
+    tiles.push({ x, y, z, key: expandedKey });
   }
 
   return tiles;
@@ -433,9 +427,11 @@ export function getExpandedTilesToUnload(lng: number, lat: number): string[] {
   const tilesToUnload: string[] = [];
 
   for (const [key, tileData] of activeExpandedTiles) {
-    const dx = Math.abs(tileData.x - centerX);
-    const dy = Math.abs(tileData.y - centerY);
-    const chebyshevDist = Math.max(dx, dy);
+    const chebyshevDist = wrappedTileChebyshevDistance(
+      tileData,
+      { x: centerX, y: centerY },
+      z
+    );
 
     if (chebyshevDist > maxDistance) {
       tilesToUnload.push(key);
@@ -458,9 +454,11 @@ export function pruneExpandedQueue(lng: number, lat: number): number {
   const originalLength = expandedTileQueue.length;
   for (let i = expandedTileQueue.length - 1; i >= 0; i--) {
     const tile = expandedTileQueue[i];
-    const dx = Math.abs(tile.x - centerX);
-    const dy = Math.abs(tile.y - centerY);
-    const chebyshevDist = Math.max(dx, dy);
+    const chebyshevDist = wrappedTileChebyshevDistance(
+      tile,
+      { x: centerX, y: centerY },
+      z
+    );
 
     if (chebyshevDist > maxDistance) {
       expandedTileQueue.splice(i, 1);

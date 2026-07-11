@@ -12,6 +12,7 @@ import type {
   LineGeometryBufferGroup,
   BaseGeometryResult,
 } from './types.js';
+import { clampMercatorLatitude, shortestLongitudeDelta } from '../geo.js';
 
 // Colors for different feature types (must match base-layer.ts)
 const COLORS: Record<string, number> = {
@@ -108,8 +109,8 @@ function geoToWorld(
   altitude: number,
   origin: SceneOrigin
 ): { x: number; y: number; z: number } {
-  const x = (lng - origin.lng) * origin.metersPerDegLng;
-  const z = -(lat - origin.lat) * origin.metersPerDegLat;
+  const x = shortestLongitudeDelta(origin.lng, lng) * origin.metersPerDegLng;
+  const z = -(clampMercatorLatitude(lat) - origin.lat) * origin.metersPerDegLat;
   const y = altitude;
   return { x, y, z };
 }

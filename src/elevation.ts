@@ -9,6 +9,10 @@
 import { lngLatToTile, tileToBounds, TileBounds } from './tile-manager.js';
 import { ELEVATION, WORKERS } from './constants.js';
 import { ElevationWorkerPool } from './workers/index.js';
+import {
+  getWrappedTileNeighborhood,
+  wrappedTileChebyshevDistance,
+} from './tile-coordinates.js';
 
 // Types
 interface ElevationCacheEntry {
@@ -461,12 +465,8 @@ export async function preloadElevationTiles(
   const [centerX, centerY] = lngLatToTile(lng, lat, z);
 
   const promises: Promise<Float32Array>[] = [];
-  for (let dx = -radius; dx <= radius; dx++) {
-    for (let dy = -radius; dy <= radius; dy++) {
-      const x = centerX + dx;
-      const y = centerY + dy;
-      promises.push(loadElevationTile(x, y, z));
-    }
+  for (const { x, y } of getWrappedTileNeighborhood(centerX, centerY, z, radius)) {
+    promises.push(loadElevationTile(x, y, z));
   }
 
   await Promise.all(promises);
@@ -526,7 +526,11 @@ export function unloadDistantElevationTiles(
     const [tz, tx, ty] = key.split('/').map(Number);
     if (tz !== z) continue;
 
-    const distance = Math.max(Math.abs(tx - centerX), Math.abs(ty - centerY));
+    const distance = wrappedTileChebyshevDistance(
+      { x: tx, y: ty },
+      { x: centerX, y: centerY },
+      z
+    );
     if (distance > maxDistance) {
       elevationCache.delete(key);
       tilesRemoved = true;
