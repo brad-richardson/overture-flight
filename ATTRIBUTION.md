@@ -122,10 +122,9 @@ This project uses the following open-source libraries:
 
 | Library | License | Purpose |
 |---------|---------|---------|
-| [Three.js](https://threejs.org/) | MIT | 3D rendering engine |
+| [Three.js](https://threejs.org/) | MIT | 3D rendering and GLTF model loading via GLTFLoader |
 | [MapLibre GL JS](https://maplibre.org/) | BSD 3-Clause | Minimap rendering |
 | [PMTiles](https://protomaps.com/docs/pmtiles) | BSD 3-Clause | Cloud-optimized tile format |
-| [loaders.gl](https://loaders.gl/) | MIT | GLTF model loading |
 | [earcut](https://github.com/mapbox/earcut) | ISC | Polygon triangulation |
 | [Mapbox Vector Tile](https://github.com/mapbox/vector-tile-js) | BSD 3-Clause | Vector tile parsing |
 | [pbf](https://github.com/mapbox/pbf) | BSD 3-Clause | Protocol buffer parsing |
@@ -133,7 +132,7 @@ This project uses the following open-source libraries:
 
 ## Geocoding
 
-Location search functionality uses the [Overture Geocoder](https://www.npmjs.com/package/@bradrichardson/overture-geocoder), which is based on Overture Maps address data.
+Location search sends requests directly to the [Overture Geocoder HTTP service](https://geocoder.bradr.dev), which returns results based on Overture Maps data.
 
 ## License Summary
 
@@ -154,6 +153,6 @@ The minimap in this application displays the following attribution:
 
 ---
 
-*This attribution document was last updated: January 2026*
+*This attribution document was last updated: July 2026*
 
 *For questions about attribution or licensing, please open an issue on the project repository.*

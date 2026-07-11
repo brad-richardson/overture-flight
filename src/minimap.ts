@@ -1,20 +1,16 @@
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
-import { OvertureGeocoder } from '@bradrichardson/overture-geocoder';
 import { LOCATIONS } from './constants.js';
+import {
+  GeocoderHttpError,
+  GeocoderNetworkError,
+  GeocoderResponseError,
+  GeocoderTimeoutError,
+  searchGeocoder,
+} from './geocoder.js';
 import { getOvertureSources } from './overture-sources.js';
 import type { PlaneState } from './plane.js';
 import { setFeaturePickerEnabled, isFeaturePickerEnabled } from './feature-picker.js';
-
-// Initialize the Overture Geocoder client
-const geocoder = new OvertureGeocoder();
-
-// Clean up geocoder resources on page unload
-if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', () => {
-    geocoder.close();
-  });
-}
 
 // PMTiles protocol instance - stored at module level for proper lifecycle management
 let pmtilesProtocol: Protocol | null = null;
@@ -169,9 +165,7 @@ function updateCoordsDisplay(lng: number, lat: number): void {
 }
 
 /**
- * Performs geocoding search using the Overture Geocoder.
- *
- * Uses the Overture Maps data via the overture-geocoder client library.
+ * Performs a search using the Overture geocoder HTTP endpoint.
  *
  * @param query - The location search query string
  * @throws Displays user-friendly error messages for various failure modes
@@ -180,7 +174,7 @@ async function searchLocation(query: string): Promise<void> {
   if (!query.trim() || !map) return;
 
   try {
-    const results = await geocoder.search(query, { limit: 1 });
+    const results = await searchGeocoder(query, { limit: 1 });
 
     if (results.length > 0) {
       const { lat, lon } = results[0];
@@ -206,8 +200,14 @@ async function searchLocation(query: string): Promise<void> {
     }
   } catch (e) {
     console.error('Geocoding failed:', e);
-    if (e instanceof TypeError && e.message.includes('fetch')) {
+    if (e instanceof GeocoderTimeoutError) {
+      alert('Search timed out. Please try again.');
+    } else if (e instanceof GeocoderNetworkError) {
       alert('Network error. Please check your internet connection.');
+    } else if (e instanceof GeocoderHttpError) {
+      alert('Search service is unavailable. Please try again later.');
+    } else if (e instanceof GeocoderResponseError) {
+      alert('Search service returned an invalid response. Please try again later.');
     } else {
       alert('Search failed. Please try again later.');
     }
