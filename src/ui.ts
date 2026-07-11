@@ -1,5 +1,9 @@
 import { getGroundHeight } from './collision.js';
 import type { PlaneState } from './plane.js';
+import {
+  getCurrentPlayerPosition,
+  getPlayerListDisplayName,
+} from './player-list-controller.js';
 
 let crashMessageTimeout: ReturnType<typeof setTimeout> | null = null;
 let connectionStatus: 'connected' | 'disconnected' | 'connecting' = 'connecting';
@@ -105,8 +109,7 @@ export function updatePlayerList(players: Map<string, PlaneState>, localId: stri
   for (const [id, player] of players) {
     const li = document.createElement('li');
     const isLocal = id === localId;
-    const shortId = id.slice(-4);
-    const displayName = player.name || (isLocal ? `You (${shortId})` : `Player ${shortId}`);
+    const displayName = getPlayerListDisplayName(id, player.name, isLocal);
 
     // Create color dot
     const colorDot = document.createElement('span');
@@ -122,8 +125,9 @@ export function updatePlayerList(players: Map<string, PlaneState>, localId: stri
       li.className = 'clickable-player';
       li.title = `Click to teleport to ${displayName}`;
       li.addEventListener('click', () => {
-        if (teleportToPlayerCallback) {
-          teleportToPlayerCallback(player.lat, player.lng);
+        const currentPosition = getCurrentPlayerPosition(players, id);
+        if (teleportToPlayerCallback && currentPosition) {
+          teleportToPlayerCallback(currentPosition.lat, currentPosition.lng);
         }
       });
     }
@@ -204,4 +208,3 @@ export function updateAutopilotIndicator(isActive: boolean): void {
     autopilotIndicator.style.display = isActive ? 'block' : 'none';
   }
 }
-
