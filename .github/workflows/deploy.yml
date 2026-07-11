@@ -3,8 +3,9 @@ name: Deploy
 on:
   push:
     branches: [main]
+  # Closed previews are intentionally retained so cleanup cannot race a main deploy.
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
