@@ -132,6 +132,40 @@ const ROAD_PRIORITY: Record<string, number> = {
 };
 
 /**
+ * Airport pavement fill color (aprons, helipads) — tarmac grey.
+ */
+const AIRPORT_PAVEMENT_COLOR = 0x5e6167;
+
+/**
+ * Airport line styles by Overture infrastructure class. Widths are real-world
+ * meters and scale with the tile's meters-per-pixel like roads.
+ */
+interface AirportLineStyle {
+  color: number;
+  widthMeters: number;
+}
+const AIRPORT_LINE_STYLES: Record<string, AirportLineStyle> = {
+  runway: { color: 0x8b8e95, widthMeters: 45 },
+  stopway: { color: 0x787b82, widthMeters: 38 },
+  taxiway: { color: 0x70737a, widthMeters: 22 },
+  taxilane: { color: 0x656872, widthMeters: 14 },
+};
+
+/** Draw order for airport lines: prominent runways paint last (on top). */
+const AIRPORT_LINE_DRAW_ORDER = ['stopway', 'taxilane', 'taxiway', 'runway'] as const;
+
+/** Airport polygon classes rendered as pavement fill. */
+const AIRPORT_PAVEMENT_CLASSES = new Set(['apron', 'helipad']);
+
+/**
+ * Get the line style for an airport feature class, or null if it is not a
+ * rendered airport line.
+ */
+export function getAirportLineStyle(featureClass: string): AirportLineStyle | null {
+  return AIRPORT_LINE_STYLES[featureClass] ?? null;
+}
+
+/**
  * Convert hex color to CSS string
  */
 function hexToCSS(hex: number): string {
@@ -200,15 +234,23 @@ function getColorForFeature(layer: string, properties: Record<string, unknown>):
   }
 
   if (layer === 'land_use') {
-    if (type.includes('forest') || type.includes('wood')) return COLORS.forest;
-    if (type.includes('park') || type.includes('recreation')) return COLORS.park;
-    if (type.includes('grass') || type.includes('green') || type.includes('meadow')) return COLORS.grass;
-    if (type.includes('farm') || type.includes('orchard') || type.includes('vineyard')) return COLORS.crop;
-    if (type.includes('water') || type.includes('basin')) return COLORS.water;
-    if (type.includes('residential')) return COLORS.residential;
-    if (type.includes('commercial') || type.includes('retail')) return COLORS.commercial;
-    if (type.includes('industrial')) return COLORS.industrial;
-    if (type.includes('cemetery') || type.includes('grave')) return COLORS.grass;
+    // Overture land_use carries meaning across both subtype and class
+    // (e.g. managed/grass, golf/fairway, recreation/pitch, developed/industrial),
+    // so match against the combined pair rather than subtype alone.
+    const landUseClass = ((properties.class as string) || '').toLowerCase();
+    const tag = `${type}|${landUseClass}`;
+    if (tag.includes('forest') || tag.includes('wood')) return COLORS.forest;
+    if (tag.includes('park') || tag.includes('recreation') || tag.includes('golf')
+      || tag.includes('pitch') || tag.includes('playground')) return COLORS.park;
+    if (tag.includes('grass') || tag.includes('green') || tag.includes('meadow')
+      || tag.includes('managed') || tag.includes('greenfield')) return COLORS.grass;
+    if (tag.includes('farm') || tag.includes('orchard') || tag.includes('vineyard')
+      || tag.includes('crop')) return COLORS.crop;
+    if (tag.includes('water') || tag.includes('basin')) return COLORS.water;
+    if (tag.includes('residential')) return COLORS.residential;
+    if (tag.includes('commercial') || tag.includes('retail')) return COLORS.commercial;
+    if (tag.includes('industrial')) return COLORS.industrial;
+    if (tag.includes('cemetery') || tag.includes('grave')) return COLORS.grass;
     return COLORS.land;
   }
 
@@ -370,12 +412,17 @@ export function renderTileTextureToCanvas(
   const waterLineFeatures: ParsedFeature[] = [];
   const waterBodyFeatures: ParsedFeature[] = [];
   const oceanFeatures: ParsedFeature[] = [];
+  const airportFeatures: ParsedFeature[] = [];
 
   for (const feature of baseFeatures) {
     const layer = feature.layer;
     const subtype = ((feature.properties.subtype || feature.properties.class || '') as string).toLowerCase();
 
-    if (layer === 'land') {
+    if (layer === 'infrastructure') {
+      if (feature.properties.subtype === 'airport') {
+        airportFeatures.push(feature);
+      }
+    } else if (layer === 'land') {
       if (feature.type === 'Polygon' || feature.type === 'MultiPolygon') {
         landFeatures.push(feature);
       }
@@ -485,6 +532,37 @@ export function renderTileTextureToCanvas(
     ctx.fill('evenodd');
   }
   ctx.restore();
+
+  // === Layer 5b: Airport pavement + landing strips ===
+  if (airportFeatures.length > 0) {
+    // Pavement polygons (aprons, helipads) sit beneath the strips.
+    ctx.save();
+    ctx.fillStyle = hexToCSS(AIRPORT_PAVEMENT_COLOR);
+    for (const feature of airportFeatures) {
+      if (feature.type !== 'Polygon' && feature.type !== 'MultiPolygon') continue;
+      const featureClass = (feature.properties.class as string) ?? '';
+      if (!AIRPORT_PAVEMENT_CLASSES.has(featureClass)) continue;
+      drawPolygon(ctx, feature.coordinates as number[][][] | number[][][][], feature.type, geoToCanvas);
+      ctx.fill('evenodd');
+    }
+    ctx.restore();
+
+    // Runways/taxiways/taxilanes/stopways as scaled strokes; runways paint last.
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const featureClass of AIRPORT_LINE_DRAW_ORDER) {
+      const style = AIRPORT_LINE_STYLES[featureClass];
+      ctx.strokeStyle = hexToCSS(style.color);
+      ctx.lineWidth = Math.max(2, style.widthMeters / metersPerPixel);
+      for (const feature of airportFeatures) {
+        if (feature.type !== 'LineString' && feature.type !== 'MultiLineString') continue;
+        if (((feature.properties.class as string) ?? '') !== featureClass) continue;
+        drawLineString(ctx, feature.coordinates as number[][] | number[][][], feature.type, geoToCanvas);
+      }
+    }
+    ctx.restore();
+  }
 
   // === Layer 6: Roads ===
   const roadFeatures = transportFeatures

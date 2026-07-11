@@ -15,16 +15,33 @@ import Pbf from 'pbf';
 import type { WorkerResponse, TileBounds, ParsedFeature } from './types.js';
 import { renderTileTextureToCanvas } from './offscreen-renderer.js';
 import { getWrappedTileNeighborhood } from '../tile-coordinates.js';
-import { parseVectorTileLayers } from './mvt-layer-parser.js';
+import { parseVectorTileLayers, type FeaturePredicate } from './mvt-layer-parser.js';
 import {
   copyFeatureWithProperties,
   ParsedSourceTileCache,
   type ParsedSourceKind,
 } from './parsed-source-tile.js';
 
-const BASE_LAYER_NAMES = ['land', 'land_use', 'land_cover', 'water'] as const;
+// `infrastructure` is decoded for airport pavement (runways/taxiways/aprons),
+// but it also carries high-volume features we never draw (power poles, fences,
+// crossings, benches). keepBaseFeature filters it to airport features before
+// geometry decode so most tiles pay almost nothing for the extra layer.
+const BASE_LAYER_NAMES = ['land', 'land_use', 'land_cover', 'water', 'infrastructure'] as const;
 const WATER_LAYER_NAMES = ['water'] as const;
 const TRANSPORTATION_LAYER_NAMES = ['segment'] as const;
+
+// Airport classes we render into the ground texture (lines + pavement polygons).
+const AIRPORT_RENDER_CLASSES = new Set([
+  'runway', 'taxiway', 'taxilane', 'stopway', 'apron', 'helipad',
+]);
+
+/** Keep every base-layer feature except non-airport `infrastructure`. */
+const keepBaseFeature: FeaturePredicate = (layerName, properties) => {
+  if (layerName !== 'infrastructure') return true;
+  return properties.subtype === 'airport'
+    && typeof properties.class === 'string'
+    && AIRPORT_RENDER_CLASSES.has(properties.class);
+};
 const PARSED_SOURCE_TILE_CACHE_SIZE = 64;
 
 // Each worker owns a small cache. Fulfilled empty arrays also provide bounded
@@ -201,7 +218,8 @@ function parseMVT(
   tileX: number,
   tileY: number,
   zoom: number,
-  requestedLayerNames: readonly string[] | null
+  requestedLayerNames: readonly string[] | null,
+  keepFeature?: FeaturePredicate
 ): ParsedFeature[] {
   const tile = new VectorTile(new Pbf(data));
   return parseVectorTileLayers(
@@ -209,7 +227,8 @@ function parseMVT(
     tileX,
     tileY,
     zoom,
-    requestedLayerNames
+    requestedLayerNames,
+    keepFeature
   );
 }
 
@@ -231,8 +250,12 @@ async function loadParsedSourceTile(
   sourceKind: ParsedSourceKind,
   sourceIdentity: string,
   tile: SourceTileCoordinates,
-  selectedLayers: readonly string[] | null
+  selectedLayers: readonly string[] | null,
+  keepFeature?: FeaturePredicate
 ): Promise<ParsedFeature[]> {
+  // The cache key is (sourceKind, tile, selectedLayers); keepFeature is not part
+  // of it, so a given sourceKind must always pass the same predicate. `base`
+  // always uses keepBaseFeature; other kinds pass none.
   return parsedSourceTiles.load(
     {
       sourceKind,
@@ -241,7 +264,7 @@ async function loadParsedSourceTile(
       selectedLayers,
     },
     () => fetchTileData(pmtiles, tile.z, tile.x, tile.y),
-    data => parseMVT(data, tile.x, tile.y, tile.z, selectedLayers),
+    data => parseMVT(data, tile.x, tile.y, tile.z, selectedLayers, keepFeature),
     error => {
       console.warn(
         `[FullPipelineWorker] Failed to load ${sourceKind} tile ${tile.z}/${tile.x}/${tile.y}:`,
@@ -362,7 +385,8 @@ async function loadBaseFeatures(
         'base',
         sourceIdentity,
         tile,
-        BASE_LAYER_NAMES
+        BASE_LAYER_NAMES,
+        keepBaseFeature
       )
     );
   };
