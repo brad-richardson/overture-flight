@@ -43,6 +43,12 @@ jobs:
           VITE_BASE_PATH: /overture-flight/
           VITE_PARTYKIT_HOST: flight-sim.brad-richardson.partykit.dev
 
+      - name: Verify production entry asset
+        run: |
+          entry_asset=$(grep -o 'assets/index-[^" ]*\.js' dist/index.html | head -1)
+          test -n "$entry_asset"
+          test -f "dist/$entry_asset"
+
       - name: Deploy to GitHub Pages with retry
         run: |
           set -e
@@ -67,7 +73,14 @@ jobs:
           fi
 
           echo "Syncing dist to gh-pages root (preserving pr-preview)..."
-          rsync -av --delete --exclude='.git' --exclude='pr-preview' /tmp/dist/ ./
+          # Build and checkout can stamp same-size HTML within the same second.
+          # Checksums prevent rsync's quick check from retaining a stale
+          # index.html while replacing its hashed assets.
+          rsync -avc --delete --exclude='.git' --exclude='pr-preview' /tmp/dist/ ./
+
+          entry_asset=$(grep -o 'assets/index-[^" ]*\.js' index.html | head -1)
+          test -n "$entry_asset"
+          test -f "$entry_asset"
 
           git add -A
 
@@ -93,7 +106,10 @@ jobs:
               echo "Rebase conflict, resetting and re-applying dist..."
               git rebase --abort || true
               git reset --hard origin/gh-pages
-              rsync -av --delete --exclude='.git' --exclude='pr-preview' /tmp/dist/ ./
+              rsync -avc --delete --exclude='.git' --exclude='pr-preview' /tmp/dist/ ./
+              entry_asset=$(grep -o 'assets/index-[^" ]*\.js' index.html | head -1)
+              test -n "$entry_asset"
+              test -f "$entry_asset"
               git add -A
               if git diff --cached --quiet; then
                 echo "No changes after rebase, already deployed"
