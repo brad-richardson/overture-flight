@@ -38,6 +38,12 @@ export interface TerrainShaderConfig {
   };
 }
 
+type MaterialCompileCallback = THREE.Material['onBeforeCompile'];
+const preTerrainCompileCallbacks = new WeakMap<
+  THREE.MeshStandardMaterial,
+  MaterialCompileCallback
+>();
+
 /**
  * GLSL code for vertex displacement
  * Samples elevation texture and displaces vertex position
@@ -114,14 +120,15 @@ export function applyTerrainShader(
   material: THREE.MeshStandardMaterial,
   config: TerrainShaderConfig
 ): void {
-  // Store original onBeforeCompile if any
-  const originalOnBeforeCompile = material.onBeforeCompile;
+  // Remember the true pre-terrain callback once. Reapplying must replace the
+  // terrain wrapper rather than wrapping it and injecting the shader twice.
+  if (!preTerrainCompileCallbacks.has(material)) {
+    preTerrainCompileCallbacks.set(material, material.onBeforeCompile);
+  }
+  const originalOnBeforeCompile = preTerrainCompileCallbacks.get(material)!;
 
-  material.onBeforeCompile = (shader) => {
-    // Call original if exists
-    if (originalOnBeforeCompile) {
-      originalOnBeforeCompile(shader, undefined as unknown as THREE.WebGLRenderer);
-    }
+  material.onBeforeCompile = (shader, renderer) => {
+    originalOnBeforeCompile.call(material, shader, renderer);
 
     // Add uniforms
     shader.uniforms.uElevationMap = { value: config.elevationTexture };
@@ -156,6 +163,16 @@ ${vertexDisplacementMain}`
   };
 
   // Force shader recompilation
+  material.needsUpdate = true;
+}
+
+/** Restore the callback from before terrain injection and drop texture closures. */
+export function removeTerrainShader(material: THREE.MeshStandardMaterial): void {
+  const originalOnBeforeCompile = preTerrainCompileCallbacks.get(material);
+  if (!originalOnBeforeCompile) return;
+
+  material.onBeforeCompile = originalOnBeforeCompile;
+  preTerrainCompileCallbacks.delete(material);
   material.needsUpdate = true;
 }
 

@@ -2,9 +2,17 @@ import * as THREE from 'three';
 import type { TileBounds } from './types.js';
 import { geoToWorld } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
-import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
+import {
+  applyTerrainShader,
+  createElevationDataTexture,
+  removeTerrainShader,
+} from './terrain-shader.js';
 import { disposeTexture } from '../renderer/texture-disposal.js';
 import { getElevationRange } from './terrain-derived-data.js';
+import {
+  acquireSharedElevationTexture,
+  type ElevationTextureLease,
+} from './shared-elevation-texture-cache.js';
 
 // Type for material - can be standard or node-based
 type TerrainMaterialType = 'standard' | 'node';
@@ -30,7 +38,7 @@ export class TerrainQuad {
   private overlap: number;
   private originalWidth: number;
   private originalHeight: number;
-  private elevationTexture: THREE.DataTexture | null = null;
+  private elevationTextureLease: ElevationTextureLease | null = null;
   private colorTexture: THREE.Texture | null = null;
   private materialType: TerrainMaterialType = 'standard';
   private setColorTextureCallback: ((texture: THREE.Texture | null) => void) | null = null;
@@ -254,34 +262,56 @@ export class TerrainQuad {
     elevationBounds: TileBounds,
     verticalExaggeration: number = ELEVATION.VERTICAL_EXAGGERATION
   ): void {
-    // Create elevation texture from height data
-    this.elevationTexture = createElevationDataTexture(heights, textureSize);
+    if (this.disposed) {
+      throw new Error('Cannot apply elevation to a disposed TerrainQuad');
+    }
 
-    // Calculate elevation tile's world position and dimensions
-    // The elevation tile (Z12) covers a larger area than the ground tile (Z14)
-    const elevNW = geoToWorld(elevationBounds.west, elevationBounds.north, 0);
-    const elevSE = geoToWorld(elevationBounds.east, elevationBounds.south, 0);
-    const elevCenterX = (elevNW.x + elevSE.x) / 2;
-    const elevCenterZ = (elevNW.z + elevSE.z) / 2;
-    const elevWidth = Math.abs(elevSE.x - elevNW.x);
-    const elevHeight = Math.abs(elevSE.z - elevNW.z);
+    const elevationTextureLease = acquireSharedElevationTexture(
+      heights,
+      textureSize,
+      'webgl-float32',
+      () => createElevationDataTexture(heights, textureSize)
+    );
+    const elevationTexture = elevationTextureLease.resource;
+    let leaseTransferred = false;
 
-    // Apply terrain shader to material (WebGL path uses onBeforeCompile)
-    applyTerrainShader(this.material as THREE.MeshStandardMaterial, {
-      elevationTexture: this.elevationTexture,
-      verticalExaggeration,
-      bounds: elevationBounds,
-      tileCenter: new THREE.Vector3(elevCenterX, 0, elevCenterZ),
-      tileDimensions: {
-        width: elevWidth,
-        height: elevHeight,
-      },
-    });
+    try {
+      // Calculate elevation tile's world position and dimensions
+      // The elevation tile (Z12) covers a larger area than the ground tile (Z14)
+      const elevNW = geoToWorld(elevationBounds.west, elevationBounds.north, 0);
+      const elevSE = geoToWorld(elevationBounds.east, elevationBounds.south, 0);
+      const elevCenterX = (elevNW.x + elevSE.x) / 2;
+      const elevCenterZ = (elevNW.z + elevSE.z) / 2;
+      const elevWidth = Math.abs(elevSE.x - elevNW.x);
+      const elevHeight = Math.abs(elevSE.z - elevNW.z);
 
-    // Expand bounding sphere to account for GPU displacement
-    // Without this, Three.js frustum culling uses the flat plane bounds
-    // and incorrectly culls tiles when camera is close or turning
-    this.expandBoundingSphere(heights, verticalExaggeration);
+      // Apply terrain shader to material (WebGL path uses onBeforeCompile)
+      applyTerrainShader(this.material as THREE.MeshStandardMaterial, {
+        elevationTexture,
+        verticalExaggeration,
+        bounds: elevationBounds,
+        tileCenter: new THREE.Vector3(elevCenterX, 0, elevCenterZ),
+        tileDimensions: {
+          width: elevWidth,
+          height: elevHeight,
+        },
+      });
+
+      // Transfer ownership as soon as the material captures the texture. If a
+      // later construction step fails, the layer's quad cleanup releases it.
+      leaseTransferred = true;
+      this.replaceElevationTexture(elevationTextureLease);
+
+      // Expand bounding sphere to account for GPU displacement
+      // Without this, Three.js frustum culling uses the flat plane bounds
+      // and incorrectly culls tiles when camera is close or turning
+      this.expandBoundingSphere(heights, verticalExaggeration);
+    } catch (error) {
+      if (!leaseTransferred) {
+        elevationTextureLease.release();
+      }
+      throw error;
+    }
   }
 
   /**
@@ -302,41 +332,75 @@ export class TerrainQuad {
     // Dynamically import TSL terrain shader to avoid bundling in WebGL build
     const { createTSLTerrainMaterial, createElevationDataTextureWebGPU } = await import('./terrain-shader-tsl.js');
 
-    // Create elevation texture using HalfFloatType for wider WebGPU compatibility
-    this.elevationTexture = createElevationDataTextureWebGPU(heights, textureSize);
+    if (this.disposed) {
+      throw new Error('Cannot apply elevation to a disposed TerrainQuad');
+    }
 
-    // Calculate elevation tile's world position and dimensions
-    const elevNW = geoToWorld(elevationBounds.west, elevationBounds.north, 0);
-    const elevSE = geoToWorld(elevationBounds.east, elevationBounds.south, 0);
-    const elevCenterX = (elevNW.x + elevSE.x) / 2;
-    const elevCenterZ = (elevNW.z + elevSE.z) / 2;
-    const elevWidth = Math.abs(elevSE.x - elevNW.x);
-    const elevHeight = Math.abs(elevSE.z - elevNW.z);
+    const elevationTextureLease = acquireSharedElevationTexture(
+      heights,
+      textureSize,
+      'webgpu-float16',
+      () => createElevationDataTextureWebGPU(heights, textureSize)
+    );
+    const elevationTexture = elevationTextureLease.resource;
+    let leaseTransferred = false;
 
-    // Get existing color texture if any
-    const existingColorTexture = this.colorTexture ?? undefined;
+    try {
+      // Calculate elevation tile's world position and dimensions
+      const elevNW = geoToWorld(elevationBounds.west, elevationBounds.north, 0);
+      const elevSE = geoToWorld(elevationBounds.east, elevationBounds.south, 0);
+      const elevCenterX = (elevNW.x + elevSE.x) / 2;
+      const elevCenterZ = (elevNW.z + elevSE.z) / 2;
+      const elevWidth = Math.abs(elevSE.x - elevNW.x);
+      const elevHeight = Math.abs(elevSE.z - elevNW.z);
 
-    // Create TSL terrain material
-    const { material: newMaterial, setColorTexture } = await createTSLTerrainMaterial({
-      elevationTexture: this.elevationTexture,
-      verticalExaggeration,
-      tileCenter: new THREE.Vector3(elevCenterX, 0, elevCenterZ),
-      tileDimensions: {
-        width: elevWidth,
-        height: elevHeight,
-      },
-      colorTexture: existingColorTexture,
-    });
+      // Get existing color texture if any
+      const existingColorTexture = this.colorTexture ?? undefined;
 
-    // Dispose old material and replace
-    this.material.dispose();
-    this.material = newMaterial;
-    this.mesh.material = newMaterial;
-    this.materialType = 'node';
-    this.setColorTextureCallback = setColorTexture;
+      // Create TSL terrain material
+      const { material: newMaterial, setColorTexture } = await createTSLTerrainMaterial({
+        elevationTexture,
+        verticalExaggeration,
+        tileCenter: new THREE.Vector3(elevCenterX, 0, elevCenterZ),
+        tileDimensions: {
+          width: elevWidth,
+          height: elevHeight,
+        },
+        colorTexture: existingColorTexture,
+      });
 
-    // Expand bounding sphere to account for GPU displacement
-    this.expandBoundingSphere(heights, verticalExaggeration);
+      if (this.disposed) {
+        setColorTexture(null);
+        newMaterial.dispose();
+        throw new Error('TerrainQuad was disposed while applying WebGPU elevation');
+      }
+
+      // Dispose old material and replace
+      if (this.materialType === 'standard') {
+        removeTerrainShader(this.material as THREE.MeshStandardMaterial);
+      }
+      this.material.dispose();
+      this.material = newMaterial;
+      this.mesh.material = newMaterial;
+      this.materialType = 'node';
+      this.setColorTextureCallback = setColorTexture;
+
+      leaseTransferred = true;
+      this.replaceElevationTexture(elevationTextureLease);
+
+      // Expand bounding sphere to account for GPU displacement
+      this.expandBoundingSphere(heights, verticalExaggeration);
+    } finally {
+      if (!leaseTransferred) {
+        elevationTextureLease.release();
+      }
+    }
+  }
+
+  private replaceElevationTexture(lease: ElevationTextureLease): void {
+    const previousLease = this.elevationTextureLease;
+    this.elevationTextureLease = lease;
+    previousLease?.release();
   }
 
   /**
@@ -421,7 +485,9 @@ export class TerrainQuad {
 
     // Clear material references regardless of renderer or texture ownership.
     if (this.materialType === 'standard') {
-      (this.material as THREE.MeshStandardMaterial).map = null;
+      const standardMaterial = this.material as THREE.MeshStandardMaterial;
+      standardMaterial.map = null;
+      removeTerrainShader(standardMaterial);
     } else {
       this.setColorTextureCallback?.(null);
     }
@@ -436,11 +502,8 @@ export class TerrainQuad {
       disposeTexture(colorTexture);
     }
 
-    if (this.elevationTexture) {
-      // Use deferred disposal for WebGPU compatibility
-      disposeTexture(this.elevationTexture);
-      this.elevationTexture = null;
-    }
+    this.elevationTextureLease?.release();
+    this.elevationTextureLease = null;
 
     // Clear callback reference
     this.setColorTextureCallback = null;
