@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { TerrainQuad } from '../src/ground-texture/terrain-quad.js';
+import {
+  isDeferredDisposalEnabled,
+  setDeferredDisposal,
+} from '../src/renderer/texture-disposal.js';
 
 const bounds = {
   west: 11.25,
@@ -10,24 +14,82 @@ const bounds = {
 };
 
 describe('TerrainQuad disposal ownership', () => {
-  it('disposes elevation exactly once while preserving cache-owned albedo', () => {
-    const quad = new TerrainQuad(bounds, 1);
-    quad.applyGPUDisplacement(new Float32Array([1, 2, 3, 4]), 2, bounds);
+  it('shares elevation and disposes it after the last quad while preserving albedo', () => {
+    const heights = new Float32Array([1, 2, 3, 4]);
+    const firstQuad = new TerrainQuad(bounds, 1);
+    const secondQuad = new TerrainQuad(bounds, 1);
+    firstQuad.applyGPUDisplacement(heights, 2, bounds);
+    secondQuad.applyGPUDisplacement(heights, 2, bounds);
 
-    const elevationTexture = (
-      quad as unknown as { elevationTexture: THREE.DataTexture }
-    ).elevationTexture;
+    const firstElevationTexture = (
+      firstQuad as unknown as { elevationTextureLease: { resource: THREE.DataTexture } }
+    ).elevationTextureLease.resource;
+    const secondElevationTexture = (
+      secondQuad as unknown as { elevationTextureLease: { resource: THREE.DataTexture } }
+    ).elevationTextureLease.resource;
     const albedo = new THREE.Texture() as THREE.CanvasTexture;
-    const elevationDispose = vi.spyOn(elevationTexture, 'dispose');
+    const elevationDispose = vi.spyOn(firstElevationTexture, 'dispose');
     const albedoDispose = vi.spyOn(albedo, 'dispose');
 
-    quad.setTexture(albedo);
-    quad.dispose({ disposeColorTexture: false });
-    quad.dispose({ disposeColorTexture: false });
+    expect(secondElevationTexture).toBe(firstElevationTexture);
+    firstQuad.setTexture(albedo);
+    firstQuad.dispose({ disposeColorTexture: false });
+    firstQuad.dispose({ disposeColorTexture: false });
+
+    expect(elevationDispose).not.toHaveBeenCalled();
+
+    secondQuad.dispose({ disposeColorTexture: false });
+    secondQuad.dispose({ disposeColorTexture: false });
 
     expect(elevationDispose).toHaveBeenCalledTimes(1);
     expect(albedoDispose).not.toHaveBeenCalled();
-    expect((quad.getMaterial() as THREE.MeshStandardMaterial).map).toBeNull();
+    expect((firstQuad.getMaterial() as THREE.MeshStandardMaterial).map).toBeNull();
+  });
+
+  it('replaces WebGL terrain injection and releases the retired elevation lease', () => {
+    const previousDeferredDisposal = isDeferredDisposalEnabled();
+    setDeferredDisposal(false);
+    const quad = new TerrainQuad(bounds, 1);
+    try {
+      const material = quad.getMaterial() as THREE.MeshStandardMaterial;
+      const originalOnBeforeCompile = material.onBeforeCompile;
+      const firstHeights = new Float32Array([1, 2, 3, 4]);
+      const secondHeights = new Float32Array([5, 6, 7, 8]);
+
+      quad.applyGPUDisplacement(firstHeights, 2, bounds);
+      const firstTexture = (
+        quad as unknown as { elevationTextureLease: { resource: THREE.DataTexture } }
+      ).elevationTextureLease.resource;
+      const firstDispose = vi.spyOn(firstTexture, 'dispose');
+
+      quad.applyGPUDisplacement(secondHeights, 2, bounds);
+      const secondTexture = (
+        quad as unknown as { elevationTextureLease: { resource: THREE.DataTexture } }
+      ).elevationTextureLease.resource;
+      const secondDispose = vi.spyOn(secondTexture, 'dispose');
+
+      expect(secondTexture).not.toBe(firstTexture);
+      expect(firstDispose).toHaveBeenCalledTimes(1);
+      expect(secondDispose).not.toHaveBeenCalled();
+
+      const shader = {
+        uniforms: {},
+        vertexShader: '#include <common>\nvoid main() {\n#include <begin_vertex>\n}',
+      } as unknown as THREE.WebGLProgramParametersWithUniforms;
+      material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+
+      expect(shader.vertexShader.match(/uniform sampler2D uElevationMap;/g)).toHaveLength(1);
+      expect(shader.vertexShader.match(/float sampleElevation\(/g)).toHaveLength(1);
+      expect(shader.uniforms.uElevationMap.value).toBe(secondTexture);
+
+      quad.dispose({ disposeColorTexture: false });
+
+      expect(secondDispose).toHaveBeenCalledTimes(1);
+      expect(material.onBeforeCompile).toBe(originalOnBeforeCompile);
+    } finally {
+      quad.dispose({ disposeColorTexture: false });
+      setDeferredDisposal(previousDeferredDisposal);
+    }
   });
 
   it('disposes node-material albedo exactly once and clears its reference', () => {
