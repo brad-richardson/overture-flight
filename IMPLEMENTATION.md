@@ -1,5 +1,9 @@
 # Multiplayer 3D Flight Simulator - Implementation Plan
 
+> Historical design document: this records the original implementation plan
+> and is not a specification of the current code. See `README.md`, `TODO.md`,
+> and the source tree for current behavior and commands.
+
 ## Project Overview
 
 Build a browser-based multiplayer flight simulator where players fly planes over 3D extruded buildings sourced from Overture Maps PMTiles. Players can see other planes in real-time but there's no physics interaction between them. Crashing into buildings or terrain resets the player to the sky. A location picker allows teleporting anywhere on the globe.

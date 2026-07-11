@@ -23,7 +23,7 @@ A multiplayer 3D flight simulator built with Three.js using real-world building 
 ### Interactive Features
 - **Feature picking** - Click on buildings to view property information
 - **Location search** - Jump to any city worldwide via geocoding
-- **Minimap** - MapLibre-powered minimap showing position and nearby players
+- **Minimap** - MapLibre-powered local navigation with position, search, and teleport controls
 - **Collision detection** - Crash into buildings or terrain triggers respawn
 
 ### Multiplayer
@@ -56,8 +56,8 @@ A multiplayer 3D flight simulator built with Three.js using real-world building 
 
 ### Prerequisites
 
-- Node.js 18+
-- npm or yarn
+- Node.js 20 or newer
+- npm
 
 ### Installation
 
@@ -67,15 +67,21 @@ npm install
 
 ### Development
 
-Start both the Vite dev server and PartyKit server:
+Start the Vite frontend:
 
 ```bash
 npm run dev
 ```
 
-This runs:
-- Frontend: http://localhost:3000
-- PartyKit: http://localhost:1999
+The frontend runs at http://localhost:3000. For local multiplayer, start the
+PartyKit server in a second terminal:
+
+```bash
+npm run party:dev
+```
+
+PartyKit listens at http://localhost:1999 by default. The frontend can still be
+developed without it, but multiplayer will be unavailable.
 
 ### Production Build
 
