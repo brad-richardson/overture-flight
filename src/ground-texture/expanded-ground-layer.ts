@@ -392,8 +392,7 @@ export function demoteFromCore(tileX: number, tileY: number, tileZ: number): voi
 
 /**
  * Get list of expanded tiles to load based on player position
- * Returns the outer ring (out to EXPANDED_TERRAIN.TILE_RADIUS) excluding the
- * core area (EXPANDED_TERRAIN.CORE_RADIUS)
+ * Returns outer ring tiles (radius 4) excluding the core area (radius 1)
  */
 export function getExpandedTilesToLoad(lng: number, lat: number, coreTileKeys: Set<string>): TileInfo[] {
   const z = 14; // Always Z14 (same as core tiles)

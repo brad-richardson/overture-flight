@@ -570,26 +570,27 @@ async function updateTiles(
 
   // === Expanded terrain loading (Z14 outer ring, no buildings) ===
   // Loads terrain + roads for a larger area to avoid "edge of world"
-  if (EXPANDED_TERRAIN.ENABLED && GROUND_TEXTURE.ENABLED) {
-    // Always shed out-of-range expanded tiles and prune the queue, even when FPS
-    // is low — releasing the working set is what helps the frame rate recover.
+  // Only load when FPS is above threshold to avoid adding load when struggling
+  if (EXPANDED_TERRAIN.ENABLED && GROUND_TEXTURE.ENABLED && currentFps >= EXPANDED_TERRAIN_MIN_FPS) {
+    // Build set of core tile keys (tiles that get full processing with buildings)
+    const coreTileKeys = new Set(tilesToLoad.map(t => t.key));
+
+    // Get expanded tiles (outer ring excluding core)
+    const expandedTilesToLoad = getExpandedTilesToLoad(lng, lat, coreTileKeys);
+
+    // Queue expanded tiles for background loading (1 at a time, lowest priority)
+    for (const tile of expandedTilesToLoad) {
+      queueExpandedTile(tile);
+    }
+
+    // Unload distant expanded tiles
     const expandedTilesToUnload = getExpandedTilesToUnload(lng, lat);
     for (const key of expandedTilesToUnload) {
       removeExpandedTile(key);
     }
-    pruneExpandedQueue(lng, lat);
 
-    // Only queue NEW expanded tiles when there is frame budget to spare, so we
-    // don't add load while struggling.
-    if (currentFps >= EXPANDED_TERRAIN_MIN_FPS) {
-      // Core tile keys get full processing with buildings; exclude them here.
-      const coreTileKeys = new Set(tilesToLoad.map(t => t.key));
-      const expandedTilesToLoad = getExpandedTilesToLoad(lng, lat, coreTileKeys);
-      // Queue expanded tiles for background loading (1 at a time, lowest priority)
-      for (const tile of expandedTilesToLoad) {
-        queueExpandedTile(tile);
-      }
-    }
+    // Prune queue of out-of-range tiles to avoid unnecessary work
+    pruneExpandedQueue(lng, lat);
   }
 }
 
