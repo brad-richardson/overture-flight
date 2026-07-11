@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { TerrainQuad } from './terrain-quad.js';
 
 // Re-export types from tile-manager for convenience
 export type { TileBounds, ParsedFeature } from '../tile-manager.js';
@@ -68,6 +69,8 @@ export interface RoadStyle {
 export interface GroundTileData {
   /** The Three.js group containing the terrain quad */
   group: THREE.Group;
+  /** Owns the tile-local geometry, material, and elevation texture. */
+  quad: TerrainQuad;
   /** Tile coordinates */
   x: number;
   y: number;

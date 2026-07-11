@@ -234,78 +234,87 @@ async function createExpandedGroundForTileInner(
   // Create terrain-following quad (use same segments as core tiles for consistency)
   const quad = new TerrainQuad(bounds, GROUND_TEXTURE.TERRAIN_QUAD_SEGMENTS);
   let hasUncachedWorkerTexture = !useCache && texture !== null;
+  let quadTransferredToActiveTile = false;
 
-  // Apply terrain elevation
-  if (ELEVATION.TERRAIN_ENABLED) {
-    // GPU path: use vertex shader displacement
-    // Use integer tile math for deterministic elevation tile selection
-    // Ground tile is Z14, elevation is Z12, so shift by 2 bits (14 - 12 = 2)
-    const zoomDiff = tileZ - ELEVATION.ZOOM;
-    const elevTileX = tileX >> zoomDiff;
-    const elevTileY = tileY >> zoomDiff;
+  try {
+    // Apply terrain elevation
+    if (ELEVATION.TERRAIN_ENABLED) {
+      // GPU path: use vertex shader displacement
+      // Use integer tile math for deterministic elevation tile selection
+      // Ground tile is Z14, elevation is Z12, so shift by 2 bits (14 - 12 = 2)
+      const zoomDiff = tileZ - ELEVATION.ZOOM;
+      const elevTileX = tileX >> zoomDiff;
+      const elevTileY = tileY >> zoomDiff;
 
-    const elevationData = await getElevationDataForTile(elevTileX, elevTileY);
-    if (elevationData) {
-      // Use WebGPU or WebGL displacement path based on renderer type
-      const rendererType = getRendererType();
-      if (rendererType === 'webgpu') {
-        await quad.applyGPUDisplacementWebGPU(
-          elevationData.heights,
-          ELEVATION.TILE_SIZE,
-          elevationData.bounds,
-          ELEVATION.VERTICAL_EXAGGERATION
-        );
-      } else {
-        quad.applyGPUDisplacement(
-          elevationData.heights,
-          ELEVATION.TILE_SIZE,
-          elevationData.bounds,
-          ELEVATION.VERTICAL_EXAGGERATION
-        );
+      const elevationData = await getElevationDataForTile(elevTileX, elevTileY);
+      if (elevationData) {
+        // Use WebGPU or WebGL displacement path based on renderer type
+        const rendererType = getRendererType();
+        if (rendererType === 'webgpu') {
+          await quad.applyGPUDisplacementWebGPU(
+            elevationData.heights,
+            ELEVATION.TILE_SIZE,
+            elevationData.bounds,
+            ELEVATION.VERTICAL_EXAGGERATION
+          );
+        } else {
+          quad.applyGPUDisplacement(
+            elevationData.heights,
+            ELEVATION.TILE_SIZE,
+            elevationData.bounds,
+            ELEVATION.VERTICAL_EXAGGERATION
+          );
+        }
       }
     }
-  }
 
-  // This is the final async boundary before active-map and scene mutation.
-  if (!expandedLifecycle.isCurrent(loadToken) || promotedTiles.has(key)) {
-    quad.dispose();
+    // This is the final async boundary before active-map and scene mutation.
+    if (!expandedLifecycle.isCurrent(loadToken) || promotedTiles.has(key)) {
+      return null;
+    }
+
+    // Apply ground texture
+    quad.setTexture(texture);
+
+    // Mark texture as in-use so it won't be evicted while bound to this tile
+    cache.markInUse(key);
+
+    const mesh = quad.getMesh();
+
+    // Create group
+    const group = new THREE.Group();
+    group.name = key;
+    group.add(mesh);
+
+    // Store in active tiles
+    activeExpandedTiles.set(key, {
+      group,
+      quad,
+      x: tileX,
+      y: tileY,
+      z: tileZ,
+      key,
+    });
+    quadTransferredToActiveTile = true;
     if (hasUncachedWorkerTexture) {
-      disposeTexture(texture);
+      uncachedExpandedTextures.set(key, texture);
       hasUncachedWorkerTexture = false;
     }
-    return null;
+
+    // Add to scene
+    scene.add(group);
+
+    return group;
+  } finally {
+    if (!quadTransferredToActiveTile) {
+      quad.dispose({ disposeColorTexture: false });
+    }
+    if (hasUncachedWorkerTexture) {
+      // Development bypasses the texture cache, so a failed/stale load still
+      // owns and must release its worker-produced albedo.
+      disposeTexture(texture);
+    }
   }
-
-  // Apply ground texture
-  quad.setTexture(texture);
-
-  // Mark texture as in-use so it won't be evicted while bound to this tile
-  cache.markInUse(key);
-
-  const mesh = quad.getMesh();
-
-  // Create group
-  const group = new THREE.Group();
-  group.name = key;
-  group.add(mesh);
-
-  // Store in active tiles
-  activeExpandedTiles.set(key, {
-    group,
-    x: tileX,
-    y: tileY,
-    z: tileZ,
-    key,
-  });
-  if (hasUncachedWorkerTexture) {
-    uncachedExpandedTextures.set(key, texture);
-    hasUncachedWorkerTexture = false;
-  }
-
-  // Add to scene
-  scene.add(group);
-
-  return group;
 }
 
 /**
@@ -326,14 +335,9 @@ export function removeExpandedTile(key: string): void {
     uncachedExpandedTextures.delete(key);
   }
 
-  // Dispose quad resources. Cached textures stay cache-owned; uncached textures
-  // were disposed explicitly above.
-  const mesh = tileData.group.children[0] as THREE.Mesh;
-  if (mesh) {
-    mesh.geometry.dispose();
-    // Don't dispose material.map - it's in the cache
-    (mesh.material as THREE.Material).dispose();
-  }
+  // Dispose geometry/material/elevation. Cached textures stay cache-owned;
+  // uncached textures were disposed explicitly above.
+  tileData.quad.dispose({ disposeColorTexture: false });
 
   activeExpandedTiles.delete(key);
 

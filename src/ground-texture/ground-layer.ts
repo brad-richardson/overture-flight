@@ -199,80 +199,89 @@ async function createGroundForTileInner(
 
   // Create terrain-following quad
   const quad = new TerrainQuad(bounds, GROUND_TEXTURE.TERRAIN_QUAD_SEGMENTS);
+  let quadTransferredToActiveTile = false;
 
-  // Apply terrain elevation
-  if (ELEVATION.TERRAIN_ENABLED) {
-    profiler.startPhase(key, 'terrainElevation');
+  try {
+    // Apply terrain elevation
+    if (ELEVATION.TERRAIN_ENABLED) {
+      profiler.startPhase(key, 'terrainElevation');
 
-    // GPU path: use vertex shader displacement
-    // Use integer tile math for deterministic elevation tile selection
-    // Ground tile is Z14, elevation is Z12, so shift by 2 bits (14 - 12 = 2)
-    const zoomDiff = tileZ - ELEVATION.ZOOM;
-    const elevTileX = tileX >> zoomDiff;
-    const elevTileY = tileY >> zoomDiff;
+      // GPU path: use vertex shader displacement
+      // Use integer tile math for deterministic elevation tile selection
+      // Ground tile is Z14, elevation is Z12, so shift by 2 bits (14 - 12 = 2)
+      const zoomDiff = tileZ - ELEVATION.ZOOM;
+      const elevTileX = tileX >> zoomDiff;
+      const elevTileY = tileY >> zoomDiff;
 
-    const elevationData = await getElevationDataForTile(elevTileX, elevTileY);
-    if (elevationData) {
-      // Use WebGPU or WebGL displacement path based on renderer type
-      const rendererType = getRendererType();
-      if (rendererType === 'webgpu') {
-        await quad.applyGPUDisplacementWebGPU(
-          elevationData.heights,
-          ELEVATION.TILE_SIZE,
-          elevationData.bounds,
-          ELEVATION.VERTICAL_EXAGGERATION
-        );
-      } else {
-        quad.applyGPUDisplacement(
-          elevationData.heights,
-          ELEVATION.TILE_SIZE,
-          elevationData.bounds, // Pass elevation tile bounds, not ground tile bounds
-          ELEVATION.VERTICAL_EXAGGERATION
-        );
+      const elevationData = await getElevationDataForTile(elevTileX, elevTileY);
+      if (elevationData) {
+        // Use WebGPU or WebGL displacement path based on renderer type
+        const rendererType = getRendererType();
+        if (rendererType === 'webgpu') {
+          await quad.applyGPUDisplacementWebGPU(
+            elevationData.heights,
+            ELEVATION.TILE_SIZE,
+            elevationData.bounds,
+            ELEVATION.VERTICAL_EXAGGERATION
+          );
+        } else {
+          quad.applyGPUDisplacement(
+            elevationData.heights,
+            ELEVATION.TILE_SIZE,
+            elevationData.bounds, // Pass elevation tile bounds, not ground tile bounds
+            ELEVATION.VERTICAL_EXAGGERATION
+          );
+        }
       }
+
+      profiler.endPhase(key, 'terrainElevation');
     }
 
-    profiler.endPhase(key, 'terrainElevation');
+    // Apply ground texture
+    if (!texture) {
+      console.error(`Cannot apply texture for tile ${key}: texture is null`);
+      return null;
+    }
+    quad.setTexture(texture);
+
+    // Mark texture as in-use so it won't be evicted while bound to this tile
+    cache.markInUse(key);
+
+    const mesh = quad.getMesh();
+
+    // Create group
+    const group = new THREE.Group();
+    group.name = key;
+    group.add(mesh);
+
+    // Store in active tiles
+    activeTiles.set(key, {
+      group,
+      quad,
+      x: tileX,
+      y: tileY,
+      z: tileZ,
+      key,
+    });
+    quadTransferredToActiveTile = true;
+
+    // Add to scene
+    scene.add(group);
+
+    // Promote: remove any expanded tile at this position (expanded tiles are terrain-only)
+    // Core tiles have full features (buildings, etc), so they take precedence
+    promoteExpandedToCore(tileX, tileY, tileZ);
+
+    // Mark loading complete
+    loadingTiles.delete(key);
+
+    return group;
+  } finally {
+    if (!quadTransferredToActiveTile) {
+      // The albedo is cache-owned even when elevation/material setup fails.
+      quad.dispose({ disposeColorTexture: false });
+    }
   }
-
-  // Apply ground texture
-  if (!texture) {
-    console.error(`Cannot apply texture for tile ${key}: texture is null`);
-    quad.dispose();
-    return null;
-  }
-  quad.setTexture(texture);
-
-  // Mark texture as in-use so it won't be evicted while bound to this tile
-  cache.markInUse(key);
-
-  const mesh = quad.getMesh();
-
-  // Create group
-  const group = new THREE.Group();
-  group.name = key;
-  group.add(mesh);
-
-  // Store in active tiles
-  activeTiles.set(key, {
-    group,
-    x: tileX,
-    y: tileY,
-    z: tileZ,
-    key,
-  });
-
-  // Add to scene
-  scene.add(group);
-
-  // Promote: remove any expanded tile at this position (expanded tiles are terrain-only)
-  // Core tiles have full features (buildings, etc), so they take precedence
-  promoteExpandedToCore(tileX, tileY, tileZ);
-
-  // Mark loading complete
-  loadingTiles.delete(key);
-
-  return group;
   } finally {
     // Always end profiling, even if an error occurred
     profiler.endTile(key);
@@ -297,13 +306,8 @@ export function removeGroundGroup(group: THREE.Group): void {
     // Clear promoted status so this position can become an expanded tile again
     demoteFromCore(tileData.x, tileData.y, tileData.z);
 
-    // Dispose quad resources (but not texture - it's cached)
-    const mesh = group.children[0] as THREE.Mesh;
-    if (mesh) {
-      mesh.geometry.dispose();
-      // Don't dispose material.map - it's in the cache
-      (mesh.material as THREE.Material).dispose();
-    }
+    // The quad owns geometry/material/elevation. The albedo remains cache-owned.
+    tileData.quad.dispose({ disposeColorTexture: false });
 
     activeTiles.delete(key);
   }
@@ -357,12 +361,8 @@ export function clearAllGroundTiles(): void {
       scene.remove(tileData.group);
     }
 
-    // Dispose mesh resources
-    const mesh = tileData.group.children[0] as THREE.Mesh;
-    if (mesh) {
-      mesh.geometry.dispose();
-      (mesh.material as THREE.Material).dispose();
-    }
+    // The cache is cleared below and remains the sole albedo owner.
+    tileData.quad.dispose({ disposeColorTexture: false });
   }
 
   activeTiles.clear();

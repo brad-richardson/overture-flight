@@ -75,7 +75,7 @@ export interface TSLTerrainConfig {
 export interface TSLTerrainMaterialResult {
   material: THREE.Material;
   /** Method to update the color texture after material creation */
-  setColorTexture: (texture: THREE.Texture) => void;
+  setColorTexture: (texture: THREE.Texture | null) => void;
 }
 
 /**
@@ -200,8 +200,8 @@ export async function createTSLTerrainMaterial(
   }
 
   // Method to update color texture after material creation
-  const setColorTexture = (texture: THREE.Texture) => {
-    colorTextureNode = TSL.texture(texture);
+  const setColorTexture = (texture: THREE.Texture | null) => {
+    colorTextureNode = texture ? TSL.texture(texture) : null;
     material.colorNode = colorTextureNode;
     material.needsUpdate = true;
   };
