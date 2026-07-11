@@ -52,6 +52,7 @@ interface FullPipelineRequest {
     transportationPMTilesUrl: string;
     includeNeighbors: boolean;
     includeTransportation: boolean;
+    persistTexture: boolean;
   };
 }
 
@@ -415,8 +416,9 @@ async function renderFullPipeline(
   basePMTilesUrl: string,
   transportationPMTilesUrl: string,
   includeNeighbors: boolean,
-  includeTransportation: boolean
-): Promise<ImageBitmap> {
+  includeTransportation: boolean,
+  persistTexture: boolean
+): Promise<{ bitmap: ImageBitmap; blob?: Blob }> {
   // Initialize PMTiles if needed
   await initializePMTiles(basePMTilesUrl, transportationPMTilesUrl);
 
@@ -433,8 +435,15 @@ async function renderFullPipeline(
   const canvas = new OffscreenCanvas(textureSize, textureSize);
   renderTileTextureToCanvas(canvas, baseFeatures, transportFeatures, bounds);
 
-  // Transfer ImageBitmap back (zero-copy)
-  return canvas.transferToImageBitmap();
+  let blob: Blob | undefined;
+  if (persistTexture) {
+    try {
+      blob = await canvas.convertToBlob({ type: 'image/png' });
+    } catch (error) {
+      console.warn('[FullPipelineWorker] Texture persistence encode failed', error);
+    }
+  }
+  return { bitmap: canvas.transferToImageBitmap(), blob };
 }
 
 /**
@@ -488,9 +497,10 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
           transportationPMTilesUrl,
           includeNeighbors,
           includeTransportation,
+          persistTexture,
         } = request.payload;
 
-        const bitmap = await renderFullPipeline(
+        const result = await renderFullPipeline(
           tileX,
           tileY,
           tileZ,
@@ -498,15 +508,16 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
           basePMTilesUrl,
           transportationPMTilesUrl,
           includeNeighbors,
-          includeTransportation
+          includeTransportation,
+          persistTexture
         );
 
         const response: WorkerResponse = {
           type: 'RENDER_TILE_TEXTURE_RESULT',
           id: request.id,
-          result: bitmap,
+          result,
         };
-        self.postMessage(response, { transfer: [bitmap] });
+        self.postMessage(response, { transfer: [result.bitmap] });
         break;
       }
 

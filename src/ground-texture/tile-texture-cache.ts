@@ -11,7 +11,8 @@ import { disposeTexture, isDeferredDisposalEnabled } from '../renderer/texture-d
  */
 export class TileTextureCache {
   private cache = new Map<string, CachedTexture>();
-  private disposeThreshold: number;
+  private readonly maxSize: number;
+  private readonly disposeThreshold: number;
   // Track textures that are currently bound to active tiles and should not be evicted
   private inUseTextures = new Set<string>();
   // Track textures pending "unmark" - they were recently in use and should stay protected
@@ -19,8 +20,12 @@ export class TileTextureCache {
   private unmarkScheduled = false;
 
   constructor(config: { maxSize: number; disposeThreshold?: number; deferDisposal?: boolean }) {
+    this.maxSize = Math.max(1, Math.floor(config.maxSize));
     // Start evicting when we hit 80% of max size (or at specified threshold)
-    this.disposeThreshold = config.disposeThreshold ?? Math.floor(config.maxSize * 0.8);
+    this.disposeThreshold = Math.min(
+      this.maxSize,
+      Math.max(1, config.disposeThreshold ?? Math.floor(this.maxSize * 0.8))
+    );
     // Note: deferDisposal config is now ignored - we use the global texture-disposal utility
     // which automatically handles deferred disposal based on renderer type
   }
@@ -104,9 +109,14 @@ export class TileTextureCache {
    * Store a texture in cache
    */
   set(key: string, texture: THREE.CanvasTexture, bounds: TileBounds): void {
+    const existing = this.cache.get(key);
+    if (existing && existing.texture !== texture) {
+      disposeTexture(existing.texture);
+    }
+
     // Evict if we're over threshold
-    if (this.cache.size >= this.disposeThreshold) {
-      this.evictLRU();
+    if (!existing && this.cache.size >= this.disposeThreshold) {
+      this.evictLRU(Math.max(0, this.disposeThreshold - 1));
     }
 
     this.cache.set(key, {
@@ -115,6 +125,10 @@ export class TileTextureCache {
       tileKey: key,
       bounds,
     });
+
+    if (this.cache.size > this.maxSize) {
+      this.evictLRU(this.maxSize);
+    }
   }
 
   /**
@@ -187,9 +201,7 @@ export class TileTextureCache {
    * Evict least recently used entries until we're under threshold
    * IMPORTANT: Never evicts textures that are marked as in-use
    */
-  private evictLRU(): void {
-    const targetSize = Math.floor(this.disposeThreshold * 0.75);
-
+  private evictLRU(targetSize: number): void {
     // Sort by last accessed time (oldest first), filtering out in-use textures
     const entries = Array.from(this.cache.entries())
       .filter(([key]) => !this.inUseTextures.has(key))

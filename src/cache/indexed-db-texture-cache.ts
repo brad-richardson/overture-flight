@@ -33,8 +33,8 @@ let dbPromise: Promise<IDBDatabase | null> | null = null;
 /**
  * Get versioned cache key
  */
-function getVersionedKey(tileKey: string): string {
-  return `v${TEXTURE_CACHE.VERSION}:${tileKey}`;
+function getVersionedKey(tileKey: string, sourceNamespace: string): string {
+  return `v${TEXTURE_CACHE.VERSION}:${sourceNamespace}:${tileKey}`;
 }
 
 /**
@@ -93,14 +93,15 @@ async function initDB(): Promise<IDBDatabase | null> {
  * Returns null if not found or cache disabled
  */
 export async function getCachedTexture(
-  tileKey: string
+  tileKey: string,
+  sourceNamespace: string
 ): Promise<{ blob: Blob; bounds: CachedTexture['bounds'] } | null> {
   const database = await initDB();
   if (!database) {
     return null;
   }
 
-  const key = getVersionedKey(tileKey);
+  const key = getVersionedKey(tileKey, sourceNamespace);
 
   return new Promise((resolve) => {
     try {
@@ -190,14 +191,15 @@ function deleteEntry(key: string): void {
 export async function cacheTexture(
   tileKey: string,
   blob: Blob,
-  bounds: CachedTexture['bounds']
+  bounds: CachedTexture['bounds'],
+  sourceNamespace: string
 ): Promise<void> {
   const database = await initDB();
   if (!database) {
     return;
   }
 
-  const key = getVersionedKey(tileKey);
+  const key = getVersionedKey(tileKey, sourceNamespace);
   const entry: CachedTexture = {
     key,
     blob,

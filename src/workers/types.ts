@@ -365,7 +365,11 @@ export type WorkerRequest =
  * Response types (worker -> main thread)
  */
 export type WorkerResponse =
-  | { type: 'RENDER_TILE_TEXTURE_RESULT'; id: string; result: ImageBitmap }  // Used by full-pipeline worker
+  | {
+      type: 'RENDER_TILE_TEXTURE_RESULT';
+      id: string;
+      result: { bitmap: ImageBitmap; blob?: Blob };
+    }
   | { type: 'CREATE_BASE_GEOMETRY_RESULT'; id: string; result: BaseGeometryResult }
   | { type: 'CREATE_BUILDING_GEOMETRY_RESULT'; id: string; result: CreateBuildingGeometryResult }
   | { type: 'PARSE_MVT_RESULT'; id: string; result: ParseMVTResult }

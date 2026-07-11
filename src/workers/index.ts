@@ -1553,6 +1553,12 @@ export interface FullPipelinePayload {
   transportationPMTilesUrl: string;
   includeNeighbors: boolean;
   includeTransportation: boolean;
+  persistTexture: boolean;
+}
+
+export interface FullPipelineResult {
+  bitmap: ImageBitmap;
+  blob?: Blob;
 }
 
 /**
@@ -1870,8 +1876,9 @@ export class FullPipelineWorkerPool {
     basePMTilesUrl: string,
     transportationPMTilesUrl: string,
     includeNeighbors: boolean = true,
-    includeTransportation: boolean = true
-  ): Promise<ImageBitmap> {
+    includeTransportation: boolean = true,
+    persistTexture: boolean = false
+  ): Promise<FullPipelineResult> {
     await this.initialize();
 
     if (!this.isSupported) {
@@ -1895,10 +1902,11 @@ export class FullPipelineWorkerPool {
         transportationPMTilesUrl,
         includeNeighbors,
         includeTransportation,
+        persistTexture,
       },
     };
 
-    return this.sendRequest<ImageBitmap>(request);
+    return this.sendRequest<FullPipelineResult>(request);
   }
 
   /**
@@ -2316,4 +2324,13 @@ export function resetTreeProcessingWorkerPool(): void {
     treeProcessingPoolInstance.terminate();
     treeProcessingPoolInstance = null;
   }
+}
+
+/** Cancel queued/running world-generation work before changing scene origin. */
+export function cancelWorkerTasksForWorldChange(): void {
+  resetGeometryWorkerPool();
+  resetMVTWorkerPool();
+  resetBuildingGeometryWorkerPool();
+  resetFullPipelineWorkerPool();
+  resetTreeProcessingWorkerPool();
 }

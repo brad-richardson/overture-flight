@@ -41,6 +41,7 @@ const promotedTiles = new Set<string>();
 
 // Queue for expanded tiles waiting to be loaded (FIFO for fairness)
 const expandedTileQueue: TileInfo[] = [];
+const queuedExpandedTileKeys = new Set<string>();
 let isProcessingQueue = false;
 
 // Dedicated texture cache for expanded tiles (separate from core tiles)
@@ -86,11 +87,12 @@ export function queueExpandedTile(tile: TileInfo): void {
     return;
   }
 
-  if (expandedTileQueue.some(t => t.key === key)) {
+  if (queuedExpandedTileKeys.has(key)) {
     return;
   }
 
   expandedTileQueue.push(tile);
+  queuedExpandedTileKeys.add(key);
   processExpandedQueue();
 }
 
@@ -115,6 +117,7 @@ async function processExpandedQueue(): Promise<void> {
 
     const tile = expandedTileQueue.shift();
     if (!tile) break;
+    queuedExpandedTileKeys.delete(tile.key);
 
     // Skip if it got loaded while waiting, or was promoted to core
     // (avoids unnecessary async work if tile became a core tile between dequeue and processing)
@@ -205,7 +208,7 @@ async function createExpandedGroundForTileInner(
     // Full pipeline: fetch, parse, render all in worker (same as core tiles)
     const fullPipelinePool = getFullPipelineWorkerPool();
     const overtureSources = getOvertureSources();
-    const bitmap = await fullPipelinePool.renderTile(
+    const result = await fullPipelinePool.renderTile(
       tileX,
       tileY,
       tileZ,
@@ -215,6 +218,7 @@ async function createExpandedGroundForTileInner(
       false, // includeNeighbors - not needed for expanded tiles
       true   // includeTransportation
     );
+    const { bitmap } = result;
 
     // A clear may have invalidated this request while the worker rendered. Do
     // not repopulate the cache or create scene resources for the old generation.
@@ -376,6 +380,7 @@ export function promoteExpandedToCore(tileX: number, tileY: number, tileZ: numbe
   const queueIndex = expandedTileQueue.findIndex(t => t.key === expandedKey);
   if (queueIndex >= 0) {
     expandedTileQueue.splice(queueIndex, 1);
+    queuedExpandedTileKeys.delete(expandedKey);
   }
 
   // In-flight work retains its loading token and will reject itself at the next
@@ -472,6 +477,7 @@ export function pruneExpandedQueue(lng: number, lat: number): number {
 
     if (chebyshevDist > maxDistance) {
       expandedTileQueue.splice(i, 1);
+      queuedExpandedTileKeys.delete(tile.key);
     }
   }
 
@@ -515,6 +521,7 @@ export function clearAllExpandedTiles(): void {
 
   activeExpandedTiles.clear();
   expandedTileQueue.length = 0;
+  queuedExpandedTileKeys.clear();
   loadingExpandedTiles.clear();
   promotedTiles.clear();
 

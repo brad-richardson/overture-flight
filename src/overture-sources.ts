@@ -18,7 +18,9 @@ export interface OvertureSources {
 const STAC_CATALOG_URL = 'https://stac.overturemaps.org/catalog.json';
 const PMTILES_ROOT = 'https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com/tiles';
 const CACHED_RELEASE_KEY = 'overture-flight:last-stable-release';
-const STAC_REQUEST_TIMEOUT_MS = 5000;
+const CACHED_RELEASE_TIMESTAMP_KEY = 'overture-flight:last-stable-release-time';
+const CACHED_RELEASE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const STAC_REQUEST_TIMEOUT_MS = 2500;
 const UNAVAILABLE_SOURCE_PREFIX = 'data:application/vnd.pmtiles;base64,#overture-unavailable-';
 const RELEASE_PATTERN = /^\d{4}-\d{2}-\d{2}(?:\.\d+)?$/;
 
@@ -36,10 +38,15 @@ function isRelease(value: unknown): value is string {
   return typeof value === 'string' && RELEASE_PATTERN.test(value);
 }
 
-function readCachedRelease(): string | null {
+function readCachedRelease(): { release: string; fresh: boolean } | null {
   try {
     const release = localStorage.getItem(CACHED_RELEASE_KEY);
-    return isRelease(release) ? release : null;
+    if (!isRelease(release)) return null;
+    const timestamp = Number(localStorage.getItem(CACHED_RELEASE_TIMESTAMP_KEY));
+    const fresh = Number.isFinite(timestamp)
+      && timestamp > 0
+      && Date.now() - timestamp <= CACHED_RELEASE_MAX_AGE_MS;
+    return { release, fresh };
   } catch {
     // Storage can be unavailable in privacy modes. A cache miss is harmless.
     return null;
@@ -49,6 +56,7 @@ function readCachedRelease(): string | null {
 function cacheRelease(release: string): void {
   try {
     localStorage.setItem(CACHED_RELEASE_KEY, release);
+    localStorage.setItem(CACHED_RELEASE_TIMESTAMP_KEY, String(Date.now()));
   } catch {
     // Source discovery must not fail just because local storage is unavailable.
   }
@@ -112,9 +120,9 @@ export function isUnavailableOvertureSource(url: string): boolean {
 /**
  * Resolve all Overture sources before any tile subsystem starts.
  *
- * The STAC catalog is attempted on every page startup. A previously discovered
- * release is only used as a network-failure fallback; it is never maintained in
- * source code. Per-theme environment overrides still take precedence.
+ * A cached release starts immediately and is refreshed in the background for
+ * the next session. First-time visitors wait for a bounded catalog request.
+ * Per-theme environment overrides still take precedence.
  */
 export function initializeOvertureSources(): Promise<Readonly<OvertureSources>> {
   if (initialization) return initialization;
@@ -133,26 +141,41 @@ export function initializeOvertureSources(): Promise<Readonly<OvertureSources>> 
       return sources;
     }
 
+    const cachedRelease = readCachedRelease();
     let release: string | null = null;
 
-    try {
-      release = await fetchLatestRelease();
-      cacheRelease(release);
-      console.info(`[Overture] Using latest stable release ${release}`);
-    } catch (error) {
-      const cachedRelease = readCachedRelease();
-      if (cachedRelease) {
-        release = cachedRelease;
-        console.warn(
-          `[Overture] Latest release lookup failed; using cached release ${release}`,
-          error
-        );
-      } else {
-        console.warn(
-          '[Overture] Latest release lookup failed and no cached release is available; ' +
-          'unconfigured Overture themes will be unavailable for this session',
-          error
-        );
+    if (cachedRelease?.fresh) {
+      release = cachedRelease.release;
+      console.info(`[Overture] Starting with cached stable release ${release}`);
+      // Refresh for the next page load without holding up this startup. Sources
+      // remain immutable for the current session so worker pools stay coherent.
+      void fetchLatestRelease().then(latestRelease => {
+        cacheRelease(latestRelease);
+        if (latestRelease !== release) {
+          console.info(`[Overture] Cached newer release ${latestRelease} for next startup`);
+        }
+      }).catch(error => {
+        console.warn('[Overture] Background release refresh failed', error);
+      });
+    } else {
+      try {
+        release = await fetchLatestRelease();
+        cacheRelease(release);
+        console.info(`[Overture] Using latest stable release ${release}`);
+      } catch (error) {
+        if (cachedRelease) {
+          release = cachedRelease.release;
+          console.warn(
+            `[Overture] Latest release lookup failed; using stale cached release ${release}`,
+            error
+          );
+        } else {
+          console.warn(
+            '[Overture] Latest release lookup failed and no cached release is available; ' +
+            'unconfigured Overture themes will be unavailable for this session',
+            error
+          );
+        }
       }
     }
 
@@ -194,4 +217,24 @@ export function getOvertureSources(): Readonly<OvertureSources> {
   }
 
   return sources;
+}
+
+function hashSourceIdentity(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/** Namespace rendered caches by the actual runtime data sources. */
+export function getOvertureCacheNamespace(): string {
+  const resolved = getOvertureSources();
+  return `sources-${hashSourceIdentity([
+    resolved.buildings,
+    resolved.base,
+    resolved.transportation,
+    resolved.divisions,
+  ].join('|'))}`;
 }

@@ -4,7 +4,7 @@ import { geoToWorld } from './scene.js';
 import type { PlaneState } from './plane.js';
 import type { BuildingColliderBounds } from './workers/types.js';
 
-export const BUILDING_COLLISION_ENABLED = false;
+export const BUILDING_COLLISION_ENABLED = true;
 
 const BUILDING_COLLISION_CELL_SIZE = 250;
 const SEGMENT_EPSILON = 1e-9;
@@ -26,6 +26,7 @@ export interface CollisionResult {
   collided: boolean;
   type?: 'ground' | 'terrain' | 'building';
   height?: number;
+  buildingId?: number;
 }
 
 /**
@@ -347,6 +348,7 @@ class BuildingSpatialIndex {
 
 const buildingSpatialIndex = new BuildingSpatialIndex();
 let previousCollisionPosition: CollisionPoint | null = null;
+let buildingCollisionsSuppressedUntilClear = false;
 
 /** Register all rendered building bounds for a loaded tile. */
 export function registerBuildingColliders(
@@ -364,6 +366,15 @@ export function unregisterBuildingColliders(tileKey: string): void {
 /** Clear every loaded building bound, used when replacing the whole local world. */
 export function clearBuildingColliders(): void {
   buildingSpatialIndex.clear();
+  buildingCollisionsSuppressedUntilClear = false;
+}
+
+/**
+ * Ignore building hits after a building crash until the respawned plane is no
+ * longer inside a loaded collider. Terrain collision remains active.
+ */
+export function suppressBuildingCollisionsUntilClear(): void {
+  buildingCollisionsSuppressedUntilClear = true;
 }
 
 /**
@@ -407,12 +418,27 @@ export function checkCollisionDetailed(planeState: PlaneState): CollisionResult 
   }
 
   if (BUILDING_COLLISION_ENABLED) {
+    if (buildingCollisionsSuppressedUntilClear) {
+      const stillInside = buildingSpatialIndex.findIntersection(
+        currentWorldPosition,
+        currentWorldPosition
+      );
+      if (stillInside) {
+        return { collided: false };
+      }
+      buildingCollisionsSuppressedUntilClear = false;
+      // Do not sweep from the last suppressed point inside the building to the
+      // first clear point outside it. The next frame starts fully outside.
+      return { collided: false };
+    }
+
     const buildingHit = buildingSpatialIndex.findIntersection(sweepStart, currentWorldPosition);
     if (buildingHit) {
       return {
         collided: true,
         type: 'building',
         height: buildingHit.maxY,
+        buildingId: buildingHit.id,
       };
     }
   }
