@@ -19,9 +19,6 @@
     "generate:trees": "uv run scripts/generate-tree-tiles.py"
   },
   "dependencies": {
-    "@bradrichardson/overture-geocoder": "^0.2.2",
-    "@bradrichardson/overturemaps": "^0.2.1",
-    "@loaders.gl/gltf": "^4.3.4",
     "@mapbox/vector-tile": "^2.0.4",
     "earcut": "^3.0.2",
     "maplibre-gl": "^5.0.0",
