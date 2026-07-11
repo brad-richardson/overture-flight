@@ -41,6 +41,7 @@ import {
 } from './ground-texture/index.js';
 import { createTreesForTile, removeTreesGroup } from './tree-layer.js';
 import { preloadElevationTiles, unloadDistantElevationTiles, getTerrainHeightAsync } from './elevation.js';
+import { StartupElevationCoordinator } from './startup-elevation.js';
 import { DEFAULT_LOCATION, ELEVATION, PLAYER_COLORS, PLANE_RENDER, FLIGHT, GROUND_TEXTURE, EXPANDED_TERRAIN } from './constants.js';
 import { initializeOvertureSources } from './overture-sources.js';
 import { getLoadingGate } from './loading-gate.js';
@@ -1016,9 +1017,20 @@ async function init(): Promise<void> {
       );
     }
 
-    // Preload elevation tiles for the starting area
+    // Only the center tile is required for initial collision and terrain height.
+    // Neighboring elevation tiles warm in the background after the first frame.
+    let startupElevation: StartupElevationCoordinator | null = null;
     if (ELEVATION.TERRAIN_ENABLED) {
-      await preloadElevationTiles(startLocation.lng, startLocation.lat, 2);
+      startupElevation = new StartupElevationCoordinator({
+        lng: startLocation.lng,
+        lat: startLocation.lat,
+        preload: preloadElevationTiles,
+        requestFrame: callback => requestAnimationFrame(callback),
+        onWarmupError: error => {
+          console.warn('Failed to warm elevation tiles after first render:', error);
+        },
+      });
+      await startupElevation.loadCenter();
     }
 
     // Teleport plane to start location if from URL
@@ -1066,7 +1078,11 @@ async function init(): Promise<void> {
 
     // Start game loop immediately (allows rendering while tiles load)
     isRunning = true;
-    requestAnimationFrame(gameLoop);
+    if (startupElevation) {
+      startupElevation.scheduleFirstFrame(gameLoop);
+    } else {
+      requestAnimationFrame(gameLoop);
+    }
 
   } catch (error) {
     console.error('Failed to initialize:', error);
