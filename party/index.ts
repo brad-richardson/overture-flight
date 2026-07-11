@@ -1,17 +1,15 @@
 import type * as Party from "partykit/server";
-
-interface PlaneState {
-  id: string;
-  lat: number;
-  lng: number;
-  altitude: number;
-  heading: number;
-  pitch: number;
-  roll: number;
-  speed: number;
-  color: string;
-  name?: string;
-}
+import {
+  MULTIPLAYER_LIMITS,
+  checkFixedWindowRateLimit,
+  createRateLimitState,
+  getInboundByteLength,
+  parseClientMessage,
+  reconstructPlaneRecord,
+  type ConnectionProtocolState,
+  type PlaneSnapshot,
+  type ServerMessage,
+} from '../src/multiplayer-protocol.js';
 
 const COLORS = [
   '#ef4444', // red
@@ -24,80 +22,38 @@ const COLORS = [
   '#ec4899', // pink
 ];
 
-// Validation constants
-const LIMITS = {
-  LAT_MIN: -90,
-  LAT_MAX: 90,
-  LNG_MIN: -180,
-  LNG_MAX: 180,
-  ALT_MIN: 0,
-  ALT_MAX: 10000,
-  SPEED_MIN: 0,
-  SPEED_MAX: 500,
-};
-
-// Rate limiting constants
-const RATE_LIMIT = {
-  MIN_INTERVAL_MS: 30,  // Minimum ms between position messages
-  MAX_VIOLATIONS: 10,   // Max violations before warning
-};
-
 // Connection limits
 const MAX_CONNECTIONS = 10;
 
-/**
- * Validate and clamp position data
- */
-function validatePositionData(data: Partial<PlaneState>): Partial<PlaneState> | null {
-  if (typeof data.lat !== 'number' || typeof data.lng !== 'number') {
-    return null;
-  }
-
-  return {
-    lat: Math.max(LIMITS.LAT_MIN, Math.min(LIMITS.LAT_MAX, data.lat)),
-    lng: Math.max(LIMITS.LNG_MIN, Math.min(LIMITS.LNG_MAX, data.lng)),
-    altitude: Math.max(LIMITS.ALT_MIN, Math.min(LIMITS.ALT_MAX, data.altitude || 0)),
-    heading: ((data.heading || 0) % 360 + 360) % 360,
-    pitch: Math.max(-90, Math.min(90, data.pitch || 0)),
-    roll: Math.max(-180, Math.min(180, data.roll || 0)),
-    speed: Math.max(LIMITS.SPEED_MIN, Math.min(LIMITS.SPEED_MAX, data.speed || 0)),
-  };
-}
-
-// Rate limit tracking per connection
-interface RateLimitInfo {
-  lastMessageTime: number;
-  violations: number;
+function serialize(message: ServerMessage): string {
+  return JSON.stringify(message);
 }
 
 export default class FlightServer implements Party.Server {
   options: Party.ServerOptions = { hibernate: true };
-  planes: Map<string, PlaneState> = new Map();
-  colorIndex: number = 0;
-  rateLimits: Map<string, RateLimitInfo> = new Map();
 
   constructor(readonly room: Party.Room) {}
 
-  onConnect(conn: Party.Connection) {
+  onConnect(conn: Party.Connection<ConnectionProtocolState>) {
+    const connections = Array.from(
+      this.room.getConnections<ConnectionProtocolState>()
+    ).filter((connection) => connection.id !== conn.id);
+
     // Check if room is full
-    if (this.planes.size >= MAX_CONNECTIONS) {
-      conn.send(JSON.stringify({
+    if (connections.length >= MAX_CONNECTIONS) {
+      conn.send(serialize({
         type: 'error',
         message: 'Room is full. Please try again later.',
       }));
-      conn.close();
+      conn.close(1008, 'Room is full');
       return;
     }
 
-    const color = COLORS[this.colorIndex % COLORS.length];
-    this.colorIndex++;
+    const color = COLORS[connections.length % COLORS.length];
     const id = conn.id;
 
-    // Initialize rate limiting for this connection
-    this.rateLimits.set(id, { lastMessageTime: 0, violations: 0 });
-
     // Create initial plane state
-    const initialPlane: PlaneState = {
+    const initialPlane: PlaneSnapshot = {
       id,
       lat: 40.7128,
       lng: -74.006,
@@ -107,20 +63,25 @@ export default class FlightServer implements Party.Server {
       roll: 0,
       speed: 80,
       color,
+      name: '',
     };
-    this.planes.set(id, initialPlane);
+    conn.setState({ plane: initialPlane, rate: createRateLimitState(Date.now()) });
+
+    const planes = reconstructPlaneRecord(
+      this.room.getConnections<ConnectionProtocolState>()
+    );
 
     // Send welcome with assigned ID, color, and existing planes
-    conn.send(JSON.stringify({
+    conn.send(serialize({
       type: 'welcome',
       id,
       color,
-      planes: Object.fromEntries(this.planes),
+      planes,
     }));
 
     // Notify others about the new player
     this.room.broadcast(
-      JSON.stringify({
+      serialize({
         type: 'playerJoined',
         player: initialPlane,
       }),
@@ -128,91 +89,83 @@ export default class FlightServer implements Party.Server {
     );
   }
 
-  onMessage(message: string, sender: Party.Connection) {
+  onMessage(
+    message: string | ArrayBuffer | ArrayBufferView,
+    sender: Party.Connection<ConnectionProtocolState>
+  ) {
+    const state = sender.state;
+    if (!state) {
+      sender.close(1011, 'Connection state unavailable');
+      return;
+    }
+
+    const rate = checkFixedWindowRateLimit(state.rate, Date.now());
+    sender.setState({ plane: state.plane, rate: rate.state });
+    if (!rate.allowed) {
+      if (rate.shouldClose) sender.close(1008, 'Rate limit exceeded');
+      return;
+    }
+
+    if (
+      typeof message !== 'string' ||
+      getInboundByteLength(message) > MULTIPLAYER_LIMITS.MAX_INBOUND_BYTES
+    ) {
+      sender.send(serialize({ type: 'error', message: 'Invalid message payload.' }));
+      return;
+    }
+
     try {
-      const msg = JSON.parse(message);
-
-      // Rate limiting for position updates
-      if (msg.type === 'position') {
-        const now = Date.now();
-        const rateInfo = this.rateLimits.get(sender.id);
-
-        if (rateInfo) {
-          const elapsed = now - rateInfo.lastMessageTime;
-
-          if (elapsed < RATE_LIMIT.MIN_INTERVAL_MS) {
-            rateInfo.violations++;
-            if (rateInfo.violations === RATE_LIMIT.MAX_VIOLATIONS) {
-              console.warn(`Rate limit violations from ${sender.id}: ${rateInfo.violations}`);
-            }
-            // Drop the message if sent too fast
-            return;
-          }
-
-          // Decrement violations on valid message timing
-          if (rateInfo.violations > 0) {
-            rateInfo.violations = Math.max(0, rateInfo.violations - 1);
-          }
-          rateInfo.lastMessageTime = now;
-        }
+      const msg = parseClientMessage(JSON.parse(message));
+      if (!msg) {
+        sender.send(serialize({ type: 'error', message: 'Invalid message.' }));
+        return;
       }
 
       if (msg.type === 'position') {
-        const validated = validatePositionData(msg.data);
-        if (!validated) {
-          console.warn('Invalid position data from', sender.id);
-          return;
-        }
-
-        const existing = this.planes.get(sender.id);
-        const plane: PlaneState = {
-          ...validated,
-          id: sender.id,
-          color: existing?.color || '#888',
-          name: existing?.name,
-        } as PlaneState;
-        this.planes.set(sender.id, plane);
+        const plane: PlaneSnapshot = { ...state.plane, ...msg.data };
+        sender.setState({ plane, rate: rate.state });
 
         // Broadcast updated state to all OTHER clients (exclude sender)
         this.room.broadcast(
-          JSON.stringify({
-            type: 'sync',
-            planes: Object.fromEntries(this.planes),
-          }),
+          serialize({ type: 'playerUpdated', player: plane }),
           [sender.id]
         );
+        return;
       }
 
       if (msg.type === 'teleport') {
-        const existing = this.planes.get(sender.id);
-        if (existing && typeof msg.data?.lat === 'number' && typeof msg.data?.lng === 'number') {
-          existing.lat = Math.max(LIMITS.LAT_MIN, Math.min(LIMITS.LAT_MAX, msg.data.lat));
-          existing.lng = Math.max(LIMITS.LNG_MIN, Math.min(LIMITS.LNG_MAX, msg.data.lng));
-          existing.altitude = 500;
-          existing.heading = 0;
-          existing.pitch = 0;
-          existing.roll = 0;
-          this.planes.set(sender.id, existing);
-        }
+        const plane: PlaneSnapshot = {
+          ...state.plane,
+          ...msg.data,
+          altitude: 500,
+          heading: 0,
+          pitch: 0,
+          roll: 0,
+        };
+        sender.setState({ plane, rate: rate.state });
+        this.room.broadcast(
+          serialize({ type: 'playerUpdated', player: plane }),
+          [sender.id]
+        );
+        return;
       }
 
       if (msg.type === 'setName') {
-        const existing = this.planes.get(sender.id);
-        if (existing && typeof msg.data?.name === 'string') {
-          existing.name = msg.data.name.slice(0, 20); // Limit name length
-          this.planes.set(sender.id, existing);
-        }
+        const plane: PlaneSnapshot = { ...state.plane, name: msg.data.name };
+        sender.setState({ plane, rate: rate.state });
+        this.room.broadcast(
+          serialize({ type: 'playerUpdated', player: plane }),
+          [sender.id]
+        );
       }
-    } catch (e) {
-      console.error('Failed to parse message:', e);
+    } catch {
+      sender.send(serialize({ type: 'error', message: 'Invalid JSON.' }));
     }
   }
 
-  onClose(conn: Party.Connection) {
-    this.planes.delete(conn.id);
-    this.rateLimits.delete(conn.id);
+  onClose(conn: Party.Connection<ConnectionProtocolState>) {
     this.room.broadcast(
-      JSON.stringify({
+      serialize({
         type: 'playerLeft',
         id: conn.id,
       })

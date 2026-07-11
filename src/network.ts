@@ -2,6 +2,10 @@ import PartySocket from 'partysocket';
 import { PARTYKIT_HOST, NETWORK } from './constants.js';
 import { updateConnectionStatus } from './ui.js';
 import type { PlaneState } from './plane.js';
+import {
+  parseServerMessage,
+  type ServerMessage,
+} from './multiplayer-protocol.js';
 
 // WebSocket readyState constants (not available in ES modules)
 const WS_OPEN = 1;
@@ -14,12 +18,7 @@ let hasEverConnected = false;
 /**
  * Welcome message from server
  */
-export interface WelcomeMessage {
-  type: 'welcome';
-  id: string;
-  color: string;
-  planes?: Record<string, PlaneState>;
-}
+export type WelcomeMessage = Extract<ServerMessage, { type: 'welcome' }>;
 
 /**
  * Player joined message
@@ -51,6 +50,7 @@ export interface SyncMessage {
 export interface NetworkCallbacks {
   onWelcome: (msg: WelcomeMessage) => void;
   onSync: (planes: Record<string, PlaneState>) => void;
+  onPlayerUpdated: (player: PlaneState) => void;
   onPlayerLeft: (id: string) => void;
   onPlayerJoined: (player: PlaneState) => void;
   onDisconnect?: () => void;
@@ -94,20 +94,30 @@ export function createConnection(roomId: string, callbacks: NetworkCallbacks): C
 
   socket.addEventListener('message', (event) => {
     try {
-      const msg = JSON.parse(event.data as string);
+      const msg = parseServerMessage(JSON.parse(event.data as string));
+      if (!msg) {
+        console.warn('Ignoring invalid server message');
+        return;
+      }
 
       switch (msg.type) {
         case 'welcome':
-          callbacks.onWelcome(msg as WelcomeMessage);
+          callbacks.onWelcome(msg);
           break;
         case 'sync':
-          callbacks.onSync((msg as SyncMessage).planes);
+          callbacks.onSync(msg.planes);
           break;
         case 'playerJoined':
-          callbacks.onPlayerJoined((msg as PlayerJoinedMessage).player);
+          callbacks.onPlayerJoined(msg.player);
+          break;
+        case 'playerUpdated':
+          callbacks.onPlayerUpdated(msg.player);
           break;
         case 'playerLeft':
-          callbacks.onPlayerLeft((msg as PlayerLeftMessage).id);
+          callbacks.onPlayerLeft(msg.id);
+          break;
+        case 'error':
+          console.warn('Multiplayer server:', msg.message);
           break;
       }
     } catch (e) {
