@@ -16,10 +16,20 @@ import type { WorkerResponse, TileBounds, ParsedFeature } from './types.js';
 import { renderTileTextureToCanvas } from './offscreen-renderer.js';
 import { getWrappedTileNeighborhood } from '../tile-coordinates.js';
 import { parseVectorTileLayers } from './mvt-layer-parser.js';
+import {
+  copyFeatureWithProperties,
+  ParsedSourceTileCache,
+  type ParsedSourceKind,
+} from './parsed-source-tile.js';
 
 const BASE_LAYER_NAMES = ['land', 'land_use', 'land_cover', 'water'] as const;
 const WATER_LAYER_NAMES = ['water'] as const;
 const TRANSPORTATION_LAYER_NAMES = ['segment'] as const;
+const PARSED_SOURCE_TILE_CACHE_SIZE = 64;
+
+// Each worker owns a small cache. Fulfilled empty arrays also provide bounded
+// negative caching for missing source tiles; rejected parses are not retained.
+const parsedSourceTiles = new ParsedSourceTileCache(PARSED_SOURCE_TILE_CACHE_SIZE);
 
 // PMTiles sources (lazy initialized)
 let basePMTiles: PMTiles | null = null;
@@ -212,13 +222,33 @@ async function fetchTileData(
   x: number,
   y: number
 ): Promise<ArrayBuffer | null> {
-  try {
-    const result = await pmtiles.getZxy(z, x, y);
-    return result?.data ?? null;
-  } catch (error) {
-    console.warn(`[FullPipelineWorker] Failed to fetch tile ${z}/${x}/${y}:`, error);
-    return null;
-  }
+  const result = await pmtiles.getZxy(z, x, y);
+  return result?.data ?? null;
+}
+
+async function loadParsedSourceTile(
+  pmtiles: PMTiles,
+  sourceKind: ParsedSourceKind,
+  sourceIdentity: string,
+  tile: SourceTileCoordinates,
+  selectedLayers: readonly string[] | null
+): Promise<ParsedFeature[]> {
+  return parsedSourceTiles.load(
+    {
+      sourceKind,
+      sourceIdentity,
+      ...tile,
+      selectedLayers,
+    },
+    () => fetchTileData(pmtiles, tile.z, tile.x, tile.y),
+    data => parseMVT(data, tile.x, tile.y, tile.z, selectedLayers),
+    error => {
+      console.warn(
+        `[FullPipelineWorker] Failed to load ${sourceKind} tile ${tile.z}/${tile.x}/${tile.y}:`,
+        error
+      );
+    }
+  );
 }
 
 // Lower zoom levels to check for water polygons (highest detail first)
@@ -239,32 +269,32 @@ async function loadLowerZoomWater(
   tileY: number,
   tileZ: number
 ): Promise<ParsedFeature[]> {
-  if (!basePMTiles || baseMaxZoom === null) return [];
+  if (!basePMTiles || baseMaxZoom === null || !basePMTilesUrl) return [];
+  const source = basePMTiles;
+  const sourceIdentity = basePMTilesUrl;
+  const sourceMaxZoom = baseMaxZoom;
 
   const waterPolygons: ParsedFeature[] = [];
   const seenAreas = new Set<string>(); // Track polygons to avoid duplicates
-  const detailSourceZoom = Math.min(tileZ, baseMaxZoom);
+  const detailSourceZoom = Math.min(tileZ, sourceMaxZoom);
 
   for (const lowerZoom of WATER_POLYGON_ZOOM_LEVELS) {
     // The detail source tile is loaded separately with all layers, including water.
     // Only fetch genuinely lower zooms here to avoid duplicate parsing/features.
     if (lowerZoom >= detailSourceZoom) continue;
-    if (lowerZoom > baseMaxZoom) continue; // Never request beyond the source's advertised range
+    if (lowerZoom > sourceMaxZoom) continue; // Never request beyond the source's advertised range
 
     // Calculate which lower-zoom tile contains this tile
     const scale = Math.pow(2, tileZ - lowerZoom);
     const lowerX = Math.floor(tileX / scale);
     const lowerY = Math.floor(tileY / scale);
 
-    const data = await fetchTileData(basePMTiles, lowerZoom, lowerX, lowerY);
-    if (!data) continue;
-
     // Only extract water layer polygons
-    const allFeatures = parseMVT(
-      data,
-      lowerX,
-      lowerY,
-      lowerZoom,
+    const allFeatures = await loadParsedSourceTile(
+      source,
+      'lower-water',
+      sourceIdentity,
+      { x: lowerX, y: lowerY, z: lowerZoom },
       WATER_LAYER_NAMES
     );
 
@@ -285,13 +315,11 @@ async function loadLowerZoomWater(
       if (seenAreas.has(areaKey)) continue;
       seenAreas.add(areaKey);
 
-      // Mark as coming from lower zoom
-      feature.properties = {
-        ...feature.properties,
+      // Mark a copy as coming from lower zoom; never mutate the cached feature.
+      waterPolygons.push(copyFeatureWithProperties(feature, {
         _fromLowerZoom: true,
-        _sourceZoom: lowerZoom
-      };
-      waterPolygons.push(feature);
+        _sourceZoom: lowerZoom,
+      }));
     }
 
     // Bail out early if we have sufficient water polygon coverage
@@ -314,7 +342,10 @@ async function loadBaseFeatures(
   tileZ: number,
   includeNeighbors: boolean
 ): Promise<ParsedFeature[]> {
-  if (!basePMTiles || baseMaxZoom === null) return [];
+  if (!basePMTiles || baseMaxZoom === null || !basePMTilesUrl) return [];
+  const source = basePMTiles;
+  const sourceIdentity = basePMTilesUrl;
+  const sourceMaxZoom = baseMaxZoom;
 
   // Start all fetches in parallel
   const promises: Promise<ParsedFeature[]>[] = [];
@@ -326,10 +357,13 @@ async function loadBaseFeatures(
 
     scheduledBaseTiles.add(key);
     promises.push(
-      fetchTileData(basePMTiles!, tile.z, tile.x, tile.y).then(data => {
-        if (!data) return [];
-        return parseMVT(data, tile.x, tile.y, tile.z, BASE_LAYER_NAMES);
-      })
+      loadParsedSourceTile(
+        source,
+        'base',
+        sourceIdentity,
+        tile,
+        BASE_LAYER_NAMES
+      )
     );
   };
 
@@ -337,13 +371,13 @@ async function loadBaseFeatures(
   promises.push(loadLowerZoomWater(tileX, tileY, tileZ));
 
   // 2. Load lower-zoom base features for land_cover background (z12)
-  const lowerZoom = Math.min(baseMaxZoom, Math.max(10, tileZ - 2));
+  const lowerZoom = Math.min(sourceMaxZoom, Math.max(10, tileZ - 2));
   if (lowerZoom < tileZ) {
     scheduleBaseTile(mapTileToSourceZoom(tileX, tileY, tileZ, lowerZoom));
   }
 
   // 3. Load the highest-detail source tile that covers the center tile
-  scheduleBaseTile(mapTileToSourceZoom(tileX, tileY, tileZ, baseMaxZoom));
+  scheduleBaseTile(mapTileToSourceZoom(tileX, tileY, tileZ, sourceMaxZoom));
 
   // 4. Load neighbor tiles if requested
   if (includeNeighbors) {
@@ -357,7 +391,7 @@ async function loadBaseFeatures(
 
       // Several requested neighbors can map to the same parent source tile.
       // scheduleBaseTile deduplicates those requests before fetching.
-      scheduleBaseTile(mapTileToSourceZoom(x, y, tileZ, baseMaxZoom));
+      scheduleBaseTile(mapTileToSourceZoom(x, y, tileZ, sourceMaxZoom));
     }
   }
 
@@ -381,7 +415,11 @@ async function loadTransportationFeatures(
   tileY: number,
   tileZ: number
 ): Promise<ParsedFeature[]> {
-  if (!transportationPMTiles || transportationMaxZoom === null) return [];
+  if (
+    !transportationPMTiles ||
+    transportationMaxZoom === null ||
+    !transportationPMTilesUrl
+  ) return [];
 
   const sourceTile = mapTileToSourceZoom(
     tileX,
@@ -390,19 +428,11 @@ async function loadTransportationFeatures(
     transportationMaxZoom
   );
 
-  const data = await fetchTileData(
+  return loadParsedSourceTile(
     transportationPMTiles,
-    sourceTile.z,
-    sourceTile.x,
-    sourceTile.y
-  );
-  if (!data) return [];
-
-  return parseMVT(
-    data,
-    sourceTile.x,
-    sourceTile.y,
-    sourceTile.z,
+    'transportation',
+    transportationPMTilesUrl,
+    sourceTile,
     TRANSPORTATION_LAYER_NAMES
   );
 }
