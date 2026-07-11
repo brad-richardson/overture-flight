@@ -134,21 +134,23 @@ const ROAD_PRIORITY: Record<string, number> = {
 /**
  * Airport pavement fill color (aprons, helipads) — tarmac grey.
  */
-const AIRPORT_PAVEMENT_COLOR = 0x5e6167;
+const AIRPORT_PAVEMENT_COLOR = 0x54565c;
 
 /**
  * Airport line styles by Overture infrastructure class. Widths are real-world
- * meters and scale with the tile's meters-per-pixel like roads.
+ * meters and scale with the tile's meters-per-pixel like roads. Colours are
+ * deliberately spread so the landing strips read against the darker taxi
+ * network and apron: runways are light concrete, taxiways mid grey.
  */
 interface AirportLineStyle {
   color: number;
   widthMeters: number;
 }
 const AIRPORT_LINE_STYLES: Record<string, AirportLineStyle> = {
-  runway: { color: 0x8b8e95, widthMeters: 45 },
-  stopway: { color: 0x787b82, widthMeters: 38 },
-  taxiway: { color: 0x70737a, widthMeters: 22 },
-  taxilane: { color: 0x656872, widthMeters: 14 },
+  runway: { color: 0xc4c8d0, widthMeters: 45 },
+  stopway: { color: 0x9a8f7e, widthMeters: 38 },
+  taxiway: { color: 0x74777e, widthMeters: 22 },
+  taxilane: { color: 0x676a72, widthMeters: 14 },
 };
 
 /** Draw order for airport lines: prominent runways paint last (on top). */
