@@ -50,7 +50,7 @@ import { initFeatureModal, showFeatureModal } from './feature-modal.js';
 import { setPlayerTarget, updateInterpolation, getInterpolatedState, removeInterpolatedPlayer } from './interpolation.js';
 import * as THREE from 'three';
 import { cancelWorkerTasksForWorldChange } from './workers/index.js';
-import { isCurrentGenerationSlot, ownsGenerationSlot } from './generation-guard.js';
+import { TileLifecycleCoordinator } from './tile-lifecycle-coordinator.js';
 
 // Tile meshes type
 interface TileMeshes {
@@ -278,14 +278,9 @@ const players = new Map<string, PlaneState>();
 // Tile meshes tracking
 const tileMeshes = new Map<string, TileMeshes>(); // key -> { buildings: Group, base: Group, transportation: Group }
 
-interface TileLoadToken {
-  generation: number;
-}
-
-// Each load has an identity as well as a location generation. The identity check
-// prevents an older promise's cleanup from deleting a newer load for the same key.
-const loadingTiles = new Map<string, TileLoadToken>();
-let tileGeneration = 0;
+// The lifecycle coordinator keeps generation validity, exact request ownership,
+// and outstanding work separate so stale cleanup cannot release a newer load.
+const tileLifecycle = new TileLifecycleCoordinator<string>();
 let teleportInFlightGeneration: number | null = null;
 const TELEPORT_ELEVATION_TIMEOUT_MS = 5_000;
 
@@ -317,14 +312,6 @@ function disposeTileMeshes(meshes: TileMeshes): void {
   if (meshes.transportation) removeTransportationGroup(meshes.transportation);
   if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
   if (meshes.trees) removeTreesGroup(meshes.trees);
-}
-
-function ownsLoadingSlot(key: string, token: TileLoadToken): boolean {
-  return ownsGenerationSlot(loadingTiles, key, token);
-}
-
-function isCurrentTileLoad(key: string, token: TileLoadToken): boolean {
-  return isCurrentGenerationSlot(loadingTiles, key, token, tileGeneration);
 }
 
 async function guardSceneGroup(
@@ -422,7 +409,7 @@ async function updateTiles(
   // Load new tiles
   for (const tile of tilesToLoad) {
     // Skip if already loaded or currently loading
-    if (tileMeshes.has(tile.key) || loadingTiles.has(tile.key)) {
+    if (tileMeshes.has(tile.key) || tileLifecycle.hasClaim(tile.key)) {
       continue;
     }
 
@@ -432,8 +419,10 @@ async function updateTiles(
       continue;
     }
 
-    const loadToken: TileLoadToken = { generation: tileGeneration };
-    loadingTiles.set(tile.key, loadToken);
+    const loadToken = tileLifecycle.claim(tile.key);
+    if (!loadToken) {
+      continue;
+    }
 
     // Load layers in parallel
     // Wrap tree creation to isolate failures - trees are optional, other layers are critical
@@ -452,9 +441,9 @@ async function updateTiles(
       tile.x,
       tile.y,
       tile.z,
-      () => isCurrentTileLoad(tile.key, loadToken)
+      () => tileLifecycle.isCurrent(loadToken)
     ).then(meshes => {
-      if (!isCurrentTileLoad(tile.key, loadToken)) {
+      if (!tileLifecycle.isCurrent(loadToken)) {
         // A teleport changed the scene origin while this work was in flight.
         // Layer factories already attached these groups, so fully remove them.
         disposeTileMeshes(meshes);
@@ -469,7 +458,7 @@ async function updateTiles(
       const meshesRef = meshes;
       void safeCreateTrees().then(treesGroup => {
         if (
-          loadToken.generation === tileGeneration &&
+          loadToken.generation === tileLifecycle.generation &&
           tileMeshes.get(tile.key) === meshesRef &&
           treesGroup
         ) {
@@ -481,17 +470,15 @@ async function updateTiles(
     }).catch(e => {
       // Only the owner may clean key-scoped registrations. This remains true for
       // a superseded generation until its finally block releases the slot.
-      if (ownsLoadingSlot(tile.key, loadToken)) {
+      if (tileLifecycle.owns(loadToken)) {
         unregisterTileForLazyPicking(`ground-${tile.key}`);
       }
-      if (loadToken.generation === tileGeneration) {
+      if (loadToken.generation === tileLifecycle.generation) {
         console.warn(`Failed to load tile ${tile.key}:`, e);
       }
     }).finally(() => {
       // Never allow an older completion to clear a newer load for the same key.
-      if (ownsLoadingSlot(tile.key, loadToken)) {
-        loadingTiles.delete(tile.key);
-      }
+      tileLifecycle.release(loadToken);
     });
   }
 
@@ -787,7 +774,7 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
   // Invalidate all scene work before changing the origin or removing active tiles.
   // In-flight jobs retain their slots until they settle, preventing the same key
   // from being started twice against different origins.
-  const teleportGeneration = ++tileGeneration;
+  const teleportGeneration = tileLifecycle.invalidate({ retainClaims: true });
   teleportInFlightGeneration = teleportGeneration;
 
   try {
@@ -848,7 +835,7 @@ async function completeTeleport(
 
   // A newer teleport owns the origin now. Do not move the plane or publish the
   // superseded destination after this asynchronous preload completes.
-  if (teleportGeneration !== tileGeneration) {
+  if (teleportGeneration !== tileLifecycle.generation) {
     return;
   }
 
@@ -864,7 +851,7 @@ async function completeTeleport(
       getTerrainHeightAsync(lng, lat),
       TELEPORT_ELEVATION_TIMEOUT_MS
     );
-    if (teleportGeneration !== tileGeneration) {
+    if (teleportGeneration !== tileLifecycle.generation) {
       return;
     }
     if (terrainResult.status === 'fulfilled') {
@@ -884,7 +871,7 @@ async function completeTeleport(
     }
   }
 
-  if (teleportGeneration === tileGeneration && connection) {
+  if (teleportGeneration === tileLifecycle.generation && connection) {
     connection.sendTeleport(lat, lng);
   }
 }
