@@ -176,6 +176,93 @@ function getBuildingHeight(props: BuildingFeatureInput['properties'], defaultHei
   if (typeof props.num_floors === 'number' && props.num_floors > 0) return props.num_floors * 3;
   return defaultHeight;
 }
+
+// A building_part whose base sits at or below this height (meters) is treated as
+// reaching the ground, so its parent `building` outline can stay skipped.
+const GROUND_EPS = 0.5;
+
+interface BuildingPartInfo {
+  /** Representative point (lng/lat) of the part footprint. */
+  cx: number;
+  cy: number;
+  /** Elevation of the part base above ground; 0 when it reaches the ground. */
+  minHeight: number;
+}
+
+function getOuterRings(feature: BuildingFeatureInput): number[][][] {
+  if (feature.type === 'Polygon') {
+    const poly = feature.coordinates as number[][][];
+    return poly[0] ? [poly[0]] : [];
+  }
+  const multi = feature.coordinates as number[][][][];
+  const rings: number[][][] = [];
+  for (const poly of multi) if (poly[0]) rings.push(poly[0]);
+  return rings;
+}
+
+/** Collect footprint centroid + base height for every building_part feature. */
+function collectBuildingPartInfos(features: BuildingFeatureInput[]): BuildingPartInfo[] {
+  const infos: BuildingPartInfo[] = [];
+  for (const f of features) {
+    if (f.layer !== 'building_part') continue;
+    let sx = 0, sy = 0, count = 0;
+    for (const ring of getOuterRings(f)) {
+      for (const coord of ring) { sx += coord[0]; sy += coord[1]; count++; }
+    }
+    if (count === 0) continue;
+    const minHeight = typeof f.properties.min_height === 'number' && f.properties.min_height > 0
+      ? f.properties.min_height
+      : 0;
+    infos.push({ cx: sx / count, cy: sy / count, minHeight });
+  }
+  return infos;
+}
+
+/** Ray-casting point-in-polygon against a single ring (lng/lat). */
+function pointInRing(lng: number, lat: number, ring: number[][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    if (((yi > lat) !== (yj > lat)) && (lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/**
+ * Decide how to render the outline of a `has_parts` building. Overture models
+ * some landmarks (bell towers, domes, spires) as a `has_parts` building outline
+ * plus only the FLOATING upper `building_part`s, with no ground-level part.
+ * Skipping the outline then drops the entire shaft and leaves a slab floating in
+ * the air (e.g. Giotto's Campanile: an 80-84.75m belfry over an 85m tower). When
+ * a part already reaches the ground (e.g. the Empire State Building) the parts
+ * describe the full massing, so the outline is correctly skipped to preserve
+ * their detail.
+ *
+ * Returns the height to extrude the outline to (ground -> lowest floating part
+ * base), or null to skip the outline as before.
+ */
+function computeUnsupportedShaftTop(
+  building: BuildingFeatureInput,
+  partInfos: BuildingPartInfo[]
+): number | null {
+  const rings = getOuterRings(building);
+  if (rings.length === 0) return null;
+  let lowestFloatingBase = Infinity;
+  for (const part of partInfos) {
+    let inside = false;
+    for (const ring of rings) {
+      if (pointInRing(part.cx, part.cy, ring)) { inside = true; break; }
+    }
+    if (!inside) continue;
+    // A part reaching the ground means the parts cover the base: keep skipping.
+    if (part.minHeight <= GROUND_EPS) return null;
+    lowestFloatingBase = Math.min(lowestFloatingBase, part.minHeight);
+  }
+  return Number.isFinite(lowestFloatingBase) ? lowestFloatingBase : null;
+}
 function getBuildingColor(feature: BuildingFeatureInput): number {
   return getColor({
     type: feature.type,
@@ -434,13 +521,33 @@ export async function buildBuildingGeometry(payload: CreateBuildingGeometryPaylo
   let buildingsProcessed = 0;
   let buildingsSkipped = 0;
 
+  const partInfos = collectBuildingPartInfos(features);
+
   for (let i = 0; i < features.length; i++) {
     const feature = features[i];
     if (feature.properties.is_underground) { buildingsSkipped++; continue; }
-    if (feature.properties.has_parts === true) { buildingsSkipped++; continue; }
+
+    let height = getBuildingHeight(feature.properties, defaultHeight);
+    let minHeight = typeof feature.properties.min_height === 'number' && feature.properties.min_height > 0
+      ? feature.properties.min_height
+      : 0;
+
+    if (feature.properties.has_parts === true) {
+      // Render the outline as a ground-up shaft only when its parts float with no
+      // ground coverage; otherwise keep skipping so the parts carry the massing.
+      const shaftTop = computeUnsupportedShaftTop(feature, partInfos);
+      if (shaftTop === null) { buildingsSkipped++; continue; }
+      height = shaftTop;
+      minHeight = 0;
+    } else if (minHeight > 0 && height <= minHeight) {
+      // Overture encodes `height` as the absolute top of a part above ground and
+      // `min_height` as its base. A missing/degenerate height would extrude the
+      // part inverted into a thin slab floating at min_height; give it a positive
+      // extent above its base instead.
+      height = minHeight + defaultHeight;
+    }
+
     const polygons = feature.type === 'Polygon' ? [feature.coordinates as number[][][]] : feature.coordinates as number[][][][];
-    const height = getBuildingHeight(feature.properties, defaultHeight);
-    const minHeight = typeof feature.properties.min_height === 'number' ? feature.properties.min_height : 0;
     const color = getBuildingColor(feature);
     const category = getBuildingCategory(feature);
     const seed = generateSeed(feature);
