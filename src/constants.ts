@@ -64,9 +64,8 @@ export const CAMERA: CameraConfig = {
 };
 
 // Network constants
-// Note: Client UPDATE_RATE (50ms) must be >= server rate limit (30ms in party/index.ts)
-// to avoid messages being dropped. Server limit is intentionally lower to allow
-// for network jitter while still protecting against flooding attacks.
+// The client sends at 20Hz. Server-side limits retain modest headroom above
+// this cadence for control messages and network jitter.
 export interface NetworkConfig {
   UPDATE_RATE: number;
   INTERPOLATION_SPEED: number;
@@ -204,7 +203,6 @@ export interface WorkersConfig {
   GEOMETRY_ENABLED: boolean;      // Enable/disable geometry worker creation
   MVT_ENABLED: boolean;           // Enable/disable MVT parsing worker (uses zero-copy ArrayBuffer transfer)
   ELEVATION_ENABLED: boolean;     // Enable/disable elevation decoding worker
-  FULL_PIPELINE_ENABLED: boolean; // Enable/disable full pipeline workers (fetch+parse+render in worker)
   BUILDING_GEOMETRY_ENABLED: boolean; // Enable/disable building geometry workers (extrusion in worker)
   TOTAL_BUDGET: number;           // Total workers across all pools (0 = auto based on device)
 }
@@ -215,7 +213,6 @@ export const WORKERS: WorkersConfig = {
   GEOMETRY_ENABLED: true,         // Geometry workers: Always enabled (uses zero-copy ArrayBuffer transfer)
   MVT_ENABLED: true,              // MVT parsing workers: Always enabled
   ELEVATION_ENABLED: true,        // Elevation workers: Always enabled
-  FULL_PIPELINE_ENABLED: import.meta.env.VITE_FULL_PIPELINE_WORKERS !== 'false', // Full pipeline workers: Enabled by default
   BUILDING_GEOMETRY_ENABLED: true, // Building geometry workers: Always enabled
   TOTAL_BUDGET: Number.isFinite(workerBudgetOverride) ? Math.max(0, workerBudgetOverride) : 0,
 };
@@ -276,18 +273,6 @@ export interface ProfilingConfig {
 export const PROFILING: ProfilingConfig = {
   ENABLED: import.meta.env.VITE_PROFILING === 'true',
   VERBOSE: import.meta.env.VITE_PROFILING_VERBOSE === 'true',
-};
-
-// Process chaining optimization settings
-// Controls how tile loading is sequenced for better initial load performance
-export interface ProcessChainingConfig {
-  DEFER_LOW_ZOOM_WATER: boolean;  // Defer z8/z6 water loading to background (keep z10 in critical path)
-  PRIORITIZE_CENTER_TILE: boolean; // Load center tile before neighbors
-}
-
-export const PROCESS_CHAINING: ProcessChainingConfig = {
-  DEFER_LOW_ZOOM_WATER: true,     // Skip z8/z6 initially, load in background (reduces initial requests ~30%)
-  PRIORITIZE_CENTER_TILE: true,   // Center tile gets processed first
 };
 
 // IndexedDB persistent texture caching

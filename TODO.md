@@ -14,20 +14,20 @@ The flight simulator has evolved from the original MapLibre-based design to a fu
 
 ### Networking & Server
 
-- [ ] Add rate limiting protection on PartyKit server
+- [x] Add validated, bounded messages and rate limiting protection on the PartyKit server
 - [ ] Only send position updates if position actually changed
-- [ ] Add connection error handling UI (show reconnecting status)
+- [x] Add connection status UI for online, offline, and reconnecting states
 
 ### Collision Detection
 
-- [ ] Add building collision detection using Three.js raycasting
-- [ ] Add brief invulnerability period after crash reset
-- [ ] Add collision prediction for fast-moving planes
+- [x] Add indexed building collision detection using swept bounds
+- [x] Suppress repeat building collisions after respawn until the plane is clear
+- [x] Sweep between frames to prevent fast-moving planes tunnelling through buildings
 
 ### UI Improvements
 
 - [ ] Add geocoding rate limiting for location search
-- [ ] Add coordinate validation for teleport locations
+- [x] Add coordinate validation and normalization for teleport locations
 - [ ] Add "random location" button
 - [ ] Add minimap showing nearby players
 - [ ] Add player name labels above planes
@@ -53,9 +53,9 @@ The flight simulator has evolved from the original MapLibre-based design to a fu
 
 ### Deployment
 
-- [ ] Deploy PartyKit (`npx partykit deploy`)
-- [ ] Configure production PartyKit URL via VITE_PARTYKIT_HOST
-- [ ] Deploy frontend to Vercel/Netlify
+- [x] Deploy PartyKit and configure its production host
+- [x] Configure production `VITE_PARTYKIT_HOST` in the deployment workflow
+- [x] Deploy the frontend to GitHub Pages from `main`
 - [ ] Test multiplayer across different networks
 - [ ] Set up custom domain (optional)
 
