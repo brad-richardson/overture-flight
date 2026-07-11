@@ -177,7 +177,7 @@ export const GROUND_TEXTURE: GroundTextureConfig = {
 // Helps avoid "edge of world" when flying
 export interface ExpandedTerrainConfig {
   ENABLED: boolean;               // Enable/disable expanded terrain loading
-  TILE_RADIUS: number;            // Radius for expanded terrain (4 = 9x9 grid total)
+  TILE_RADIUS: number;            // Radius for expanded terrain outer ring (5 = 11x11 grid on desktop)
   CORE_RADIUS: number;            // Core radius with buildings (1 = 3x3 grid)
   MAX_CONCURRENT: number;         // Max expanded tiles to process at once
   UNLOAD_DISTANCE: number;        // Chebyshev distance for unloading expanded tiles
@@ -185,17 +185,22 @@ export interface ExpandedTerrainConfig {
   TEXTURE_SIZE: number;           // Texture resolution for expanded tiles
 }
 
+// Desktop ground/terrain reaches one ring further out (radius 5, an 11x11 area)
+// to reduce "edge of world" now that texture processing is much cheaper. Mobile
+// stays at the proven radius 4 (its active/memory budget is tighter). New loads
+// are gated on >=30fps with MAX_CONCURRENT 1, so expansion backs off under load;
+// buildings stay at CORE_RADIUS and are unaffected.
+const EXPANDED_TILE_RADIUS = IS_MOBILE ? 4 : 5;
 export const EXPANDED_TERRAIN: ExpandedTerrainConfig = {
   ENABLED: true,
-  // Ground/terrain reaches one ring further out (radius 4 -> 5, an 11x11 area)
-  // to reduce "edge of world" now that texture processing is much cheaper.
-  // Expansion is gated on >=30fps with MAX_CONCURRENT 1, so it backs off under
-  // load; buildings stay at CORE_RADIUS and are unaffected.
-  TILE_RADIUS: 5,
+  TILE_RADIUS: EXPANDED_TILE_RADIUS,
   CORE_RADIUS: 1,
   MAX_CONCURRENT: 1,
-  UNLOAD_DISTANCE: 6, // keep a one-ring hysteresis margin beyond TILE_RADIUS
-  CACHE_MAX_SIZE: IS_MOBILE ? 36 : 72, // hold the larger ring without texture churn
+  UNLOAD_DISTANCE: EXPANDED_TILE_RADIUS + 1, // one-ring hysteresis beyond TILE_RADIUS
+  // Cover the full active ring so a freshly loaded tile is never evicted then
+  // re-uploaded: desktop ring 5 = 11^2 - 3^2 = 112 tiles. Mobile ring 4 = 72,
+  // and its cache stays at the shipping value.
+  CACHE_MAX_SIZE: IS_MOBILE ? 24 : 128,
   TEXTURE_SIZE: IS_MOBILE ? 256 : 512,
 };
 
