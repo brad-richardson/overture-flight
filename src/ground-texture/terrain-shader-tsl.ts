@@ -9,6 +9,7 @@
  */
 
 import * as THREE from 'three';
+import { getHalfFloatElevationData } from './terrain-derived-data.js';
 
 // WebGPU module types (dynamically imported)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -223,12 +224,8 @@ export function createElevationDataTextureWebGPU(
   heights: Float32Array,
   size: number
 ): THREE.DataTexture {
-  // Convert Float32 to Float16 for wider WebGPU compatibility
-  // HalfFloatType is universally supported with linear filtering
-  const float16Data = new Uint16Array(heights.length);
-  for (let i = 0; i < heights.length; i++) {
-    float16Data[i] = toHalf(heights[i]);
-  }
+  // Reuse the conversion across all ground tiles backed by the same elevation tile.
+  const float16Data = getHalfFloatElevationData(heights);
 
   const texture = new THREE.DataTexture(
     float16Data,
@@ -246,49 +243,4 @@ export function createElevationDataTextureWebGPU(
   texture.needsUpdate = true;
 
   return texture;
-}
-
-/**
- * Convert a 32-bit float to a 16-bit float (half precision)
- * IEEE 754 half-precision format
- */
-function toHalf(value: number): number {
-  const floatView = new Float32Array(1);
-  const int32View = new Int32Array(floatView.buffer);
-
-  floatView[0] = value;
-  const x = int32View[0];
-
-  // Extract components
-  const sign = (x >> 31) & 0x1;
-  let exponent = (x >> 23) & 0xff;
-  let mantissa = x & 0x7fffff;
-
-  // Handle special cases
-  if (exponent === 0xff) {
-    // Inf or NaN
-    return (sign << 15) | 0x7c00 | (mantissa ? 0x200 : 0);
-  }
-
-  if (exponent === 0) {
-    // Zero or denormalized
-    return sign << 15;
-  }
-
-  // Rebias exponent from float32 (bias 127) to float16 (bias 15)
-  exponent = exponent - 127 + 15;
-
-  if (exponent >= 31) {
-    // Overflow to infinity
-    return (sign << 15) | 0x7c00;
-  }
-
-  if (exponent <= 0) {
-    // Underflow to zero
-    return sign << 15;
-  }
-
-  // Normal number
-  mantissa = mantissa >> 13;
-  return (sign << 15) | (exponent << 10) | mantissa;
 }

@@ -4,6 +4,7 @@ import { geoToWorld } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
 import { applyTerrainShader, createElevationDataTexture } from './terrain-shader.js';
 import { disposeTexture } from '../renderer/texture-disposal.js';
+import { getElevationRange } from './terrain-derived-data.js';
 
 // Type for material - can be standard or node-based
 type TerrainMaterialType = 'standard' | 'node';
@@ -343,26 +344,9 @@ export class TerrainQuad {
    * This prevents incorrect frustum culling when terrain is displaced
    */
   private expandBoundingSphere(heights: Float32Array, verticalExaggeration: number): void {
-    // Find min/max elevation (cannot use Math.max(...heights) - 65k items would overflow call stack)
-    // Skip NaN values which indicate missing elevation data
-    let minElevation = Infinity;
-    let maxElevation = -Infinity;
-    for (let i = 0; i < heights.length; i++) {
-      const h = heights[i];
-      if (!Number.isNaN(h)) {
-        if (h < minElevation) minElevation = h;
-        if (h > maxElevation) maxElevation = h;
-      }
-    }
-
-    // If all heights were NaN (no valid elevation data), use 0 as fallback
-    if (minElevation === Infinity || maxElevation === -Infinity) {
-      minElevation = 0;
-      maxElevation = 0;
-    }
-
-    minElevation *= verticalExaggeration;
-    maxElevation *= verticalExaggeration;
+    const elevationRange = getElevationRange(heights);
+    let minElevation = elevationRange.min * verticalExaggeration;
+    let maxElevation = elevationRange.max * verticalExaggeration;
 
     // Account for terrain skirts extending below the minimum elevation
     minElevation -= SKIRT_DEPTH;
