@@ -14,6 +14,7 @@ import { VectorTile } from '@mapbox/vector-tile';
 import Pbf from 'pbf';
 import type { WorkerResponse, TileBounds, ParsedFeature } from './types.js';
 import { renderTileTextureToCanvas } from './offscreen-renderer.js';
+import { getWrappedTileNeighborhood } from '../tile-coordinates.js';
 
 // PMTiles sources (lazy initialized)
 let basePMTiles: PMTiles | null = null;
@@ -351,17 +352,17 @@ async function loadBaseFeatures(
 
   // 4. Load neighbor tiles if requested
   if (includeNeighbors) {
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        if (dx === 0 && dy === 0) continue; // Skip center
+    for (const { x, y, dx, dy } of getWrappedTileNeighborhood(
+      tileX,
+      tileY,
+      tileZ,
+      1
+    )) {
+      if (dx === 0 && dy === 0) continue;
 
-        const nx = tileX + dx;
-        const ny = tileY + dy;
-
-        // Several requested neighbors can map to the same parent source tile.
-        // scheduleBaseTile deduplicates those requests before fetching.
-        scheduleBaseTile(mapTileToSourceZoom(nx, ny, tileZ, baseMaxZoom));
-      }
+      // Several requested neighbors can map to the same parent source tile.
+      // scheduleBaseTile deduplicates those requests before fetching.
+      scheduleBaseTile(mapTileToSourceZoom(x, y, tileZ, baseMaxZoom));
     }
   }
 

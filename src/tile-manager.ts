@@ -7,6 +7,11 @@ import { getOrigin } from './scene.js';
 import { getFetchSemaphore, TilePriority } from './semaphore.js';
 import { recordFetchTiming, mark, measure } from './profiling/tile-profiler.js';
 import { getMVTWorkerPool, compactFeatureToFeature } from './workers/index.js';
+import {
+  clampMercatorLatitude,
+  normalizeLongitude,
+  shortestLongitudeDelta,
+} from './geo.js';
 
 // Types
 export interface TileBounds {
@@ -282,11 +287,12 @@ export function mapTileToSourceZoom(
  */
 export function lngLatToTile(lng: number, lat: number, zoom: number): [number, number] {
   const n = Math.pow(2, zoom);
-  const rawX = Math.floor((lng + 180) / 360 * n);
+  const normalizedLng = normalizeLongitude(lng);
+  const rawX = Math.floor((normalizedLng + 180) / 360 * n);
   const x = ((rawX % n) + n) % n;
   // Web Mercator is finite only within this latitude range. Clamping keeps
   // callers at the poles from producing infinite/out-of-world tile rows.
-  const mercatorLat = Math.max(-85.05112878, Math.min(85.05112878, lat));
+  const mercatorLat = clampMercatorLatitude(lat);
   const latRad = mercatorLat * Math.PI / 180;
   const rawY = Math.floor((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2 * n);
   const y = Math.max(0, Math.min(n - 1, rawY));
@@ -311,10 +317,13 @@ export function tileToBounds(x: number, y: number, zoom: number): TileBounds {
 export function tileToWorldBounds(x: number, y: number, zoom: number): WorldBounds {
   const origin = getOrigin();
   const bounds = tileToBounds(x, y, zoom);
+  const metersPerLngDegree = metersPerDegreeLng(origin.lat);
+  const minX = shortestLongitudeDelta(origin.lng, bounds.west) * metersPerLngDegree;
+  const tileWidth = (bounds.east - bounds.west) * metersPerLngDegree;
 
   return {
-    minX: (bounds.west - origin.lng) * metersPerDegreeLng(origin.lat),
-    maxX: (bounds.east - origin.lng) * metersPerDegreeLng(origin.lat),
+    minX,
+    maxX: minX + tileWidth,
     minZ: -(bounds.north - origin.lat) * METERS_PER_DEGREE_LAT,
     maxZ: -(bounds.south - origin.lat) * METERS_PER_DEGREE_LAT
   };
@@ -725,7 +734,7 @@ export function clearDistantWaterPolygonCache(
 
     // Simple distance check
     const dLat = (tileLat - centerLat) * METERS_PER_DEGREE_LAT;
-    const dLng = (tileLng - centerLng) * metersPerDegreeLng(centerLat);
+    const dLng = shortestLongitudeDelta(centerLng, tileLng) * metersPerDegreeLng(centerLat);
     const distance = Math.sqrt(dLat * dLat + dLng * dLng);
 
     if (distance > maxDistanceMeters) {

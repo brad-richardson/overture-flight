@@ -5,7 +5,9 @@ import {
   mapTileToSourceZoom,
   tileToBounds,
   type ParsedFeature,
+  tileToWorldBounds,
 } from '../src/tile-manager.js';
+import { getOrigin, setOrigin } from '../src/scene.js';
 
 function polygonAt(lng: number, lat: number, type: 'Polygon' | 'MultiPolygon'): ParsedFeature {
   const ring = [
@@ -40,6 +42,22 @@ describe('tile coordinate mapping', () => {
     expect(lngLatToTile(-180, 90, 4)).toEqual([0, 0]);
     expect(lngLatToTile(180, -90, 4)).toEqual([0, 15]);
     expect(lngLatToTile(540, 0, 4)[0]).toBe(0);
+  });
+
+  it('keeps world bounds ordered at the antimeridian discontinuity', () => {
+    const originalOrigin = getOrigin();
+    try {
+      setOrigin(0, 0);
+      const farEdge = tileToWorldBounds(15, 8, 4);
+      expect(farEdge.maxX).toBeGreaterThan(farEdge.minX);
+
+      setOrigin(179.99, 0);
+      const wrappedEdge = tileToWorldBounds(0, 8, 4);
+      expect(wrappedEdge.minX).toBeGreaterThan(0);
+      expect(wrappedEdge.maxX).toBeGreaterThan(wrappedEdge.minX);
+    } finally {
+      setOrigin(originalOrigin.lng, originalOrigin.lat);
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin, updateSkySystem, getRenderer } from './scene.js';
+import { initScene, render, updatePlaneMesh, removePlaneMesh, setOrigin, getOrigin, updateSkySystem, getRenderer } from './scene.js';
 import {
   initControls,
   updatePlane,
@@ -51,6 +51,12 @@ import { setPlayerTarget, updateInterpolation, getInterpolatedState, removeInter
 import * as THREE from 'three';
 import { cancelWorkerTasksForWorldChange } from './workers/index.js';
 import { TileLifecycleCoordinator } from './tile-lifecycle-coordinator.js';
+import {
+  normalizeGeoCoordinates,
+  normalizeGeoState,
+  parseGeoCoordinateFields,
+  shouldRebaseLocalOrigin,
+} from './geo.js';
 
 // Tile meshes type
 interface TileMeshes {
@@ -75,6 +81,9 @@ const PLAYER_LIST_UPDATE_INTERVAL = 100; // 10 Hz - player list doesn't change t
 const MINIMAP_UPDATE_INTERVAL = 50; // 20 Hz - minimap needs slightly smoother updates
 const TILE_UPDATE_INTERVAL = 200; // Tile decisions only need to run at 5 Hz
 const TILE_CLEANUP_INTERVAL = 1000;
+// Keep local render coordinates small without rebuilding the world frequently.
+// At 20 km, Float32 scene coordinates still retain millimeter-scale precision.
+const FLOATING_ORIGIN_REBASE_THRESHOLD_METERS = 20_000;
 let lastTileUpdateTime = 0;
 let lastTileCleanupTime = 0;
 
@@ -90,15 +99,8 @@ function parseLocationFromHash(): { lat: number; lng: number } | null {
   const parts = hash.substring(1).split('/');
   if (parts.length !== 3) return null;
 
-  const lat = parseFloat(parts[1]);
-  const lng = parseFloat(parts[2]);
-
-  // Validate values (zoom is ignored, we always use z14)
-  if (isNaN(lat) || isNaN(lng)) return null;
-  if (lat < -90 || lat > 90) return null;
-  if (lng < -180 || lng > 180) return null;
-
-  return { lat, lng };
+  // Zoom is ignored; geographic input is normalized at the application edge.
+  return parseGeoCoordinateFields(parts[1], parts[2]);
 }
 
 /**
@@ -282,6 +284,7 @@ const tileMeshes = new Map<string, TileMeshes>(); // key -> { buildings: Group, 
 // and outstanding work separate so stale cleanup cannot release a newer load.
 const tileLifecycle = new TileLifecycleCoordinator<string>();
 let teleportInFlightGeneration: number | null = null;
+let isOriginRebaseInProgress = false;
 const TELEPORT_ELEVATION_TIMEOUT_MS = 5_000;
 
 type TimedResult<T> =
@@ -312,6 +315,51 @@ function disposeTileMeshes(meshes: TileMeshes): void {
   if (meshes.transportation) removeTransportationGroup(meshes.transportation);
   if (meshes.buildings) removeBuildingsGroup(meshes.buildings);
   if (meshes.trees) removeTreesGroup(meshes.trees);
+}
+
+/** Remove all resources whose geometry was built in the current local origin. */
+function clearOriginDependentWorld(): void {
+  for (const meshes of tileMeshes.values()) {
+    disposeTileMeshes(meshes);
+  }
+  tileMeshes.clear();
+  clearBuildingColliders();
+  clearAllGroundTiles();
+  clearAllExpandedTiles();
+  clearAllFeatures();
+}
+
+/**
+ * Recenter local render coordinates without changing or publishing plane state.
+ * This is synchronous so no frame can observe a new origin with old colliders.
+ */
+function maybeRebaseLocalOrigin(planeState: PlaneState): boolean {
+  if (teleportInFlightGeneration !== null || isOriginRebaseInProgress) return false;
+  if (!shouldRebaseLocalOrigin(
+    getOrigin(),
+    planeState,
+    FLOATING_ORIGIN_REBASE_THRESHOLD_METERS
+  )) {
+    return false;
+  }
+
+  isOriginRebaseInProgress = true;
+  try {
+    cancelWorkerTasksForWorldChange();
+    invalidateBuildingLoads();
+    tileLifecycle.invalidate({ retainClaims: true });
+    resetCollisionSweep();
+    setOrigin(planeState.lng, planeState.lat);
+    clearOriginDependentWorld();
+    resetCollisionSweep();
+
+    // Let the normal coordinator refill immediately around unchanged geo state.
+    lastTileUpdateTime = Number.NEGATIVE_INFINITY;
+    lastTileCleanupTime = Number.NEGATIVE_INFINITY;
+    return true;
+  } finally {
+    isOriginRebaseInProgress = false;
+  }
 }
 
 async function guardSceneGroup(
@@ -593,6 +641,10 @@ function gameLoop(time: number): void {
   // Get current state
   const planeState = getPlaneState();
 
+  // Recenter before collision conversion so the sweep and collider index always
+  // use one coordinate space. The PlaneState object itself is never mutated.
+  maybeRebaseLocalOrigin(planeState);
+
   // Get current terrain height for collision and autopilot
   const terrainHeight = getGroundHeight(planeState.lng, planeState.lat);
 
@@ -709,11 +761,12 @@ function handleWelcome(msg: WelcomeMessage): void {
   // Add existing players
   if (msg.planes) {
     for (const [id, plane] of Object.entries(msg.planes)) {
-      players.set(id, plane);
+      const normalizedPlane = normalizeGeoState(plane);
+      players.set(id, normalizedPlane);
       if (id !== localId) {
         // Initialize interpolation for existing player
-        setPlayerTarget(id, plane);
-        updatePlaneMesh(plane, id, plane.color);
+        setPlayerTarget(id, normalizedPlane);
+        updatePlaneMesh(normalizedPlane, id, normalizedPlane.color);
       }
     }
   }
@@ -726,9 +779,10 @@ function handleSync(planes: Record<string, PlaneState>): void {
   // Update players map and set interpolation targets
   for (const [id, plane] of Object.entries(planes)) {
     if (id !== localId) {
-      players.set(id, plane);
+      const normalizedPlane = normalizeGeoState(plane);
+      players.set(id, normalizedPlane);
       // Set target for interpolation instead of directly updating mesh
-      setPlayerTarget(id, plane);
+      setPlayerTarget(id, normalizedPlane);
     }
   }
 }
@@ -738,10 +792,11 @@ function handleSync(planes: Record<string, PlaneState>): void {
  */
 function handlePlayerJoined(player: PlaneState): void {
   console.log('Player joined:', player.id);
-  players.set(player.id, player);
+  const normalizedPlayer = normalizeGeoState(player);
+  players.set(normalizedPlayer.id, normalizedPlayer);
   // Initialize interpolation for new player
-  setPlayerTarget(player.id, player);
-  updatePlaneMesh(player, player.id, player.color);
+  setPlayerTarget(normalizedPlayer.id, normalizedPlayer);
+  updatePlaneMesh(normalizedPlayer, normalizedPlayer.id, normalizedPlayer.color);
 }
 
 /**
@@ -759,6 +814,7 @@ function handlePlayerLeft(id: string): void {
  * Handle teleport action
  */
 async function handleTeleport(lat: number, lng: number): Promise<void> {
+  const destination = normalizeGeoCoordinates(lng, lat);
   isCrashRecovering = false;
   crashRecoveryMinimumAltitude = FLIGHT.MIN_ALTITUDE;
   // Reject stale worker promises immediately instead of letting old-world work
@@ -778,7 +834,7 @@ async function handleTeleport(lat: number, lng: number): Promise<void> {
   teleportInFlightGeneration = teleportGeneration;
 
   try {
-    await completeTeleport(lat, lng, teleportGeneration);
+    await completeTeleport(destination.lat, destination.lng, teleportGeneration);
   } finally {
     // An older overlapping teleport must not resume tile loading while the latest
     // teleport still owns the origin transition.
@@ -801,20 +857,7 @@ async function completeTeleport(
   // Update origin for new location
   setOrigin(lng, lat);
 
-  // Clear existing tiles
-  for (const meshes of tileMeshes.values()) {
-    disposeTileMeshes(meshes);
-  }
-  tileMeshes.clear();
-  // Defensive cleanup for colliders whose owning group failed to finish loading.
-  clearBuildingColliders();
-
-  // Clear ground texture tiles and cache
-  clearAllGroundTiles();
-  clearAllExpandedTiles();
-
-  // Clear stored features for click picking
-  clearAllFeatures();
+  clearOriginDependentWorld();
 
   // Preload elevation tiles for the new location, but do not let a stalled
   // network request pause the tile coordinator indefinitely. A late preload is

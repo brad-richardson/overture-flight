@@ -1,4 +1,5 @@
 import { FLIGHT, DEFAULT_LOCATION } from './constants.js';
+import { clampMercatorLatitude, normalizeGeoCoordinates, normalizeLongitude } from './geo.js';
 
 /**
  * Plane state interface
@@ -248,11 +249,11 @@ export function updatePlane(deltaTime: number): void {
   // Convert speed to lat/lng change (approximate)
   // 1 degree latitude ≈ 111km, longitude varies with latitude
   const latChange = Math.cos(headingRad) * speedKmPerSec * deltaTime / 111;
-  const lngScale = Math.cos((planeState.lat * Math.PI) / 180);
+  const lngScale = Math.cos((clampMercatorLatitude(planeState.lat) * Math.PI) / 180);
   const lngChange = Math.sin(headingRad) * speedKmPerSec * deltaTime / (111 * lngScale);
 
-  planeState.lat += latChange;
-  planeState.lng += lngChange;
+  planeState.lat = clampMercatorLatitude(planeState.lat + latChange);
+  planeState.lng = normalizeLongitude(planeState.lng + lngChange);
 
   // Altitude change based on pitch and speed
   const climbRate = Math.sin(pitchRad) * planeState.speed;
@@ -287,8 +288,9 @@ export function setPlaneIdentity(id: string, color: string): void {
  * Teleport plane to a new location
  */
 export function teleportPlane(lat: number, lng: number): void {
-  planeState.lat = lat;
-  planeState.lng = lng;
+  const normalized = normalizeGeoCoordinates(lng, lat);
+  planeState.lat = normalized.lat;
+  planeState.lng = normalized.lng;
   planeState.altitude = FLIGHT.SPAWN_ALTITUDE;
   planeState.heading = 30; // NE direction
   planeState.pitch = 0;

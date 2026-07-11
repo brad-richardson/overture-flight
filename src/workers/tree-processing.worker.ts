@@ -19,6 +19,7 @@ import type {
   TileBounds,
   ElevationConfig,
 } from './types.js';
+import { clampMercatorLatitude, normalizeLongitude } from '../geo.js';
 
 // ============================================================================
 // PMTILES INITIALIZATION
@@ -375,10 +376,10 @@ const elevationCache = new Map<string, CachedElevationTile>();
  */
 function lngLatToTile(lng: number, lat: number, zoom: number): [number, number] {
   const n = Math.pow(2, zoom);
-  const x = Math.floor(((lng + 180) / 360) * n);
-  const latRad = (lat * Math.PI) / 180;
-  const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
-  return [x, y];
+  const x = Math.floor(((normalizeLongitude(lng) + 180) / 360) * n);
+  const latRad = (clampMercatorLatitude(lat) * Math.PI) / 180;
+  const rawY = Math.floor((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2 * n);
+  return [x, Math.max(0, Math.min(n - 1, rawY))];
 }
 
 /**

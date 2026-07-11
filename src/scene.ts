@@ -7,6 +7,12 @@ import { isMobileDevice } from './mobile-controls.js';
 import { initSkySystem, updateSky } from './sky.js';
 import { createRenderer, RendererType } from './renderer/renderer-factory.js';
 import { setDeferredDisposal } from './renderer/texture-disposal.js';
+import {
+  clampMercatorLatitude,
+  normalizeGeoCoordinates,
+  normalizeLongitude,
+  shortestLongitudeDelta,
+} from './geo.js';
 
 // Export for use in buildings.ts
 export { BufferGeometryUtils };
@@ -62,9 +68,9 @@ export interface PlaneState {
  */
 export function geoToWorld(lng: number, lat: number, alt: number): WorldCoords {
   return {
-    x: (lng - originLng) * metersPerDegreeLng(originLat),
+    x: shortestLongitudeDelta(originLng, lng) * metersPerDegreeLng(originLat),
     y: alt,
-    z: -(lat - originLat) * METERS_PER_DEGREE_LAT
+    z: -(clampMercatorLatitude(lat) - originLat) * METERS_PER_DEGREE_LAT
   };
 }
 
@@ -73,8 +79,8 @@ export function geoToWorld(lng: number, lat: number, alt: number): WorldCoords {
  */
 export function worldToGeo(x: number, y: number, z: number): GeoCoords {
   return {
-    lng: originLng + x / metersPerDegreeLng(originLat),
-    lat: originLat - z / METERS_PER_DEGREE_LAT,
+    lng: normalizeLongitude(originLng + x / metersPerDegreeLng(originLat)),
+    lat: clampMercatorLatitude(originLat - z / METERS_PER_DEGREE_LAT),
     alt: y
   };
 }
@@ -83,8 +89,9 @@ export function worldToGeo(x: number, y: number, z: number): GeoCoords {
  * Set the world origin for coordinate conversion
  */
 export function setOrigin(lng: number, lat: number): void {
-  originLng = lng;
-  originLat = lat;
+  const normalized = normalizeGeoCoordinates(lng, lat);
+  originLng = normalized.lng;
+  originLat = normalized.lat;
 }
 
 /**

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { getScene, getCamera, getRenderer, worldToGeo } from './scene.js';
 import { loadBaseTile, loadTransportationTile, lngLatToTile, getTileZoom } from './tile-manager.js';
+import { getWrappedTileNeighborhood } from './tile-coordinates.js';
 
 /**
  * Feature Picker Module
@@ -379,13 +380,9 @@ function getRelevantTileKeys(lng: number, lat: number): string[] {
   const prefixes = ['base', 'buildings'];
 
   // Check clicked tile and immediate neighbors (handles tolerance at tile edges)
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dy = -1; dy <= 1; dy++) {
-      const x = tileX + dx;
-      const y = tileY + dy;
-      for (const prefix of prefixes) {
-        keys.push(`${prefix}-${zoom}/${x}/${y}`);
-      }
+  for (const { x, y } of getWrappedTileNeighborhood(tileX, tileY, zoom, 1)) {
+    for (const prefix of prefixes) {
+      keys.push(`${prefix}-${zoom}/${x}/${y}`);
     }
   }
 

@@ -14,6 +14,11 @@ import {
   getBuildingColor as getColor,
 } from '../building-colors.js';
 import { getBuildingAtlasUVs } from '../building-atlas-layout.js';
+import {
+  clampMercatorLatitude,
+  normalizeLongitude,
+  shortestLongitudeDelta,
+} from '../geo.js';
 
 interface CachedElevationTile {
   heights: Float32Array;
@@ -23,10 +28,10 @@ const elevationCache = new Map<string, CachedElevationTile>();
 
 function lngLatToTile(lng: number, lat: number, zoom: number): [number, number] {
   const n = Math.pow(2, zoom);
-  const x = Math.floor(((lng + 180) / 360) * n);
-  const latRad = (lat * Math.PI) / 180;
-  const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
-  return [x, y];
+  const x = Math.floor(((normalizeLongitude(lng) + 180) / 360) * n);
+  const latRad = (clampMercatorLatitude(lat) * Math.PI) / 180;
+  const rawY = Math.floor((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2 * n);
+  return [x, Math.max(0, Math.min(n - 1, rawY))];
 }
 function tileToBounds(x: number, y: number, zoom: number) {
   const n = Math.pow(2, zoom);
@@ -154,8 +159,8 @@ const SLOPE_COMPENSATION_FACTOR = 0.3;
 const MIN_BUILDING_AREA_FAR = 50;
 
 function geoToWorld(lng: number, lat: number, altitude: number, origin: SceneOrigin) {
-  const x = (lng - origin.lng) * origin.metersPerDegLng;
-  const z = -(lat - origin.lat) * origin.metersPerDegLat;
+  const x = shortestLongitudeDelta(origin.lng, lng) * origin.metersPerDegLng;
+  const z = -(clampMercatorLatitude(lat) - origin.lat) * origin.metersPerDegLat;
   const y = altitude;
   return { x, y, z };
 }
