@@ -187,11 +187,15 @@ export interface ExpandedTerrainConfig {
 
 export const EXPANDED_TERRAIN: ExpandedTerrainConfig = {
   ENABLED: true,
-  TILE_RADIUS: 4,
+  // Ground/terrain reaches one ring further out (radius 4 -> 5, an 11x11 area)
+  // to reduce "edge of world" now that texture processing is much cheaper.
+  // Expansion is gated on >=30fps with MAX_CONCURRENT 1, so it backs off under
+  // load; buildings stay at CORE_RADIUS and are unaffected.
+  TILE_RADIUS: 5,
   CORE_RADIUS: 1,
   MAX_CONCURRENT: 1,
-  UNLOAD_DISTANCE: 5,
-  CACHE_MAX_SIZE: IS_MOBILE ? 24 : 48,
+  UNLOAD_DISTANCE: 6, // keep a one-ring hysteresis margin beyond TILE_RADIUS
+  CACHE_MAX_SIZE: IS_MOBILE ? 36 : 72, // hold the larger ring without texture churn
   TEXTURE_SIZE: IS_MOBILE ? 256 : 512,
 };
 
