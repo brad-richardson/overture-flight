@@ -20,6 +20,10 @@ import type {
   ElevationConfig,
 } from './types.js';
 import { clampMercatorLatitude, normalizeLongitude } from '../geo.js';
+import {
+  TreeHintIndexLoader,
+  type TileHint,
+} from './tree-hint-index.js';
 
 // ============================================================================
 // PMTILES INITIALIZATION
@@ -44,123 +48,32 @@ let transportationPMTilesUrl: string | null = null;
 // TREE HINTS DATA (from tree-tiles.bin)
 // ============================================================================
 
-interface TileHint {
-  count: number;
-  coniferRatio: number;
-}
-
-// Tree hints data: Map<packedXY => packedValue>
-// Memory optimization: uses packed integers instead of string keys and object values
-// Key: (x << 16) | y (uint32)
-// Value: (count << 8) | coniferRatioUint8 (uint32)
-// This reduces memory from ~113MB to ~18MB per worker for ~750k entries
-let treeHintsData: Map<number, number> | null = null;
-let treeHintsLoadPromise: Promise<void> | null = null;
-let treeHintsUrl: string | null = null;
-let treeHintsZoom: number = 10; // Default, will be updated from file
-
-/** Pack x,y coordinates into a single uint32 key */
-function packKey(x: number, y: number): number {
-  return (x << 16) | y;
-}
-
-/** Pack count and coniferRatio into a single uint32 value */
-function packValue(count: number, coniferRatioUint8: number): number {
-  return (count << 8) | coniferRatioUint8;
-}
-
-/** Unpack value into count and coniferRatio */
-function unpackValue(packed: number): TileHint {
-  return {
-    count: packed >>> 8,
-    coniferRatio: (packed & 0xFF) / 255
-  };
-}
+const treeHints = new TreeHintIndexLoader();
 
 /**
  * Load and parse tree-tiles.bin (runs entirely in worker)
  */
 async function loadTreeHints(url: string): Promise<void> {
-  // Already loaded with same URL
-  if (treeHintsData !== null && treeHintsUrl === url) {
-    return;
-  }
-
-  // Already loading
-  if (treeHintsLoadPromise !== null && treeHintsUrl === url) {
-    return treeHintsLoadPromise;
-  }
-
-  treeHintsUrl = url;
-  treeHintsLoadPromise = (async () => {
-    try {
-      const response = await fetch(url);
+  try {
+    await treeHints.load(url, async (requestedUrl) => {
+      const response = await fetch(requestedUrl);
       if (!response.ok) {
         throw new Error(`Failed to load tree-tiles.bin: HTTP ${response.status}`);
       }
-
-      const buffer = await response.arrayBuffer();
-      const data = new DataView(buffer);
-
-      // Parse header
-      const magic = String.fromCharCode(
-        data.getUint8(0),
-        data.getUint8(1),
-        data.getUint8(2),
-        data.getUint8(3)
-      );
-
-      if (magic !== 'TREE') {
-        throw new Error('Invalid tree-tiles.bin magic bytes');
-      }
-
-      const version = data.getUint8(4);
-      const zoom = data.getUint8(5);
-      treeHintsZoom = zoom;
-
-      let offset: number;
-      let tileCount: number;
-
-      if (version === 1) {
-        tileCount = data.getUint16(6, true);
-        offset = 8;
-      } else if (version === 2) {
-        tileCount = data.getUint32(6, true);
-        offset = 10;
-      } else {
-        throw new Error(`Unsupported tree-tiles.bin version: ${version}`);
-      }
-
-      // Parse tiles into memory-efficient packed format
-      treeHintsData = new Map();
-
-      for (let i = 0; i < tileCount; i++) {
-        const x = data.getUint16(offset, true); offset += 2;
-        const y = data.getUint16(offset, true); offset += 2;
-        const count = data.getUint16(offset, true); offset += 2;
-        const coniferRatioUint8 = data.getUint8(offset); offset += 1;
-
-        treeHintsData.set(packKey(x, y), packValue(count, coniferRatioUint8));
-      }
-    } catch (error) {
-      console.warn('[TreeWorker] Failed to load tree hints:', (error as Error).message);
-      // Graceful degradation: use empty map
-      treeHintsData = new Map();
-    }
-  })();
-
-  return treeHintsLoadPromise;
+      return response.arrayBuffer();
+    });
+  } catch (error) {
+    console.warn('[TreeWorker] Failed to load tree hints:', (error as Error).message);
+  }
 }
 
 /**
  * Get tree hint for a tile (converts from detail zoom to hints zoom)
- * Uses the treeHintsZoom loaded from the file header
+ * Uses the zoom loaded from the tree-tiles.bin file header
  */
 function getTileHint(tileX: number, tileY: number, tileZ: number): TileHint | null {
-  if (!treeHintsData) return null;
-
   // Use the zoom level loaded from the tree-tiles.bin file header
-  const hintsZoom = treeHintsZoom;
+  const hintsZoom = treeHints.zoom;
 
   let hx: number, hy: number;
 
@@ -180,8 +93,7 @@ function getTileHint(tileX: number, tileY: number, tileZ: number): TileHint | nu
     hy = tileY * scale + Math.floor(scale / 2);
   }
 
-  const packed = treeHintsData.get(packKey(hx, hy));
-  return packed !== undefined ? unpackValue(packed) : null;
+  return treeHints.get(hx, hy);
 }
 
 /**
