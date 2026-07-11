@@ -1,4 +1,5 @@
 import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import { Protocol } from 'pmtiles';
 import { LOCATIONS } from './constants.js';
 import {
@@ -76,6 +77,7 @@ let targetMarker: maplibregl.Marker | null = null;
 let isFollowing = true;
 let isOpen = false;
 let isMapInitialized = false; // Defer map creation until first open
+let isUiInitialized = false;
 let onTeleportCallback: ((lat: number, lng: number) => void) | null = null;
 let currentPlaneState: PlaneState | null = null;
 
@@ -732,7 +734,7 @@ function initializeMap(): void {
  * Opens the minimap modal and sets up focus management.
  * Resets to following mode and centers on the plane position.
  */
-function openModal(): void {
+export function openMinimap(): void {
   if (!modal) return;
 
   // Initialize map on first open (lazy loading)
@@ -793,10 +795,10 @@ function closeModal(): void {
  */
 export function initMinimap(onTeleport: (lat: number, lng: number) => void): void {
   onTeleportCallback = onTeleport;
+  if (isUiInitialized) return;
 
   // Get DOM elements
   modal = document.getElementById('minimap-modal');
-  const globeBtn = document.getElementById('globe-btn');
   const closeBtn = document.getElementById('minimap-close-btn');
   lockBtn = document.getElementById('minimap-lock-btn');
   mapContainer = document.getElementById('minimap-map');
@@ -805,16 +807,12 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
   const locationsSelect = document.getElementById('minimap-locations') as HTMLSelectElement | null;
   coordsDisplay = document.getElementById('minimap-coords');
 
-  if (!modal || !globeBtn || !mapContainer) {
-    console.warn('Minimap elements not found');
-    return;
+  if (!modal || !mapContainer) {
+    throw new Error('Minimap elements not found');
   }
 
   // Note: Map is NOT initialized here - it's created lazily on first open
   // This avoids MapLibre consuming CPU when minimap is never used
-
-  // Globe button opens modal
-  globeBtn.addEventListener('click', openModal);
 
   // Close button
   if (closeBtn) {
@@ -923,6 +921,8 @@ export function initMinimap(onTeleport: (lat: number, lng: number) => void): voi
       setFeaturePickerEnabled(xrayCheckbox.checked);
     });
   }
+
+  isUiInitialized = true;
 }
 
 /**
