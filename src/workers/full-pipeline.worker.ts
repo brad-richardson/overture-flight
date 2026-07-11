@@ -24,8 +24,9 @@ import {
 
 // `infrastructure` is decoded for airport pavement (runways/taxiways/aprons),
 // but it also carries high-volume features we never draw (power poles, fences,
-// crossings, benches). keepBaseFeature filters it to airport features before
-// geometry decode so most tiles pay almost nothing for the extra layer.
+// crossings, benches). keepBaseFeature filters it to airport features before the
+// expensive geometry decode (toGeoJSON), so most tiles skip that decode for the
+// layer; only the cheaper per-feature property read is still paid to filter.
 const BASE_LAYER_NAMES = ['land', 'land_use', 'land_cover', 'water', 'infrastructure'] as const;
 const WATER_LAYER_NAMES = ['water'] as const;
 const TRANSPORTATION_LAYER_NAMES = ['segment'] as const;

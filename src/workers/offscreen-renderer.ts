@@ -235,22 +235,25 @@ function getColorForFeature(layer: string, properties: Record<string, unknown>):
 
   if (layer === 'land_use') {
     // Overture land_use carries meaning across both subtype and class
-    // (e.g. managed/grass, golf/fairway, recreation/pitch, developed/industrial),
-    // so match against the combined pair rather than subtype alone.
+    // (managed/grass, golf/fairway, recreation/pitch, developed/industrial).
+    // Match discrete subtype/class tokens rather than substrings of a
+    // concatenation, so lookalikes like "parking" (~park), "gravel" (~grave)
+    // and "greenhouse" (~green) don't inherit an unrelated colour.
     const landUseClass = ((properties.class as string) || '').toLowerCase();
-    const tag = `${type}|${landUseClass}`;
-    if (tag.includes('forest') || tag.includes('wood')) return COLORS.forest;
-    if (tag.includes('park') || tag.includes('recreation') || tag.includes('golf')
-      || tag.includes('pitch') || tag.includes('playground')) return COLORS.park;
-    if (tag.includes('grass') || tag.includes('green') || tag.includes('meadow')
-      || tag.includes('managed') || tag.includes('greenfield')) return COLORS.grass;
-    if (tag.includes('farm') || tag.includes('orchard') || tag.includes('vineyard')
-      || tag.includes('crop')) return COLORS.crop;
-    if (tag.includes('water') || tag.includes('basin')) return COLORS.water;
-    if (tag.includes('residential')) return COLORS.residential;
-    if (tag.includes('commercial') || tag.includes('retail')) return COLORS.commercial;
-    if (tag.includes('industrial')) return COLORS.industrial;
-    if (tag.includes('cemetery') || tag.includes('grave')) return COLORS.grass;
+    const tokens = new Set(`${type} ${landUseClass}`.split(/[^a-z]+/).filter(Boolean));
+    const is = (...candidates: string[]): boolean => candidates.some(c => tokens.has(c));
+
+    if (is('forest', 'wood', 'woodland')) return COLORS.forest;
+    if (is('park', 'recreation', 'golf', 'fairway', 'tee', 'pitch', 'playground',
+      'stadium', 'track', 'green')) return COLORS.park;
+    if (is('grass', 'meadow', 'greenfield', 'garden', 'allotments', 'flowerbed',
+      'nursery', 'horticulture', 'greenhouse', 'managed')) return COLORS.grass;
+    if (is('farm', 'farmyard', 'farmland', 'orchard', 'vineyard', 'crop', 'agriculture')) return COLORS.crop;
+    if (is('water', 'basin', 'reservoir')) return COLORS.water;
+    if (is('residential')) return COLORS.residential;
+    if (is('commercial', 'retail')) return COLORS.commercial;
+    if (is('industrial')) return COLORS.industrial;
+    if (is('cemetery', 'graveyard', 'grave')) return COLORS.grass;
     return COLORS.land;
   }
 

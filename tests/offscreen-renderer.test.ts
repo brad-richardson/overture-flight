@@ -89,6 +89,7 @@ describe('offscreen renderer — airport features', () => {
     const base: ParsedFeature[] = [
       poly('land_use', { subtype: 'managed', class: 'grass' }),
       poly('land_use', { subtype: 'golf', class: 'fairway' }),
+      poly('land_use', { subtype: 'horticulture', class: 'garden' }),
     ];
     renderTileTextureToCanvas(
       { width: 256, height: 256, getContext: () => ctx } as unknown as OffscreenCanvas,
@@ -97,9 +98,28 @@ describe('offscreen renderer — airport features', () => {
       BOUNDS
     );
     const fills = ops.filter(o => o.type === 'fill').map(o => o.style);
-    expect(fills).toContain('#5a8f4a'); // COLORS.grass — managed/grass
+    expect(fills).toContain('#5a8f4a'); // COLORS.grass — managed/grass and garden
     expect(fills).toContain('#4a8050'); // COLORS.park — golf/fairway
     expect(fills).not.toContain('#8fa880'); // never falls through to COLORS.land
+  });
+
+  it('does not misclassify lookalike classes via substring matching', () => {
+    const { ctx, ops } = recordingContext();
+    const base: ParsedFeature[] = [
+      // "parking" contains "park", "gravel" contains "grave" — must NOT go green.
+      poly('land_use', { subtype: 'transportation', class: 'parking' }),
+      poly('land_use', { subtype: 'construction', class: 'gravel' }),
+    ];
+    renderTileTextureToCanvas(
+      { width: 256, height: 256, getContext: () => ctx } as unknown as OffscreenCanvas,
+      base,
+      [],
+      BOUNDS
+    );
+    const fills = ops.filter(o => o.type === 'fill').map(o => o.style);
+    expect(fills).not.toContain('#4a8050'); // not park green
+    expect(fills).not.toContain('#5a8f4a'); // not grass green
+    expect(fills.every(f => f === '#8fa880')).toBe(true); // both neutral land
   });
 });
 
