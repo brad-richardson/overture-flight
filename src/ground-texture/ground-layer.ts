@@ -6,7 +6,7 @@ import { tileToBounds } from '../tile-manager.js';
 import { getElevationDataForTile } from '../elevation.js';
 import { getScene, getRendererType } from '../scene.js';
 import { GROUND_TEXTURE, ELEVATION } from '../constants.js';
-import { getOvertureCacheNamespace, getOvertureSources } from '../overture-sources.js';
+import { getOvertureSources } from '../overture-sources.js';
 import { registerTileForLazyPicking, unregisterTileForLazyPicking } from '../feature-picker.js';
 import { getFullPipelineWorkerPool } from '../workers/index.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
@@ -18,6 +18,10 @@ import {
   isTextureCacheEnabled,
 } from '../cache/indexed-db-texture-cache.js';
 import { promoteExpandedToCore, demoteFromCore } from './expanded-ground-layer.js';
+import {
+  createGroundTextureCacheNamespace,
+  GROUND_TEXTURE_RENDER_VERSION,
+} from './persistent-cache-identity.js';
 
 // Active ground tiles
 const activeTiles = new Map<string, GroundTileData>();
@@ -111,12 +115,14 @@ async function createGroundForTileInner(
   const bounds = tileToBounds(tileX, tileY, tileZ);
   const cache = getCache();
   const overtureSources = getOvertureSources();
-  const persistentCacheNamespace = [
-    getOvertureCacheNamespace(),
-    `size-${GROUND_TEXTURE.TEXTURE_SIZE}`,
-    `neighbors-${GROUND_TEXTURE.SKIP_NEIGHBOR_TILES ? 0 : 1}`,
-    'style-2',
-  ].join(':');
+  const persistentCacheNamespace = createGroundTextureCacheNamespace({
+    baseSource: overtureSources.base,
+    transportationSource: overtureSources.transportation,
+    textureSize: GROUND_TEXTURE.TEXTURE_SIZE,
+    includeNeighbors: !GROUND_TEXTURE.SKIP_NEIGHBOR_TILES,
+    includeTransportation: true,
+    renderVersion: GROUND_TEXTURE_RENDER_VERSION,
+  });
 
   // Try to get texture from in-memory cache first
   let texture = cache.get(key);
