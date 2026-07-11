@@ -24,6 +24,13 @@ export interface WorkerBudgetPlan {
   source: 'automatic' | 'environment';
 }
 
+export interface WorkerBudgetOptions {
+  hardwareConcurrency: number;
+  isMobile: boolean;
+  configuredBudget: number;
+  activePools: ReadonlySet<WorkerPoolKind>;
+}
+
 const MOBILE_BUDGET_CAP = 6;
 const DESKTOP_BUDGET_CAP = 10;
 
@@ -46,20 +53,34 @@ function readHardwareConcurrency(): number {
   return Number.isFinite(reported) && reported > 0 ? Math.floor(reported) : 4;
 }
 
-function createWorkerBudgetPlan(): WorkerBudgetPlan {
-  const hardwareConcurrency = readHardwareConcurrency();
-  const configuredBudget = WORKERS.TOTAL_BUDGET;
+export function calculateWorkerBudgetPlan(
+  options: WorkerBudgetOptions
+): WorkerBudgetPlan {
+  const {
+    hardwareConcurrency,
+    isMobile,
+    configuredBudget,
+    activePools,
+  } = options;
   const source = configuredBudget > 0 ? 'environment' : 'automatic';
-  const deviceCap = IS_MOBILE ? MOBILE_BUDGET_CAP : DESKTOP_BUDGET_CAP;
-  const activePools = new Set<WorkerPoolKind>([
-    ...(WORKERS.MVT_ENABLED ? ['mvt' as const] : []),
-    ...(WORKERS.ELEVATION_ENABLED ? ['elevation' as const] : []),
-    ...(WORKERS.BUILDING_GEOMETRY_ENABLED ? ['buildingGeometry' as const] : []),
-    ...(GROUND_TEXTURE.ENABLED ? ['fullPipeline' as const] : []),
-    ...(!GROUND_TEXTURE.ENABLED && WORKERS.GEOMETRY_ENABLED ? ['geometry' as const] : []),
-    'treeProcessing',
-  ]);
+  const deviceCap = isMobile ? MOBILE_BUDGET_CAP : DESKTOP_BUDGET_CAP;
   const minimumBudget = activePools.size;
+  if (minimumBudget === 0) {
+    return Object.freeze({
+      hardwareConcurrency,
+      isMobile,
+      total: 0,
+      allocations: Object.freeze({
+        geometry: 0,
+        mvt: 0,
+        elevation: 0,
+        buildingGeometry: 0,
+        fullPipeline: 0,
+        treeProcessing: 0,
+      }),
+      source,
+    });
+  }
   const automaticBudget = Math.min(
     deviceCap,
     Math.max(minimumBudget, hardwareConcurrency - 1)
@@ -85,10 +106,28 @@ function createWorkerBudgetPlan(): WorkerBudgetPlan {
 
   return Object.freeze({
     hardwareConcurrency,
-    isMobile: IS_MOBILE,
+    isMobile,
     total,
     allocations: Object.freeze(allocations),
     source,
+  });
+}
+
+function createWorkerBudgetPlan(): WorkerBudgetPlan {
+  const activePools = new Set<WorkerPoolKind>([
+    ...(WORKERS.MVT_ENABLED ? ['mvt' as const] : []),
+    ...(WORKERS.ELEVATION_ENABLED ? ['elevation' as const] : []),
+    ...(WORKERS.BUILDING_GEOMETRY_ENABLED ? ['buildingGeometry' as const] : []),
+    ...(GROUND_TEXTURE.ENABLED ? ['fullPipeline' as const] : []),
+    ...(!GROUND_TEXTURE.ENABLED && WORKERS.GEOMETRY_ENABLED ? ['geometry' as const] : []),
+    'treeProcessing',
+  ]);
+
+  return calculateWorkerBudgetPlan({
+    hardwareConcurrency: readHardwareConcurrency(),
+    isMobile: IS_MOBILE,
+    configuredBudget: WORKERS.TOTAL_BUDGET,
+    activePools,
   });
 }
 

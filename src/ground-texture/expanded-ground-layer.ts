@@ -10,6 +10,7 @@ import { getOvertureSources } from '../overture-sources.js';
 import { getTileSemaphore, TilePriority } from '../semaphore.js';
 import { getFullPipelineWorkerPool } from '../workers/index.js';
 import { disposeTexture } from '../renderer/texture-disposal.js';
+import { isCurrentGenerationSlot, ownsGenerationSlot } from '../generation-guard.js';
 
 // Tile info type
 interface TileInfo {
@@ -52,11 +53,16 @@ let expandedTextureCache: TileTextureCache | null = null;
 const uncachedExpandedTextures = new Map<string, THREE.Texture>();
 
 function ownsExpandedLoadingSlot(key: string, token: ExpandedLoadToken): boolean {
-  return loadingExpandedTiles.get(key) === token;
+  return ownsGenerationSlot(loadingExpandedTiles, key, token);
 }
 
 function isCurrentExpandedLoad(key: string, token: ExpandedLoadToken): boolean {
-  return token.generation === expandedGeneration && ownsExpandedLoadingSlot(key, token);
+  return isCurrentGenerationSlot(
+    loadingExpandedTiles,
+    key,
+    token,
+    expandedGeneration
+  );
 }
 
 /**
